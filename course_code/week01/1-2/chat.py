@@ -1,9 +1,13 @@
 import os
 from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
 
 client = OpenAI(
     api_key=os.environ["DEEPSEEK_API_KEY"],
-    base_url="https://api.deepseek.com",
+    # base_url="https://api.deepseek.com",
+    base_url=os.environ["BASE_URL"],
     timeout=30.0,
     max_retries=0,  # 本节由应用层统一管理重试，避免双重重试
 )

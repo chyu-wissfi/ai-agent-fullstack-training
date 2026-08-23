@@ -1,7 +1,7 @@
 class ValidationIssue(BaseModel):
-    path: str
-    code: str
-    message: str
+    path: str      # 出错字段路径，如 "action" 或 "search_query"
+    code: str      # 错误类型，如 "missing"、"union_tag_invalid"（取自 Pydantic 的 type）
+    message: str   # 人类可读的错误描述
 
 
 class DecisionValidation(BaseModel):
