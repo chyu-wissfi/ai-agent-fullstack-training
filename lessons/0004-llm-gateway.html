@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>主题课 4/4 · LLM Gateway：从统一入口到生产部署</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 01 · 主题课 4 / 4 · 覆盖课程小节 1-6 + 1-7 · 结课课</p>
+<h1>LLM Gateway：从统一入口到生产部署</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：先凭记忆做检索式测验暴露薄弱点，再看精讲补课。测验前 3 题是上一课薄弱点的间隔复习题（你上节课 83%，三个薄弱点全部重测）。<br>
+  <strong>笔记定位</strong>：<a href="../course_code/week01/第一章 学习笔记/第一章 学习笔记.md">第一章 学习笔记</a> 1.6（行 5965–7038）+ 1.7（行 7039–9418）<br>
+  <strong>代码定位</strong>：<code>course_code/week01/1-6/gateway.py</code>（单文件原型 + 两份测试）、<code>1-7/llm-gateway/</code>（app/api / core / services 分层的完整服务：gateway / upstream / router / prompts / structured / usage）<br>
+  <strong>预计用时</strong>：测验 25 分钟 + 精讲 20 分钟<br>
+  <strong>本课验收标准</strong>（笔记原文，1-6）：能解释--说清 Gateway、Provider、Harness 和模型分别负责什么（混用后的故障）；能审查--找出密钥扩散、重复重试、错误 fallback、流式重复和日志失真；（1-7）：能补全--请求规范化、路由、调用、校验和回写的关键流程；能迁移--把 DeepSeek 接入迁移为另一个 Provider 并重新决定能力声明、错误映射、价格和 Fallback 策略。
+</div>
+
+<h2>怎么用这一课</h2>
+<p>延续前三课的模式：<strong>先考后讲</strong>。前 3 题是你上节课答错的三个知识点的重测（分析-处理-检查三阶段、模板四个工程判断、流式三个「再来一次」概念）--上次没存储牢固的内容，这次换了问法再检索一次。测验结束后页面底部生成诊断报告，按报告决定精讲读哪里、笔记回读哪里。</p>
+<p class="sidenote">这是 Week01 的结课：本课把前五节的所有线索收进一个组件--Loop 要调模型（1-1/1-2）、输出可以是流式或结构化（1-3/1-5）、Prompt 是版本化契约（1-4），而 Gateway 就是让这些能力变成「统一、可校验、可降级、可观测的平台能力」的那个边界。你对 1-6 代码有深度接触（你曾修正过课程材料里分层策略生效路径的描述），所以测验重心放在 1-7 的服务化边界上。</p>
+
+<h2>第一部分：检索式测验</h2>
+<div id="quiz"></div>
+
+<hr>
+
+<h2>第二部分：精讲（测验后再读）</h2>
+
+<h3>1. 一条主链：Gateway 是模型调用的收口，不是 HTTP 转发</h3>
+<p>1-6 的定义：<strong>LLM Gateway 的价值不是多转发一次 HTTP，而是把模型调用变成一项统一、可校验、可降级、可观测的平台能力。</strong>1-7 的演进不是推翻 1-6，而是把已验证的边界从单文件原型升级为可配置、可部署、可测试的服务：</p>
+<pre>Agent / Planning / RAG
+        ↓ LLMRequest（统一契约）
+FastAPI 入口：鉴权、限流、请求校验（extra="forbid"）
+        ↓
+Prompt 装配：模板名 + 版本 + 变量（StrictUndefined）
+        ↓
+模型路由：白名单 + 能力检查（Router 产出可解释 RouteDecision）
+        ↓
+Adapter / Provider：协议转换与归一化（SDK max_retries=0）
+        ↓
+普通调用：JSON 解析 + Schema 校验 / 流式调用：增量 + SSE
+        ↓
+临时故障：有限重试（次数+截止时间+错误类型）-> 能力等价 fallback
+        ↓
+Trace：Model / Prompt / Token / Cost / TTFT / Latency / Attempts
+        ↓
+LLMResponse 或稳定错误回到 Harness</pre>
+<p>贯穿 1-7 的核心原则：<strong>Gateway 统一模型执行语义；Agent Loop 决定任务怎样推进；Harness 管理状态、预算、权限、取消和完成条件。</strong>Gateway 可以返回模型输出，但不能因为模型说「任务已经完成」就修改 Agent 的真实终态。</p>
+
+<h3>2. 分层职责（本课第一张必背表）</h3>
+<table>
+  <tr><th>层</th><th>负责</th><th>混用后的故障</th></tr>
+  <tr><td>Gateway</td><td>统一平台协议、调用治理、恢复、留痕</td><td>吞掉 Agent 任务逻辑，变成所有业务的中心</td></tr>
+  <tr><td>Provider / Adapter</td><td>吸收供应商通信差异，归一化响应</td><td>差异泄漏进 Harness，换模型要改 Loop</td></tr>
+  <tr><td>Harness / Loop</td><td>任务状态、上下文、工具、多轮决策</td><td>适配每家 SDK，业务代码跟随供应商变化</td></tr>
+  <tr><td>模型</td><td>根据输入生成候选结果</td><td>被当成确定性组件，硬边界交给概率</td></tr>
+</table>
+<p>重试散落在 SDK、Provider、Gateway 和 Loop 四层时，调用预算就会失控（Gateway 最多四次 × Loop 三轮 = 一步任务十二次调用）。另外两个 ID 纪律：`request_id`/`call_id` 标识一次模型调用，不能代替 `trace_id`/`run_id`（一次 Agent Run 可含十次 Gateway 请求）；业务 ID（工单号）与供应商 Response ID 也各有用途不能互换。</p>
+<p class="sidenote">工作对应：你在 OpenViking 做的 vectordb adapters（default / local / VikingDB）正是「Adapter 只适配协议、不制定策略」的活例子--local 与 VikingDB 两后端能被公平对比，前提就是差异被收敛在 adapter 层，上层检索语义不随后端漂移。这就是 1-6 表格里那行「OpenAI Compatible 不保证能力和错误完全相同」的镜像版。</p>
+
+<h3>3. 契约与装配：入口处拒绝，好过出口处收拾</h3>
+<ul>
+  <li><strong>extra="forbid"</strong>：Message/LLMRequest 拒绝未声明字段--否则某 Agent 依赖供应商 A 的私有字段，表面统一了 URL，实际没有统一契约。</li>
+  <li><strong>stream + response_schema 组合在入口拒绝</strong>：没有增量 JSON 解析能力时，放行会导致已向客户端发送半段 JSON 后才发现不合法--既不能撤回内容，也不能改回普通 HTTP 错误。</li>
+  <li><strong>PromptSelection 只传模板名 + 版本 + 变量</strong>：不让调用方上传完整 System Prompt，否则绕过模板发布、版本记录和审查流程；缺变量在<strong>模型请求之前</strong>失败--模板校验是确定性客户端错误，不该靠重试解决（同一份缺变量请求会重试四次仍失败）。</li>
+  <li><strong>逻辑模型名</strong>：上层只说 `general-primary` / `agent-structured`，Gateway 解析成真实模型、地址、密钥与能力。部署换模型不改 Agent Loop。</li>
+</ul>
+
+<h3>4. 四层成功 + 校验：HTTP 200 只覆盖第一层</h3>
+<table>
+  <tr><th>层级</th><th>成功条件</th><th>失败示例</th></tr>
+  <tr><td>Transport</td><td>HTTP 请求完整返回</td><td>DNS、超时、连接中断</td></tr>
+  <tr><td>Provider</td><td>供应商接受并执行请求</td><td>429、5xx、认证失败</td></tr>
+  <tr><td>Protocol</td><td>响应能映射到内部协议</td><td>缺少 choice、未知事件</td></tr>
+  <tr><td>Semantic</td><td>输出满足 Schema 与业务规则</td><td>JSON 合法但工具参数越权</td></tr>
+</table>
+<p>所以即使 Provider 声称支持原生 Structured Output，Gateway 仍要做本地两层校验（json.loads 语法 + jsonschema 字段）。`json_schema` 是 API 原生约束，`json_object` 只保证 JSON 格式、Schema 靠 Prompt 传递--两种模式不能讲成同一种保证。流式的对应边界：连接正常关闭不等于输出完整，只有 `response.completed` 才算成功；流中错误必须成为流协议的一部分（1-7 用 compare_and_set 保证 completed / failed / cancelled 唯一终态）。</p>
+
+<h3>5. 恢复：重试、fallback 与它们的不适用清单（第二张必背表）</h3>
+<table>
+  <tr><th>失败类型</th><th>处理</th><th>为什么</th></tr>
+  <tr><td>连接失败、超时</td><td>有限重试</td><td>可能是短暂传输故障</td></tr>
+  <tr><td>限流（429）</td><td>等待后有限重试</td><td>供应商暂时没有容量</td></tr>
+  <tr><td>认证 / 配置 / 未知模型 / 模板缺失</td><td>不重试</td><td>相同配置不会自行恢复</td></tr>
+  <tr><td>非法 JSON、Schema 失败</td><td>有限修复（非网络重试）</td><td>模型已正常返回，是格式问题</td></tr>
+  <tr><td>内容安全拒答</td><td>不换模型绕过</td><td>策略拒绝不是故障</td></tr>
+</table>
+<p>四条恢复纪律：<strong>① max_retries=0</strong> 关闭 SDK 隐式重试，attempts 才对应真实上游调用数；<strong>② 退避受三重约束</strong>--次数、总截止时间（deadline）、错误类型，三次超时可能已远超 Run 剩余预算；<strong>③ fallback 先做能力检查</strong>--切到不支持 Structured Output 的备模型，只是把基础设施故障变成协议故障；<strong>④ 流式以首块为界</strong>--首块前可重试可切换，首块后只能发 failed 并保存部分输出，透明重生成会造成重复文本、风格混合、Token 与内容无法对账。Fallback 的不适用清单还包括：请求非法、认证/租户权限失败、结构化业务校验失败却无修复策略。</p>
+
+<h3>6. 预算与追踪：证据要能回答问题，还不能泄密</h3>
+<p>预算从 Run 传播到 Call：Gateway 的重试和 fallback 必须消费上层 Run 的剩余预算，否则每次单调用都「没超」，完整 Run 却无限消耗。追踪链是四级：<strong>trace_id -> run_id -> step_id -> call_id / tool_call_id</strong>--Gateway 负责 call_id 内部细节，Harness 负责把它放进完整 Run 的因果链。延迟不能只记一个数字（total_latency 拆成 queue / render / route / connect / TTFT / generation），TTFT 以<strong>第一个有业务意义的 delta</strong> 为准。Trace 九个维度（关联、路由、Prompt、用量、延迟、弹性、结果、错误、成本）里，requested_model 与 resolved_model 必须同时保留--日志只看到「请求了默认模型」，就无法知道实际切到了哪个版本。<strong>不要默认把完整 Prompt 和输出写进日志</strong>：内容采样、脱敏、保存期限和访问权限是独立的数据治理决策。</p>
+
+<h3>7. 1-7 服务化：Router、Prompt Bundle 与修复边界</h3>
+<ul>
+  <li><strong>OpenAI Compatible 是外部接口，不是内部领域模型</strong>：外部协议在 API Layer 终止；禁止业务层写 `if provider == ...`，差异全部收敛到 Adapter。「兼容」也不等于复制全部字段--未知字段立即拒绝，而不是静默忽略。</li>
+  <li><strong>Router 产出可解释的 RouteDecision</strong>：候选、拒绝原因、理由都进 Trace，否则费用或质量变化时无法回答「为什么选中了这个端点」。路由不是挑最强模型：能力过滤 -> 租户预算/区域/数据策略/健康过滤 -> 优先级排序。</li>
+  <li><strong>Prompt 是 Bundle 不是字符串</strong>：模板 + 输入输出 Schema + Few-shot + 模型参数 + Eval 集 + content_hash 绑定成一个可发布版本；hash 能暴露「文件名没变但内容被改」的不可追踪修改。灰度分流基于稳定键（租户/用户/Run 的 sha256 bucket），版本选定后固定到 RunState--同一 Run 内 v1/v2 混用，行为变化无法归因。</li>
+  <li><strong>修复调用有边界</strong>：计入同一 Run 预算、新 call_id 关联原调用、最大修复次数、失败返回明确错误--不退回未经校验的自然语言。这与 1-5 的 repair loop 是同一条纪律在 Gateway 的复现。</li>
+  <li><strong>并发限制比 QPS 重要</strong>：模型请求持续时间长，只限每秒请求数仍会堆积大量并发连接；需要全局并发、每供应商并发、每租户 QPS 与并发、每模型 Token/分钟多层限制。幂等键能避免 Gateway 重复建调用记录，但<strong>不能</strong>假设供应商不执行两次--不重复计费没有保证。</li>
+</ul>
+
+<h3>8. 测试与验收：证明「不允许发生的行为确实不会发生」</h3>
+<p>一份「能返回 200」的实现不算掌握。有证明力的断言是：未知模型 / 非法请求 / 缺模板变量时 <strong>Provider 调用次数为零</strong>；一次失败一次成功时 attempts == 2；非法 JSON 不产生 parsed；流式首块后失败不调用备用模型；Trace 不含 API Key、Python 堆栈和完整敏感 Prompt；取消传播后只有一个 cancelled 终态、用量只落一次。重试测试注入时钟与随机数（不让测试真的等待几秒），Streaming 测试覆盖 UTF-8 跨 chunk、断连、Backpressure。Fake Adapter 不是废代码：Router、Loop、Eval 和故障注入测试都依赖它稳定复现成功、限流、超时、流中断和非法输出。</p>
+<p>开发顺序同样重要：<strong>先自己画主链和伪代码（只标边界与顺序）→ 把确定的接口、字段、失败语义交给 AI 补实现 → 自己做故障注入</strong>（缺密钥、未知模型、非法 JSON、首 Token 后断流、客户端取消、预算耗尽）。把「帮我写一个 Gateway」直接丢给 AI，得到的是能运行却无法解释的代码。</p>
+<p class="sidenote">工作对应：你做 local vs VikingDB 对比时，Trace 字段设计直接决定结论可信度--requested/resolved model、Prompt 版本 hash、TTFT 分段、attempts 不记全，50 次 find 的延迟分布就无法归因；「Adapter 契约测试」（每个 Adapter 过同一组用例）也正是两个后端公平对比该有的形态。你接入过的 MCP proxy 插件（lib/servers 统一入口）则是「收口成平台能力」的小型同构。</p>
+
+<hr>
+
+<h2>回读与验证指引</h2>
+<p>按诊断报告的薄弱点，对照回读（不需要重读整份笔记）：</p>
+<ul>
+  <li>Gateway 价值 / 分层职责 / ID 边界 -&gt; 笔记 1.6 二、（行 6033–6110）+ 1.7 二、（行 7093–7128）；代码 <code>1-6/gateway.py</code> 开头的 Message / LLMRequest 定义。</li>
+  <li>契约装配 / stream+schema 拒绝 / 模板装配 -&gt; 笔记 1.6 三、（行 6114–6246）+ 1.7 六、七、（行 7355–7782）。</li>
+  <li>四层成功 / 两种 Structured Output / 流式终态 -&gt; 笔记 1.7 五、（行 7273–7351）+ 1.6 五、（行 6387–6546）+ 1.7 九、（行 8013–8212）。</li>
+  <li>重试分类 / max_retries=0 / fallback / 退避约束 -&gt; 笔记 1.6 六、（行 6550–6718）+ 1.7 十二、（行 8497–8727）。</li>
+  <li>四级 ID / 预算传播 / 延迟拆解 / Trace 敏感数据 -&gt; 笔记 1.7 十一、（行 8369–8494）+ 十三、（行 8730–8843）；代码 <code>1-7/llm-gateway/app/services/usage.py</code>（SQLite 用量账本）。</li>
+  <li>Router / RouteDecision / 能力注册表 / Fallback 边界 -&gt; 笔记 1.7 八、（行 7767–8010）；代码 <code>1-7/llm-gateway/app/services/router.py</code>。</li>
+  <li>Prompt Bundle / 灰度 / 修复边界 -&gt; 笔记 1.7 九、十、（行 8178–8366）；代码 <code>1-7/llm-gateway/app/services/prompts.py</code>、<code>structured.py</code>。</li>
+  <li>测试策略 / 验收不变量 -&gt; 笔记 1.6 七、7.6（行 6823 起）+ 1.7 十四、（行 8846–8991）+ 15.9（行 9200 起）；代码 <code>1-6/test_gateway.py</code>、<code>1-7/llm-gateway/tests/</code>（MockTransport 驱动）。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<p>本课最可信的原始材料仍是课程自身的笔记与代码：先读 <a href="../course_code/week01/第一章 学习笔记/第一章 学习笔记.md">第一章 学习笔记</a> 1.6 的「1.2 本节怎样才算掌握」（行 5983–6004）和 1.7 的口头/代码/迁移三项验收（行 9343–9396）对照自评；再沿一次请求读 <code>1-7/llm-gateway</code>：`api/routes.py`（鉴权限流入口）-> `services/gateway.py`（编排重试）-> `services/upstream.py`（上游 HTTP）-> `services/usage.py`（用量落库）。外部文档作字段核对用：<a href="https://platform.openai.com/docs/api-reference">OpenAI API Reference</a>（Chat Completions 与 Responses 的事件、错误码语义）。你之前修正过的「分层策略生效路径」就在 1-6 的 gateway.py 一带，回读时可顺带验证你当时追踪的那条链。</p>
+
+<div class="ask-reminder">
+<strong>卡住了就问你的 agent。</strong>精讲里任何一处让你觉得「等等，为什么」--比如为什么 SDK 重试必须关掉、为什么拒答不能换模型绕过、为什么幂等键挡不住重复计费--直接回到对话里问。这一节全部内容都在回答同一个问题：模型调用凭什么敢成为平台能力。
+</div>
+
+<div class="lesson-footer">
+  主题课序列：<a href="./0001-llm-to-agent-loop.html">1/4 从 LLM 到 Agent</a>（1-1 + 1-2）· <a href="./0002-streaming-structured-output.html">2/4 Streaming 与 Structured Output</a>（1-3 + 1-5）· <a href="./0003-prompt-engineering.html">3/4 Prompt Engineering</a>（1-4）· <strong>4/4 LLM Gateway</strong>（本课）<br>
+  这是 Week01 的结课课。测验做完后隔 1–2 天重做一次（间隔重复），正确率稳定在 85% 以上即通过。通过后 Week01 四级验收的最后一步是不看稿两分钟讲清本课主链（入口-规范化-装配-路由-调用-校验-回写），然后就可以向你的 agent 要 Week02（2-1 Function Calling 与 Tool Use）的学习路径了。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  title: '第一部分：检索式测验（20 题，先凭记忆作答）',
+  questions: [
+    {
+      type: 'recall',
+      concept: '【复习】分析-处理-检查三阶段',
+      section: '1-4 复习（上节课薄弱点）',
+      notesRef: '笔记 1.4 五、5.2（行 4092 起）',
+      question: '复杂客服任务拆成哪三个阶段？每个阶段的输入和「不允许做什么」分别是什么？拆解背后真正的纪律是什么？',
+      hint: '第一阶段的输入是用户消息；最后阶段能看到原始任务和证据。',
+      modelAnswer: '① <strong>分析</strong>：输入用户消息，输出已知事实、缺失信息、下一步--不允许生成处理承诺；<br>② <strong>处理</strong>：输入分析结果、订单与政策，输出工单草稿或追问--不允许虚构外部事实；<br>③ <strong>检查</strong>：输入原始任务、证据、草稿，输出通过或修订结果--不允许引入新事实。<br>纪律：<strong>每一步只消费已经存在的证据</strong>。拆的不是「模型思考过程」，而是可观察的工作阶段、数据依赖和失败出口。'
+    },
+    {
+      type: 'recall',
+      concept: '【复习】模板化的四个工程判断',
+      section: '1-4 复习（上节课薄弱点）',
+      notesRef: '笔记 1.4 六、6.1（行 4204 起）',
+      codeRef: 'course_code/week01/1-4/StrictUndefined.py',
+      question: 'PromptTemplate 模板化验证了哪四个工程判断？分别防住什么？',
+      hint: '从「规则和数据的关系」开始，到「Trace 能定位什么」结束。',
+      modelAnswer: '① <strong>固定规则与运行时数据分离</strong>--用户消息不会被拼进 System Prompt；<br>② <strong>变量是显式契约</strong>--缺少或未声明的变量在模型请求之前失败，不静默生成残缺 Prompt（StrictUndefined：未定义变量抛错而非渲染成空串）；<br>③ <strong>变量有长度预算</strong>--整篇文档无边界注入不能让 Prompt 无限膨胀；<br>④ <strong>每次渲染产生指纹</strong>--Trace 记录 prompt_name、version、fingerprint，能定位实际发送给模型的内容。'
+    },
+    {
+      type: 'choice',
+      concept: '【复习】流中失败的处理',
+      section: '1-3 复习（上节课薄弱点）',
+      notesRef: '笔记 1.3 九、9.1（行 3447 起）',
+      question: '流式请求已向客户端输出两个文本增量后网络中断，正确的处理是？',
+      options: [
+        '发出失败事件并保存部分输出，不重新生成拼接',
+        '立即换备用模型从头重新生成并拼接到已有文本后',
+        '静默断开连接，等客户端重连后重发全部历史内容',
+        '自动降级为非流式调用，一次性返回完整的新答案'
+      ],
+      answer: 0,
+      explanation: '三个「再来一次」：Model Retry（重新推理，只适用于流开始前的失败）、Transport Replay（重发已保存事件）、Task Resume（从 checkpoint 继续）。一旦已向客户端发出文本，透明重生成会造成重复文本、风格混合、Token 与内容无法对账。'
+    },
+    {
+      type: 'choice',
+      concept: 'Gateway 的价值定位',
+      section: '1-6',
+      notesRef: '笔记 1.6 一、（行 6004）+ 1.7 七、7.6（行 7745 起）',
+      question: '关于 LLM Gateway 的价值，正确的理解是？',
+      options: [
+        '把模型调用变成统一、可校验、可降级、可观测的平台能力',
+        '在内网与模型供应商之间转发并缓存请求的流量入口',
+        '为多个供应商接口提供统一 URL 前缀的反向代理设施',
+        '替 Agent Loop 直接决定任务推进与业务终态的组件'
+      ],
+      answer: 0,
+      explanation: '透明代理只是把 JSON 原样转发给供应商，会丢失参数治理、模型能力校验、统一错误语义、Prompt 和 Schema 版本、可解释路由、精确成本与 Trace。Gateway 应当是有明确契约的执行器，而不是任意请求转发器。'
+    },
+    {
+      type: 'choice',
+      concept: '关闭 SDK 内置重试',
+      section: '1-6',
+      notesRef: '笔记 1.6 四、4.3（行 6329 起）+ 六、6.2（行 6585 起）',
+      question: 'Provider 创建 OpenAI SDK 客户端时显式设置 max_retries=0，为什么？',
+      options: [
+        '重试由 Gateway 统一执行，attempts 才对应真实上游调用数',
+        'SDK 的重试实现在高并发场景下存在丢失请求的缺陷',
+        '供应商接口规范明确要求客户端必须自行关闭重试',
+        '关闭后连接超时可由 SDK 自动降级为长轮询来处理'
+      ],
+      answer: 0,
+      explanation: '如果 SDK 内部已调用三次，Gateway 外层又重试两次，日志写着两次、真实请求可能六次，attempts 与调用预算都失去可信度。主模型两次失败、备用模型成功时，LLMResponse.attempts 应该是 3、model 是 general-backup--这个数字只有在重试集中在一层时才可信。'
+    },
+    {
+      type: 'choice',
+      concept: '入口拒绝不支持的能力组合',
+      section: '1-6',
+      notesRef: '笔记 1.6 三、3.3（行 6165 起）',
+      question: 'LLMRequest 在入口就禁止 stream 与 response_schema 同时使用，理由是？',
+      options: [
+        '没有增量 JSON 解析能力，半段 JSON 发出后无法撤回',
+        '流式接口的计费口径与结构化输出无法统一进行对账',
+        '供应商协议规定两种能力在传输层互斥不可同时使用',
+        '两者叠加会使单次请求的 Token 预算翻倍导致失控'
+      ],
+      answer: 0,
+      explanation: '如果不在入口拒绝，系统可能已经向客户端发送半段 JSON，最后才发现结果不合法--此时既不能撤回内容，也不能改回普通 HTTP 错误。工程师必须决定第一版支持哪些组合，AI 可以实现 model_validator，但不能替团队承担组合复杂度。'
+    },
+    {
+      type: 'choice',
+      concept: 'fallback 的能力等价前提',
+      section: '1-6',
+      notesRef: '笔记 1.6 四、4.1（行 6291）+ 六、6.3（行 6601 起）',
+      question: '主模型超时后，Gateway 为什么不直接切到响应更快的备用模型？',
+      options: [
+        '备用模型必须先证明支持本次请求所需的全部能力',
+        '备用模型价格更高，切换前需要先征得租户的同意',
+        '快速模型输出质量低，需要人工评估完成之后才能用',
+        '主备模型必须来自不同供应商，同厂商切换是无效的'
+      ],
+      answer: 0,
+      explanation: 'fallback 的目标是恢复同一次调用，不是降低协议要求。主模型超时后切到一个不支持 Structured Output 的模型，只会把基础设施故障变成协议故障。能力等价检查（supports_structured_output、structured_output_mode）写在 ModelConfig 里，未来扩展为完整能力注册表。'
+    },
+    {
+      type: 'choice',
+      concept: 'Gateway 重试与 Loop 重试的区别',
+      section: '1-6',
+      notesRef: '笔记 1.6 六、6.5（行 6650 起）',
+      question: 'Gateway 重试与 Agent Loop 重试的区别，正确的是？',
+      options: [
+        'Gateway 输入不变恢复瞬时故障；Loop 重试时任务状态已变',
+        'Gateway 负责网络层的错误；Loop 负责其余全部类型错误',
+        'Gateway 用同步串行方式重试；Loop 用异步并发方式重试',
+        'Gateway 最多重试两次；Loop 最多重试三次都由预算决定'
+      ],
+      answer: 0,
+      explanation: 'Gateway 重试保持输入、模板、Schema 和目标不变，只恢复模型服务的瞬时故障；Agent Loop 重试可能补充上下文、修改计划、换工具或询问用户。预算必须分层：Gateway 最多四次、外层 Loop 又重试三轮，一步任务最多十二次模型调用--Harness 必须读取 attempts、成本和错误码，把 Gateway 调用纳入任务级预算。'
+    },
+    {
+      type: 'recall',
+      concept: '四层成功',
+      section: '1-7',
+      notesRef: '笔记 1.7 五、5.1（行 7273 起）',
+      question: '一次 LLM 调用至少存在哪四层成功？HTTP 200 只覆盖哪一层？每层各举一个失败示例。',
+      hint: '传输、供应商、协议、语义。',
+      modelAnswer: '① <strong>Transport</strong>：HTTP 请求完整返回（失败如 DNS、超时、连接中断）；<br>② <strong>Provider</strong>：供应商接受并执行请求（失败如 429、5xx、认证失败）；<br>③ <strong>Protocol</strong>：响应能映射到内部协议（失败如缺少 choice、未知事件）；<br>④ <strong>Semantic</strong>：输出满足 Schema 与业务规则（失败如 JSON 合法但工具参数越权）。<br>HTTP 200 只说明 Transport 层成功--传统 HTTP 一次成功意味着服务端执行了确定操作，LLM API 不是。'
+    },
+    {
+      type: 'choice',
+      concept: '外部兼容不是内部模型',
+      section: '1-7',
+      notesRef: '笔记 1.7 六、6.1（行 7367 起）',
+      question: '关于 OpenAI Compatible 接口在 Gateway 中的定位，正确的是？',
+      options: [
+        '它是对外暴露的接口形态，内部必须用自己的领域模型',
+        '它是内部领域模型，直接透传可以少一层协议的转换',
+        '它只用于测试环境，生产环境必须切换成自定义的协议',
+        '它是多家供应商共同维护的行业标准的内部统一表示'
+      ],
+      answer: 0,
+      explanation: '外部兼容协议必须在 API Layer 终止，内部使用 ModelRequest、ModelResponse 和 GatewayError，避免业务逻辑跟随任一供应商变化。课堂练习明确禁止在业务层写 if provider == ...，所有差异必须收敛到 Adapter。兼容降低了通信成本，但没有消除 Gateway 的工程责任。'
+    },
+    {
+      type: 'choice',
+      concept: 'Router 与 Adapter 的职责划分',
+      section: '1-7',
+      notesRef: '笔记 1.7 八、8.1/8.3（行 7769 起、行 7898 起）',
+      question: 'Model Adapter 与 Router 的职责划分，正确的是？',
+      options: [
+        'Adapter 只翻译协议归一化响应；Router 决定候选与顺序',
+        'Adapter 决定优先级策略；Router 负责供应商的协议转换',
+        'Adapter 负责重试与熔断；Router 负责结果校验与 Trace',
+        'Adapter 与 Router 都是可选分层，小规模场景允许合并'
+      ],
+      answer: 0,
+      explanation: 'Adapter 唯一职责是把内部协议翻译成某个 Provider 协议并归一化响应，不负责路由选择、重试策略、Prompt 选择或业务状态修改。Router 产出可解释的 RouteDecision（候选、拒绝原因、理由）并进入 Trace--否则质量或费用变化时，团队无法回答「为什么选中了这个端点」。'
+    },
+    {
+      type: 'choice',
+      concept: 'fallback 的不适用场景',
+      section: '1-7',
+      notesRef: '笔记 1.7 八、8.4（行 7953 起）',
+      question: '以下哪种情况不适合触发 fallback？',
+      options: [
+        '内容安全拒答后，尝试切换到审查更宽松的模型绕过',
+        '主端点连接失败后，切换到能力等价的备用端点重试',
+        '429 且等待时间超过本次请求预算时，切换候选端点',
+        '端点健康状态进入熔断后，切换到下一个候选端点'
+      ],
+      answer: 0,
+      explanation: '不适用清单：用户请求本身非法、认证或租户权限失败、内容拒答后绕到更宽松模型、已向客户端发送大量文本后偷偷切模型续写、结构化结果业务校验失败却没有明确修复策略。fallback 是在明确边界内切换能力等价候选，不是碰运气的重试。'
+    },
+    {
+      type: 'recall',
+      concept: '四级追踪 ID 链',
+      section: '1-7',
+      notesRef: '笔记 1.7 十三、13.3（行 8796 起）+ 1.6 二、2.2（行 6071 起）',
+      question: 'trace_id、run_id、step_id、call_id 各标识什么粒度？谁负责把 call_id 放进完整的因果链？',
+      hint: '一条追踪链、一次 Agent 任务、任务中的一个 Loop 步、一次模型调用。',
+      modelAnswer: '<strong>trace_id</strong> 标识整条追踪链；<strong>run_id</strong> 标识一次 Agent Run（可能包含多轮模型与工具调用）；<strong>step_id</strong> 标识 Run 中的一个 Loop Step；<strong>call_id</strong> 标识一次模型调用及其多次 attempt（另有 tool_call_id 标识工具调用，provider_request_id 用于向上游排查）。完整链路：trace_id -&gt; run_id -&gt; step_id -&gt; call_id / tool_call_id。<strong>Gateway 负责 call_id 内部细节；Harness 负责把它放进完整 Run 的因果链。</strong>一次 Run 可发起十次 Gateway 请求，所以 request_id 不能代替 trace_id。'
+    },
+    {
+      type: 'choice',
+      concept: '延迟拆解与 TTFT 口径',
+      section: '1-7',
+      notesRef: '笔记 1.7 十一、11.2–11.3（行 8389 起）',
+      question: '总延迟从 2 秒涨到 5 秒，要定位原因应该看什么？TTFT 的记录口径是什么？',
+      options: [
+        '分段延迟各有字段；TTFT 以第一个有业务意义的 delta 为准',
+        '只看总延迟字段即可；TTFT 以 HTTP 响应头到达时刻为准',
+        '分段延迟各有字段；TTFT 以 TCP 连接建立完成的时刻为准',
+        '只看总延迟字段即可；TTFT 以第一个供应商 chunk 为准'
+      ],
+      answer: 0,
+      explanation: 'total_latency 要拆成 gateway_queue、prompt_render、route、provider_connect、TTFT、generation 各段，只记一个数字无法指导优化。TTFT 不能把连接建立事件或首个空 chunk 当首 Token--这与主题课 2 的口径一致，现在落到 Gateway Trace 的具体字段上（StreamTimer 只在首个业务 delta 上记录）。'
+    },
+    {
+      type: 'choice',
+      concept: '错误按调用生命周期分类',
+      section: '1-7',
+      notesRef: '笔记 1.7 十二、12.1（行 8501 起）',
+      question: '按调用生命周期给错误分类，以下处理正确的一组是？',
+      options: [
+        '内容拒答后不换模型绕过；认证失败立即终止修配置',
+        '内容拒答后换宽松模型重试；认证失败等待后再试三次',
+        '认证失败重试到成功为止；拒答结果直接丢弃不记录',
+        '全部非 200 状态码统一进入有限重试与 fallback 流程'
+      ],
+      answer: 0,
+      explanation: '生命周期：认证-&gt;请求校验-&gt;Prompt 渲染-&gt;能力路由-&gt;排队-&gt;连接-&gt;首 Token 前-&gt;已流式输出-&gt;输出校验-&gt;记账。各阶段错误不同：认证和请求校验不重试；连接和首 Token 前有限重试或 fallback；已流式输出不盲目重新生成；输出校验走有限修复；内容拒答是策略拒绝不是故障，不换模型绕过。'
+    },
+    {
+      type: 'choice',
+      concept: '有边界的指数退避',
+      section: '1-7',
+      notesRef: '笔记 1.7 十二、12.3（行 8574 起）',
+      question: '只设置 max_retries=3 为什么不够？有边界的重试由什么共同约束？',
+      options: [
+        '次数、总截止时间、错误类型三者共同约束',
+        '次数已经足够，问题是指数增长需要加随机抖动',
+        '由调用方在请求头里传入重试预算最为可靠',
+        '由供应商返回的限流响应头唯一决定重试的节奏'
+      ],
+      answer: 0,
+      explanation: '三次超时的总耗时可能远超上层 Run 的剩余预算。每次 attempt 前检查 deadline，下一次退避会超过 deadline 时立即终止（TIMEOUT 而不是继续睡）。供应商返回可信 Retry-After 时优先使用。抖动确实要加（random.uniform(0, cap)），但它只是退避内部的细节，不是「次数够了」的理由。'
+    },
+    {
+      type: 'choice',
+      concept: 'Structured Streaming 的边界',
+      section: '1-7',
+      notesRef: '笔记 1.7 九、9.6（行 8162 起）',
+      question: '流式结构化输出进行到 {"intent":"search","requires_tool":tr 时，正确的边界是？',
+      options: [
+        '参数对象闭合且校验授权通过前，绝不执行工具',
+        '检测到 intent 字段后即可提前执行工具提升速度',
+        '半个 JSON 应立即丢弃并让模型从头重新生成对象',
+        '流式与结构化不能共存，应该在入口拒绝该类请求'
+      ],
+      answer: 0,
+      explanation: '推荐两种策略：前端流式显示状态、完整对象结束后一次性解析提交；或使用供应商原生类型化事件在字段完成时转换。工具调用必须等参数对象闭合、Schema 校验通过、Policy 授权完成，才能产生副作用--半个 JSON 到达时绝不执行工具。'
+    },
+    {
+      type: 'choice',
+      concept: '修复调用的边界',
+      section: '1-7',
+      notesRef: '笔记 1.7 九、9.7（行 8178 起）',
+      question: 'Structured Output 校验失败后的一次专门修复调用，必须满足哪些条件？',
+      options: [
+        '计入同一 Run 预算、新 call_id 关联原调用、设最大次数',
+        '复用原 call_id 覆盖记录、不计费、修复次数不受限制',
+        '修复失败后降级返回模型的自然语言答案给下游使用',
+        '修复调用绕过 Schema 校验只做语法层面的重新解析'
+      ],
+      answer: 0,
+      explanation: '还要满足：只提供必要错误信息（避免泄露内部策略）、修复结果再次执行本地 Schema 与业务校验、失败后返回明确错误而不是退回未经校验的自然语言。这与 1-5 repair loop 的五检查点是同一条纪律在 Gateway 的复现--失败预算有限、非法结果不进下游。'
+    },
+    {
+      type: 'choice',
+      concept: 'Prompt 灰度的稳定性',
+      section: '1-7',
+      notesRef: '笔记 1.7 十、10.6（行 8347 起）',
+      question: 'Prompt v2 灰度发布时，怎样保证同一个 Agent Run 的行为稳定？',
+      options: [
+        '分流基于稳定键，版本选定后固定到 RunState 整个 Run',
+        '每一步模型调用都重新随机选择一次当前活跃的版本',
+        '按累计 Token 数量达到阈值后自动从 v1 切换到 v2',
+        '灰度期间 v1 与 v2 按消息轮次交替使用形成对照组'
+      ],
+      answer: 0,
+      explanation: '灰度分流必须稳定地基于租户、用户或 Run（sha256 bucket），同一个 Run 内一会儿 v1 一会儿 v2，行为变化就无法归因。Prompt 是 Bundle 不是字符串：模板、输入输出 Schema、Few-shot、模型参数、Eval 集与 content_hash 绑定成可发布版本--hash 能暴露文件名没变但内容被偷偷修改。'
+    },
+    {
+      type: 'choice',
+      concept: '并发限制与 QPS',
+      section: '1-7',
+      notesRef: '笔记 1.7 十二、12.5（行 8658 起）',
+      question: '为什么只限制每秒请求数（QPS）保护不了 LLM Gateway？',
+      options: [
+        '模型请求持续时间长，仍会堆积大量并发连接耗尽资源',
+        'QPS 统计存在延迟，攻击者可以在窗口切换时穿透限制',
+        '供应商按并发数计费，QPS 与成本模型无法对应起来',
+        'QPS 限制只对普通调用生效，流式请求不受该限制约束'
+      ],
+      answer: 0,
+      explanation: '模型请求一跑就是几十秒，每秒放进 10 个请求、每个跑 60 秒，稳态下就是 600 个并发连接。生产系统需要多层限制：全局并发、每供应商并发、每租户 QPS 与并发、每模型 Token/分钟。相关的还有 Backpressure：事件队列要有上限（但不丢终态、错误、usage 事件）。'
+    },
+    {
+      type: 'choice',
+      concept: '能审查：什么断言有证明力',
+      section: '1-6 + 1-7',
+      notesRef: '笔记 1.6 七、7.6（行 6823 起）+ 1.7 十四、（行 8846 起）',
+      question: '审查一份「能返回 200」的 AI 生成 Gateway 实现，以下哪组测试断言最有证明力？',
+      options: [
+        '非法输入零调用、attempts 与真实次数一致、日志无密钥',
+        '全部接口返回 200、响应时间在 P95 以内、无未捕获异常',
+        '代码覆盖率超过 90%、类型注解完整、静态检查零告警',
+        'README 完整、Docker 可启动、依赖版本全部锁定到最新'
+      ],
+      answer: 0,
+      explanation: '测试要证明失败边界：未知模型、非法请求、缺模板变量时 Provider 调用次数为零；一次失败一次成功时 attempts==2；非法 JSON 不产生 parsed；流式首块后失败不调用备用模型；客户端取消只有一个 cancelled 终态、用量只落一次；Trace 不含 API Key、Python 堆栈和完整敏感 Prompt。这些断言比「状态码是 200」有证明力得多。'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>

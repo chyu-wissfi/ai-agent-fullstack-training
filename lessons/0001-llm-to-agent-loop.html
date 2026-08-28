@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>主题课 1/4 · 从 LLM 到 Agent：模型调用与 Agent Loop</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 01 · 主题课 1 / 4 · 覆盖课程小节 1-1 + 1-2</p>
+<h1>从 LLM 到 Agent：模型调用与 Agent Loop</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：先凭记忆做检索式测验暴露薄弱点，再看精讲补课，最后按笔记验收标准自查。<br>
+  <strong>笔记定位</strong>：<a href="../course_code/week01/第一章 学习笔记/第一章 学习笔记.md">第一章 学习笔记</a> 1.1（行 3–2326）+ 1.2（行 2327–2808）<br>
+  <strong>代码定位</strong>：<code>course_code/week01/1-1/agent_loop_demo.py</code>、<code>1-2/</code>（chat / modelAdapter / with_retry / tokens）<br>
+  <strong>预计用时</strong>：测验 15 分钟 + 精讲 15 分钟<br>
+  <strong>本课验收标准</strong>（笔记原文）：能解释——不看稿说清五个能力阶段各解决什么、最小 Loop 五个检查点、失败五阶段的不同策略；能审查——识别无差别重试、Loop 长成巨型 if/else、截断误判为格式错误。
+</div>
+
+<h2>怎么用这一课</h2>
+<p>你已经把课程看过一遍，现在的问题不是「没见过」，而是「提不出来」。所以本课<strong>先考后讲</strong>：测验时凭记忆作答（允许写错，写错正是定位薄弱点的过程），回忆题先自己写再看参考答案，严格自评。测验结束后页面底部会生成诊断报告，按报告决定精讲部分读哪里、笔记回读哪里。</p>
+<p class="sidenote">回忆比重读更能形成长期记忆（检索练习效应）。测验没拿到满分是正常且有价值的信号，不要先翻笔记再作答。</p>
+
+<h2>第一部分：检索式测验</h2>
+<div id="quiz"></div>
+
+<hr>
+
+<h2>第二部分：精讲（测验后再读）</h2>
+
+<h3>1. 一条主线：LLM + Tool 不够之后，工程系统一层层补了什么</h3>
+<p>课程用五个阶段组织 Agent 的能力演进——这不是行业官方的「五代 Agent」定义，而是回答一个问题的教学框架：<strong>当最早的 LLM + Tool 不够以后，工程系统究竟一层一层补了什么？</strong>真实发展是交叉的，今天的成熟 Agent 同时拥有这五类能力。</p>
+<table>
+  <tr><th>阶段</th><th>解决的问题</th><th>一句话抓手</th></tr>
+  <tr><td><strong>Prompt</strong></td><td>模型按什么角色、目标、约束行动</td><td>岗位说明书 + 行为规范</td></tr>
+  <tr><td><strong>Context</strong></td><td>本轮模型到底看到了什么信息</td><td>模型能力 ≠ Agent 能力：Context 给错了，模型一样做错</td></tr>
+  <tr><td><strong>Harness</strong></td><td>谁把模型、Context、Tool、运行策略装配起来</td><td>这一次 Agent Run「带着什么」开始</td></tr>
+  <tr><td><strong>Loop</strong></td><td>Tool 结果回来之后怎么办、如何持续工作</td><td>从「一次调用」升级为「可循环的运行过程」</td></tr>
+  <tr><td><strong>Graph</strong></td><td>多个独立任务如何并行协作</td><td>节点 + 真实数据依赖边；fake-edge test 判断该不该并行</td></tr>
+</table>
+<p>三个最容易混的概念，边界这样划：<strong>Harness</strong> 管装配（选模型、加载 Prompt、发现 Tools、注入身份权限、启动 Loop、记录 Trace）；<strong>Tool Runtime</strong> 管执行（这一条 Tool Call 能不能执行、怎么执行、怎么失败、结果怎么回去）——它是 Harness 里的执行基础设施；<strong>Loop</strong> 管推进（结果怎样回 Context、下一步是否继续、何时结束）。</p>
+
+<h3>2. 最小 Agent Loop 的五个检查点（本课最重要的一张表）</h3>
+<p>最小 Loop 的代码很短，复杂的是后面不断加入的工程能力。真正要背下来的是这五个边界——每个检查点对应一类「AI 生成代码最常踩的坑」：</p>
+<table>
+  <tr><th>检查点</th><th>守住的边界</th><th>违反后的典型症状</th></tr>
+  <tr><td>① 模型只提出候选动作</td><td>模型拿到 Context + Tool Schema，拿不到 handler；只能「请求调用」</td><td>把 handler 直接暴露给模型，模型绕过权限自行执行</td></tr>
+  <tr><td>② Loop 判断继续还是结束</td><td>终止条件在模型之外：max_turns、用户取消、预算、安全策略</td><td>模型反复调用 A→B→A→B，永远不停</td></tr>
+  <tr><td>③ 所有 Tool Call 都进入 Runtime</td><td>Loop 只调度，Runtime 统一执行（注册表 + 查找 + 结构化结果）</td><td>Loop 长成巨型 if/else，权限、超时、审计无处安放</td></tr>
+  <tr><td>④ Tool Result 必须写回 Context</td><td>结果是新的 Observation，不是最终答案；保留 tool_call_id</td><td>模型不知道刚才执行了什么，重复调用或答非所问</td></tr>
+  <tr><td>⑤ Loop 必须有确定性的运行上限</td><td>系统何时停止由工程系统用确定性规则控制</td><td>把「什么时候停」交给模型，预算烧穿</td></tr>
+</table>
+<p>贯穿整门课的一条原则就藏在这里：<strong>LLM 负责不确定性决策，工程系统负责确定性边界。</strong>后面的 Runtime、Harness、State Machine、Sandbox、Graph 都在落实这句话。</p>
+<p class="sidenote">工作对应：你在 OpenViking 做的 VikingDB / local 双后端检索对比，落点就在检查点③——上层协议不变，执行基础设施在 Adapter/后端层切换。这是「能迁移」标准的日常练习。</p>
+
+<h3>3. 1-2 的主链：模型调用只是运行链中的一环</h3>
+<pre>任务目标与可信上下文
+        ↓
+Model Adapter 组装请求
+        ↓
+模型返回候选输出 / 结构化事件
+        ↓
+Schema 与业务规则校验
+        ↓
+稳定的 ModelResult 或错误语义
+        ↓
+Agent Loop / Harness 决定下一步</pre>
+<p>这条主链的要点：模型输出只是<strong>候选内容</strong>，必须经 Adapter、Schema 校验和失败策略，变成可信、可追踪、可恢复的 ModelResult，才能交给 Loop。JSON 只说明「像数据」，不说明「业务已经正确」。</p>
+
+<h3>4. 失败五阶段速查（每阶段策略不同，不能一个 retry 包打天下）</h3>
+<table>
+  <tr><th>阶段</th><th>典型故障</th><th>策略</th></tr>
+  <tr><td>请求前</td><td>认证失败、参数非法</td><td>必然失败：立即终止、报警修配置（校验前置）</td></tr>
+  <tr><td>传输中</td><td>超时、临时网络错误</td><td>有限重试：指数退避 + jitter</td></tr>
+  <tr><td>服务端</td><td>限流、过载</td><td>尊重 Retry-After，退避或切换只读备用（防放大雪崩）</td></tr>
+  <tr><td>生成后</td><td>拒答、截断</td><td>终止或人工；截断先修预算，不是格式错误</td></tr>
+  <tr><td>解析后</td><td>Schema / 业务校验失败</td><td>一次纠错重试，仍失败则结构化返回</td></tr>
+</table>
+<p>两条配套纪律：<strong>重试只包裹无副作用的模型请求</strong>——下游写操作（下单、建单）要用另一套幂等、审批策略，混成一个 retry() 会制造重复下单事故；<strong>失败必须结构化</strong>——ModelResult（ok / text / error_code / retryable / trace_id）让 Loop 不解析堆栈就能判断下一步。</p>
+
+<h3>5. 参数与预算：三件套速查</h3>
+<ul>
+  <li><strong>temperature</strong>：采样随机性。抽取、分类、工具参数建议低波动；不是「更聪明」按钮。</li>
+  <li><strong>top_p</strong>：候选词概率质量范围。通常与 temperature 二选一做主要调节，不要同时盲调。</li>
+  <li><strong>max_tokens</strong>：输出预算。控制成本与截断风险；设太小会把截断误判成格式错误。</li>
+  <li><strong>三份预算</strong>：系统指令与可信规则 / 当前任务证据 / 模型输出空间——Context Window 是总预算不是免费记忆，历史消息不能无上限累积。</li>
+</ul>
+
+<hr>
+
+<h2>回读与验证指引</h2>
+<p>按诊断报告的薄弱点，对照回读（不需要重读整份笔记）：</p>
+<ul>
+  <li>五阶段 / 概念边界 → 笔记 1.1「三、」（行 354–888）；代码 <code>1-1/agent_loop_demo.py</code> 跑一遍，对照五个检查点读实现。</li>
+  <li>五个检查点 → 笔记 1.1「七、7.1–7.5」（行 1595–1730）。</li>
+  <li>参数 / 三份预算 / 截断 → 笔记 1.2「三、四、」（行 2469–2568）；代码 <code>1-2/tokens.py</code>、<code>1-2/chat.py</code>。</li>
+  <li>失败分类 / 重试 / ModelResult / Adapter → 笔记 1.2「六、七、」（行 2636–2808）；代码 <code>1-2/with_retry.py</code>、<code>1-2/modelAdapter.py</code>、<code>1-2/dsAdapter.py</code>、<code>1-2/OpenAIAdapter.py</code>。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<p>本课最可信的原始材料就是课程自身的笔记与代码：先读 <a href="../course_code/week01/第一章 学习笔记/第一章 学习笔记.md">第一章 学习笔记</a> 1.2 的「本节六个学习目标」（行 2345–2365）对照自评；再跑 <code>1-1/agent_loop_demo.py</code>（用 FakeModel 可无 Key 运行），边跑边对照五个检查点。外部文档仅作字段核对用：<a href="https://platform.openai.com/docs/api-reference">OpenAI API Reference</a>。</p>
+
+<div class="ask-reminder">
+<strong>卡住了就问你的 agent。</strong>精讲里任何一处让你觉得「等等，为什么」——比如为什么截断不能重试、为什么 handler 不能给模型——直接回到对话里问。你是 Agent 平台方向的工程师，这些「为什么」追问到位，比多刷十道题更接近「能解释」的验收标准。
+</div>
+
+<div class="lesson-footer">
+  主题课序列：<strong>1/4 从 LLM 到 Agent</strong>（本课）· <a href="./0002-streaming-structured-output.html">2/4 Streaming 与 Structured Output</a>（1-3 + 1-5）· <a href="./0003-prompt-engineering.html">3/4 Prompt Engineering</a>（1-4）· <a href="./0004-llm-gateway.html">4/4 LLM Gateway</a>（1-6 + 1-7）<br>
+  测验做完后隔 1–2 天重做一次（间隔重复），正确率稳定在 85% 以上即通过本主题。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  title: '第一部分：检索式测验（14 题，先凭记忆作答）',
+  questions: [
+    {
+      type: 'choice',
+      concept: '能力演进的分层顺序',
+      section: '1-1',
+      notesRef: '笔记 1.1 三、（行 354 起）',
+      question: '课程用哪五个阶段理解 Agent 的能力演进？',
+      options: [
+        'Prompt、Context、Harness、Loop、Graph',
+        'Prompt、Context、Runtime、Loop、Graph',
+        'Prompt、Memory、Harness、Loop、Graph',
+        'Prompt、Context、Harness、Agent、Graph'
+      ],
+      answer: 0,
+      explanation: '这是课程自定的理解框架（不是行业官方「五代 Agent」定义），用于回答「LLM+Tool 不够之后工程系统一层层补了什么」。真实发展是交叉的，成熟 Agent 同时拥有五类能力。Runtime 是 Harness 内的执行基础设施，不是独立阶段；Memory 和 Agent 不在这条分层线上。'
+    },
+    {
+      type: 'choice',
+      concept: '模型能力 ≠ Agent 能力',
+      section: '1-1',
+      notesRef: '笔记 1.1 三、3.2（行 452 起）',
+      question: '用户刚查过订单，接着说「那继续处理吧」，模型却反问「请问订单号是多少」。最可能的根因是什么？',
+      options: [
+        '本轮请求没有带上之前的订单信息',
+        '模型对订单类任务的理解能力不足',
+        'temperature 参数被设置得过高了',
+        '订单查询工具执行失败没有返回'
+      ],
+      answer: 0,
+      explanation: '模型只能根据当前这一轮看到的 Context 判断——Context 给错了，模型一样做错。这就是「模型能力不等于 Agent 能力」的直接体现：修复方向在 Context 装配（把订单信息重新交给模型），不在换更强的模型，也不在调参。'
+    },
+    {
+      type: 'choice',
+      concept: 'Harness 与 Runtime 的职责边界',
+      section: '1-1',
+      notesRef: '笔记 1.1 三、3.3（行 582 起）',
+      question: '关于 Harness 和 Tool Runtime 的边界，以下说法正确的是？',
+      options: [
+        'Harness 负责一次运行的装配，Runtime 负责单条 Tool Call 的执行',
+        'Harness 负责单条工具的执行，Runtime 负责一次运行的装配',
+        'Harness 负责多轮循环的推进，Runtime 负责多任务的并行调度',
+        'Harness 负责多任务的并行调度，Runtime 负责多轮循环的推进'
+      ],
+      answer: 0,
+      explanation: 'Harness 回答「这一次 Agent Run 带什么模型、Prompt、Context、Tools、运行策略开始」（选模型、恢复 Session、装 Hooks、注入权限、记录 Trace）；Tool Runtime 回答「这一条 Tool Call 能不能执行、怎么执行、怎么失败、结果怎么回去」。Runtime 是 Harness 里非常关键的一块执行基础设施，范围更小。多轮循环属于 Loop，并行调度属于 Graph。'
+    },
+    {
+      type: 'recall',
+      concept: '最小 Agent Loop 的五个检查点',
+      section: '1-1',
+      notesRef: '笔记 1.1 七、7.1–7.5（行 1595–1730）',
+      codeRef: 'course_code/week01/1-1/agent_loop_demo.py',
+      question: '最小 Agent Loop 有五个必须守住的检查点。请凭记忆列出五个，并各用一句话说明它守住什么边界。',
+      hint: '从「模型拿到了什么」开始，到「整个系统什么时候停」结束。',
+      modelAnswer: '① 模型只提出候选动作——模型拿到 Context + Tool Schema 而非 handler，只能「请求调用」不能「自己调用」。<br>② Loop 判断继续还是结束——模型可以决定下一步做什么，但不能决定整个系统什么时候停止。<br>③ 所有 Tool Call 都进入 Runtime——Loop 只调度、Runtime 统一执行，避免 Loop 长成巨型 if/else。<br>④ Tool Result 必须写回 Context——工具结果是新的 Observation 而非最终答案，且保留 tool_call_id 关联。<br>⑤ Loop 必须有确定性的运行上限——系统何时停止由工程系统用确定性规则控制（max_turns、预算、取消等）。<br><br>背后是贯穿整门课的原则：LLM 负责不确定性决策，工程系统负责确定性边界。'
+    },
+    {
+      type: 'choice',
+      concept: 'Function Calling ≠ Agent Loop',
+      section: '1-1',
+      notesRef: '笔记 1.1 三、3.4（行 688 起）',
+      question: 'Function Calling 和 Agent Loop 分别解决什么问题？',
+      options: [
+        'Function Calling 是模型表达调用请求；Loop 决定结果回填与何时终止',
+        'Function Calling 决定结果的回填方式；Loop 是模型表达调用请求的格式',
+        'Function Calling 是模型的内置能力；Loop 是模型供应商托管的运行服务',
+        'Function Calling 负责工具的具体执行；Loop 负责生成工具参数的校验'
+      ],
+      answer: 0,
+      explanation: 'Function Calling 只解决「模型怎样表达：我想调用这个 Tool，参数是这些」；Agent Loop 解决「Tool 执行回来以后怎么办、结果怎样重新进入 Context、什么时候结束」。有 Function Calling 只能完成一次调用；有 Loop 才能完成「读代码→改→跑测试→失败→再改」的连续工作——这是 Coding Agent 能连续工作的基础。'
+    },
+    {
+      type: 'recall',
+      concept: 'Graph 的判断标准与核心模式',
+      section: '1-1',
+      notesRef: '笔记 1.1 三、3.5（行 786 起）',
+      question: '什么时候该用 Graph 而不是 Loop？写出课程给的判断测试的名字和含义，再写出 Graph 的核心模式三步。',
+      hint: '判断测试和「两步之间有没有真实依赖」有关；核心模式是扇出 → 合并 → 综合。',
+      modelAnswer: '判断标准是 <strong>fake-edge test（假依赖边测试）</strong>：检查工作流时每一步都问「这一步真的需要前一步的结果吗」，不需要就没有真正的边、可以并行。找不到两个无依赖的任务，就还是 Loop 不是 Graph。<br><br>核心模式 <strong>diamond（菱形）</strong>：<br>1. Fan out——并行派出多个 worker，各处理一个独立角度；<br>2. Reduce——用普通代码（不耗模型 token）合并、去重、过滤；<br>3. Synthesize——用一个 Agent 基于合并后的结果写最终答案。<br><br>补充：验证节点（Verifier）是灵魂——用干净的上下文只看发现本身、不看 worker 聊天记录，尝试「杀死」前一个节点的发现；Graph 不是取代 Loop，而是 Graph 中嵌 Loop。'
+    },
+    {
+      type: 'choice',
+      concept: 'Chat Completions 与 Responses 的选型',
+      section: '1-2',
+      notesRef: '笔记 1.2 二、（行 2419 起）',
+      question: '课程对 Chat Completions 和 Responses 的选型立场是什么？',
+      options: [
+        '理解 Responses 的对象模型；多供应商要能用 Chat Completions 兼容层',
+        '新项目一律只用 Responses 接口，旧项目才继续维护 Chat Completions',
+        '两者只保留其中一个即可，其他供应商的兼容层都可以逐步淘汰',
+        '业务 Loop 应该绑死 Responses，Chat Completions 只用于人工调试场景'
+      ],
+      answer: 0,
+      explanation: 'Chat Completions 是跨厂商兼容最广的消息调用基线（OpenAI-compatible 生态的共同语言）；Responses 把输入输出 item、流式事件、工具行为统一到更适合 Agent 的对象模型。工程结论是：不要把业务 Loop 绑死在任一接口上，差异由 Model Adapter 兼容。'
+    },
+    {
+      type: 'choice',
+      concept: '参数不是质量旋钮',
+      section: '1-2',
+      notesRef: '笔记 1.2 三、（行 2469 起）',
+      question: '关于 temperature、top_p、max_tokens，以下理解正确的是？',
+      options: [
+        '它们调节采样分布与输出预算，修不了错误上下文或缺失知识',
+        '它们能提升模型推理质量，答得不好时应优先调整这三个参数',
+        '它们必须同时一起调节才能生效，单独调整任何一个没有意义',
+        '它们只影响输出的格式，对内容多样性与调用成本没有影响'
+      ],
+      answer: 0,
+      explanation: 'temperature 控制采样随机性（抽取、分类、工具参数建议低波动）；top_p 控制候选词概率质量范围（通常与 temperature 二选一，不要同时盲调）；max_tokens 是输出预算（控制成本与截断风险）。模型答得不好，首先查输入和任务边界。另外：部分 reasoning 模式会覆盖或忽略采样参数，所以参数必须属于 Provider 能力配置，不能散落在每个任务里。'
+    },
+    {
+      type: 'recall',
+      concept: 'Context Window 的三份预算',
+      section: '1-2',
+      notesRef: '笔记 1.2 四、（行 2513 起）',
+      codeRef: 'course_code/week01/1-2/tokens.py',
+      question: '上下文不是越多越好。工程师要在 Context Window 里维护哪三份预算？',
+      hint: '一条给规则，一条给证据，一条给输出。',
+      modelAnswer: '① 系统指令与可信规则——模型必须遵守的边界；<br>② 当前任务证据——与当前决策直接相关的信息；<br>③ 模型输出空间——为结果预留的生成预算。<br><br>配套要求：Adapter 明确记录使用量、请求 ID、模型、截断状态；不要让历史消息无上限累积。输入越多，成本、延迟和注意力竞争越强。'
+    },
+    {
+      type: 'choice',
+      concept: '截断不是格式错误',
+      section: '1-2',
+      notesRef: '笔记 1.2 四、截断处理（行 2549 起）',
+      question: '模型返回的 JSON 在字段中间被截断，正确的处理顺序是什么？',
+      options: [
+        '先归类为输出预算不足或停止原因异常，再缩短上下文或提高预算',
+        '先交给 json.loads 重试原请求，把截断当作随机格式错误来处理',
+        '先把残缺 JSON 存入失败队列，等模型供应商修复后再重新生成',
+        '先降级到非流式接口重试一次，失败后再切换备用模型继续'
+      ],
+      answer: 0,
+      explanation: '顺序不能反过来：直接 json.loads 后重试原请求，会把「预算不足」误判成「格式问题」，无效重试放大故障。正确顺序：先分类为「输出预算不足或停止原因异常」，再决定缩短上下文 / 提高输出预算 / 把任务拆小。'
+    },
+    {
+      type: 'choice',
+      concept: '失败五阶段的不同策略',
+      section: '1-2',
+      notesRef: '笔记 1.2 六、（行 2636 起）',
+      question: '模型调用遇到限流或服务端过载时，课程建议的处理策略是什么？',
+      options: [
+        '尊重 Retry-After，退避或切换只读备用模型，避免放大雪崩',
+        '立即换备用模型并静默重试，对上层返回统一的无差别错误码',
+        '有限次快速重试抢占配额，认证类失败也纳入同一重试循环',
+        '直接终止本次运行并报警，由人工确认后再决定是否恢复服务'
+      ],
+      answer: 0,
+      explanation: '失败五阶段各有策略：请求前（认证/参数非法→必然失败，立即终止修配置）、传输中（超时/网络→有限重试指数退避+jitter）、服务端（限流/过载→尊重 Retry-After，退避或切只读备用）、生成后（拒答/截断→终止或人工）、解析后（Schema 失败→一次纠错重试）。认证失败重试只会放大故障；静默换模型会把语义差异藏起来。'
+    },
+    {
+      type: 'recall',
+      concept: '结构化失败结果 ModelResult',
+      section: '1-2',
+      notesRef: '笔记 1.2 六、（行 2673 起）',
+      codeRef: 'course_code/week01/1-2/modelAdapter.py',
+      question: 'Model Adapter 的统一返回类型 ModelResult 把「这次调用发生了什么」压缩成哪些字段？为什么失败要结构化，而不是把 Python 堆栈塞回模型？',
+      hint: '五个字段，从「成没成」到「怎么追踪」。',
+      modelAnswer: '字段：<strong>ok</strong>（成功与否）、<strong>text</strong>（候选文本）、<strong>error_code</strong>（错误码）、<strong>retryable</strong>（是否可重试）、<strong>trace_id</strong>（追踪 ID）。实际实现还要统一 usage（Token 消耗）、停止原因、供应商请求 ID。<br><br>原因：Loop 不需要解析堆栈、不需要猜测错误类型，只消费这个稳定结构就能判断下一步（重试、降级、终止）——稳定的失败结果也是可被 Loop 消费的协议对象。'
+    },
+    {
+      type: 'choice',
+      concept: 'Adapter 隔离协议变化',
+      section: '1-2',
+      notesRef: '笔记 1.2 七、（行 2699 起）',
+      codeRef: 'course_code/week01/1-2/dsAdapter.py、OpenAIAdapter.py',
+      question: '为什么换模型不应修改 Agent Loop？课程给出的核心理由是什么？',
+      options: [
+        'Loop 只依赖 generate() 契约，协议差异被 Adapter 收敛在接口后面',
+        'Loop 必须保持极简不能修改，所有扩展都应该通过模型供应商完成',
+        'Adapter 会自动翻译不同模型的语义，Loop 无需关心任何错误码',
+        'Loop 与模型之间由框架代理，业务代码不允许直接引用任何 SDK'
+      ],
+      answer: 0,
+      explanation: 'Loop 不应关心底层是 DeepSeek、OpenAI 还是其他供应商——它只关心输入消息、成功与否、失败时错误码与是否可重试、追踪 ID。如果 Loop 直接绑定 SDK，换模型、加供应商、切 A/B 测试都要改动上层循环，测试和观测也会被复制一遍。Adapter 把所有差异收敛到一个接口后面。'
+    },
+    {
+      type: 'choice',
+      concept: '能审查：重试只包裹无副作用请求',
+      section: '1-2',
+      notesRef: '笔记 1.2 六、有边界的重试实现（行 2652 起）',
+      codeRef: 'course_code/week01/1-2/with_retry.py',
+      question: '审查下面 AI 生成的重试代码，它最主要的隐患是什么？<pre style="margin:0.8rem 0">def call_with_policy(provider, request, attempts=3):\n    for number in range(1, attempts + 1):\n        result = provider.generate(request)\n        if result.ok:\n            return result\n        time.sleep(2 ** (number - 1))\n    return result</pre>',
+      options: [
+        '无差别重试所有错误且无 jitter，认证失败也会被放大重试',
+        '退避基数设置得太小，生产环境至少应该从三十秒开始起步',
+        'attempts 上限为三太保守，生产环境应该放开为无限次重试',
+        '返回值里没有 trace_id 字段，失败的请求无法关联追踪来源'
+      ],
+      answer: 0,
+      explanation: '课程范本有两道防线：① RETRYABLE 集合——只重试 timeout / rate_limited / overloaded 等可恢复错误，认证失败属「请求前必然失败」，重试只会放大故障；② 退避要带 jitter 和上限（min(2^(n-1), 4) + random），指数无上限增长本身有风险。（D 也是真问题，但「最主要」的隐患是无差别重试。）'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>

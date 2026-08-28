@@ -1,0 +1,269 @@
+/* AI Agent 全栈训练营 - 共享课程样式表
+   所有 lessons/*.html 通过 <link rel="stylesheet" href="../assets/course.css"> 引用
+   设计基调：Tufte 式排版 - 充足留白、衬线正文、克制配色、可打印 */
+
+:root {
+  --ink: #1a1a1a;
+  --ink-soft: #555;
+  --ink-faint: #8a8a8a;
+  --paper: #fffdf9;
+  --paper-alt: #f7f4ee;
+  --accent: #a0522d;       /* 赭红 - 标题与强调 */
+  --accent-soft: #e8ddd3;
+  --correct: #2e7d32;
+  --correct-bg: #eef7ef;
+  --wrong: #c62828;
+  --wrong-bg: #fdeeea;
+  --border: #d8d2c7;
+  --code-bg: #f4f1ea;
+  --sidebar: 6rem;
+}
+
+* { box-sizing: border-box; }
+
+html { font-size: 17px; }
+
+body {
+  margin: 0;
+  font-family: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", Georgia, serif;
+  color: var(--ink);
+  background: var(--paper);
+  line-height: 1.75;
+}
+
+main {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 3rem 1.5rem 6rem;
+}
+
+/* ---------- 标题层级 ---------- */
+h1 {
+  font-size: 1.9rem;
+  line-height: 1.3;
+  margin: 0 0 0.5rem;
+  color: var(--ink);
+}
+h2 {
+  font-size: 1.35rem;
+  margin: 3rem 0 1rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--accent);
+}
+h3 { font-size: 1.08rem; margin: 2rem 0 0.6rem; }
+
+.lesson-kicker {
+  font-size: 0.85rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 0.6rem;
+}
+
+.lesson-meta {
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+  background: var(--paper-alt);
+  border-left: 3px solid var(--accent);
+  padding: 0.8rem 1rem;
+  margin: 1.5rem 0 2.5rem;
+  line-height: 1.9;
+}
+
+/* ---------- 正文元素 ---------- */
+p { margin: 0.9rem 0; }
+strong { color: var(--ink); }
+em { font-style: normal; background: linear-gradient(transparent 60%, #f5dfc8 60%); }
+
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:hover { text-decoration-thickness: 2px; }
+
+ul, ol { padding-left: 1.6rem; }
+li { margin: 0.35rem 0; }
+
+code, pre {
+  font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
+  font-size: 0.86em;
+}
+code { background: var(--code-bg); padding: 0.1em 0.4em; border-radius: 3px; }
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  line-height: 1.6;
+}
+pre code { background: none; padding: 0; }
+
+blockquote {
+  margin: 1.2rem 0;
+  padding: 0.6rem 1.2rem;
+  border-left: 3px solid var(--border);
+  color: var(--ink-soft);
+}
+
+hr { border: none; border-top: 1px solid var(--border); margin: 3rem 0; }
+
+table { border-collapse: collapse; width: 100%; margin: 1.2rem 0; font-size: 0.92rem; }
+th, td { border: 1px solid var(--border); padding: 0.45rem 0.7rem; text-align: left; vertical-align: top; }
+th { background: var(--paper-alt); font-weight: 600; }
+
+/* ---------- 侧注（Tufte 式边栏备注）---------- */
+.sidenote {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  background: var(--paper-alt);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 0.7rem 1rem;
+  margin: 1.2rem 0;
+}
+.sidenote::before { content: "※ "; color: var(--accent); }
+
+/* ---------- 测验组件（配合 quiz.js）---------- */
+.quiz-section { margin: 2.5rem 0; }
+
+.quiz-q {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.2rem 1.4rem;
+  margin: 1.4rem 0;
+}
+.quiz-q .q-tag {
+  display: inline-block;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  margin-bottom: 0.5rem;
+  font-family: "JetBrains Mono", monospace;
+}
+.quiz-q .q-text { font-weight: 600; margin: 0 0 0.9rem; line-height: 1.7; }
+
+.quiz-q .opt {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1.65;
+  background: var(--paper-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.55rem 0.9rem;
+  margin: 0.5rem 0;
+  cursor: pointer;
+  color: var(--ink);
+  transition: border-color 0.15s, background 0.15s;
+}
+.quiz-q .opt:hover:not(:disabled) { border-color: var(--accent); }
+.quiz-q .opt:disabled { cursor: default; opacity: 0.92; }
+
+.quiz-q .opt.correct {
+  background: var(--correct-bg);
+  border-color: var(--correct);
+  color: var(--correct);
+  font-weight: 600;
+}
+.quiz-q .opt.wrong {
+  background: var(--wrong-bg);
+  border-color: var(--wrong);
+  color: var(--wrong);
+}
+
+.quiz-feedback {
+  display: none;
+  margin-top: 0.9rem;
+  padding: 0.8rem 1rem;
+  border-radius: 6px;
+  font-size: 0.92rem;
+  line-height: 1.8;
+}
+.quiz-feedback.show { display: block; }
+.quiz-feedback.good { background: var(--correct-bg); border-left: 3px solid var(--correct); }
+.quiz-feedback.bad { background: var(--wrong-bg); border-left: 3px solid var(--wrong); }
+.quiz-feedback .fb-src { display: block; font-size: 0.8rem; color: var(--ink-faint); margin-top: 0.4rem; }
+
+/* 回忆题 */
+.quiz-q textarea.recall-input {
+  width: 100%;
+  min-height: 4.5rem;
+  font: inherit;
+  font-size: 0.95rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  resize: vertical;
+}
+.quiz-q textarea.recall-input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+
+.reveal-btn, .self-rate button {
+  font: inherit;
+  font-size: 0.88rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.45rem 1rem;
+  margin-top: 0.6rem;
+  cursor: pointer;
+}
+.reveal-btn:hover { opacity: 0.9; }
+
+.self-rate { display: none; margin-top: 0.8rem; }
+.self-rate.show { display: block; }
+.self-rate button { margin-right: 0.5rem; background: var(--ink-soft); }
+.self-rate button.got { background: var(--correct); }
+.self-rate button.partial { background: #b07d10; }
+.self-rate button.missed { background: var(--wrong); }
+
+.recall-answer {
+  display: none;
+  margin-top: 0.9rem;
+  padding: 0.9rem 1rem;
+  background: var(--paper-alt);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  font-size: 0.92rem;
+  line-height: 1.85;
+}
+.recall-answer.show { display: block; }
+
+/* ---------- 测验诊断报告 ---------- */
+.quiz-report {
+  background: var(--paper-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.4rem 1.6rem;
+  margin: 2.5rem 0;
+}
+.quiz-report .score-line { font-size: 1.15rem; font-weight: 600; margin-bottom: 0.6rem; }
+.quiz-report .verdict { color: var(--ink-soft); font-size: 0.92rem; margin-bottom: 1rem; }
+.weak-list li { margin: 0.5rem 0; font-size: 0.93rem; line-height: 1.7; }
+
+/* ---------- 页脚 ---------- */
+.lesson-footer {
+  margin-top: 4rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.88rem;
+  color: var(--ink-soft);
+}
+.ask-reminder {
+  background: var(--accent-soft);
+  border-radius: 8px;
+  padding: 1rem 1.3rem;
+  margin: 2rem 0;
+  font-size: 0.95rem;
+  line-height: 1.8;
+}
+
+/* ---------- 打印 ---------- */
+@media print {
+  body { background: #fff; }
+  main { max-width: none; }
+  .quiz-q .opt { border: 1px solid #bbb; background: #fff; }
+}

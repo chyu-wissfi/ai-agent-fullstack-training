@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>主题课 2/4 · 输出侧工程：Streaming 与 Structured Output</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 01 · 主题课 2 / 4 · 覆盖课程小节 1-3 + 1-5</p>
+<h1>输出侧工程：Streaming 与 Structured Output</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：先凭记忆做检索式测验暴露薄弱点，再看精讲补课，最后按笔记验收标准自查。测验前 2 题是上一课的间隔复习题。<br>
+  <strong>笔记定位</strong>：<a href="../course_code/week01/第一章 学习笔记/第一章 学习笔记.md">第一章 学习笔记</a> 1.3（行 2827–3620）+ 1.5（行 4821–5969）<br>
+  <strong>代码定位</strong>：<code>course_code/week01/1-3/</code>（stream_deepseek / app / eventsource.js / latency / retry）、<code>1-5/</code>（fieldrule / validation / repairloop / cache / decisionResult / all）<br>
+  <strong>预计用时</strong>：测验 20 分钟 + 精讲 15 分钟<br>
+  <strong>本课验收标准</strong>（笔记原文）：能解释--区分 TTFT、生成耗时、端到端耗时；说清 JSON、JSON Schema、Pydantic 和原生 Structured Output 的区别；能审查--识别伪流式、断线误取消、流中盲目重试、宽松类型、默认值兜底、无限重试和错误缓存。
+</div>
+
+<h2>怎么用这一课</h2>
+<p>延续上一课的模式：<strong>先考后讲</strong>。测验前两题是主题课 1 的复习题（间隔重复，不是新内容），凭记忆作答即可。回忆题先自己写再看参考答案，严格自评。测验结束后页面底部生成诊断报告，按报告决定精讲部分读哪里、笔记回读哪里。</p>
+<p class="sidenote">这两节合在一课是因为它们是同一个问题的两面：模型输出是一条<strong>过程</strong>（Streaming 管它怎么逐步交出来），也是一份<strong>协议</strong>（Structured Output 管它最终长什么样才能被程序消费）。复习题答错不要跳过--那是上一课存储强度不足的信号，回去重做主题课 1 的测验。</p>
+
+<h2>第一部分：检索式测验</h2>
+<div id="quiz"></div>
+
+<hr>
+
+<h2>第二部分：精讲（测验后再读）</h2>
+
+<h3>1. 一条主线：输出侧要同时管「过程」和「结果」</h3>
+<p>非流式接口里，一次模型调用对用户和系统都是黑盒：2 秒出第一个 Token、十几秒出全文，接口只在最后返回 JSON。Streaming 把这个过程变成<strong>可观察、可取消、可恢复的事件流</strong>；Structured Output 把最终结果变成<strong>可验证、可拒绝、可恢复的业务协议</strong>。两条主链分别是：</p>
+<pre>【Streaming 主链】                          【Structured Output 主链】
+Client 创建 Run                             工程师定义协议（Pydantic）
+      ↓                                           ↓
+Agent Loop 请求 Model Adapter               生成 JSON Schema 发给模型
+      ↓                                           ↓
+Provider chunk -> ModelStreamEvent           模型生成候选结构化结果
+      ↓                                           ↓
+Agent Loop -> RunEvent                      服务端解析并校验（三层）
+      ↓                                           ↓
+Event Store 按 run_id + seq 保存             ├─ 通过 -> 交给下游
+      ↓                                           └─ 失败 -> 反馈错误 -> 有限修复
+SSE Gateway 编码推送                                  ├─ 成功 -> 交给下游
+      ↓                                              └─ 失败 -> 合格缓存降级或明确终止
+Web / CLI 按事件类型消费</pre>
+<p>取消信号沿 Streaming 主链<strong>反向</strong>传递，最终写入唯一的 <code>run.cancelled</code> 终态。</p>
+
+<h3>2. Streaming 改善什么、不改善什么（本课第一张必背表）</h3>
+<p><strong>Streaming 主要改善感知延迟和过程可见性，不会自动让模型推理更快。</strong>要区分三个指标：</p>
+<table>
+  <tr><th>指标</th><th>含义</th><th>主要受什么影响</th></tr>
+  <tr><td><strong>TTFT</strong></td><td>请求开始到第一个可显示 Token</td><td>排队、网络、输入长度、Prefill</td></tr>
+  <tr><td><strong>Generation Time</strong></td><td>首 Token 到模型输出结束</td><td>输出长度、模型解码速度</td></tr>
+  <tr><td><strong>End-to-End Latency</strong></td><td>用户发起任务到 Run 最终完成</td><td>模型、多轮 Loop、工具、存储</td></tr>
+</table>
+<p>Streaming 也<strong>不能</strong>解决：模型本身慢、Prompt 过长、工具阻塞、Context Window 不足；也不会自动保存事件、停止后台任务、恢复崩溃 Worker。这些分别属于 Cancellation、Event Replay、Checkpoint 的职责。特别地：<strong>长文本超出单次输出上限要拆任务 + checkpoint，Streaming 突破不了 Context Window。</strong></p>
+
+<h3>3. 分层术语：七个不能混用的数据单位</h3>
+<table>
+  <tr><th>名称</th><th>准确含义</th><th>不能当成什么</th></tr>
+  <tr><td>Token</td><td>模型内部生成与计费的文本单位</td><td>一个汉字或一个网络包</td></tr>
+  <tr><td>Provider chunk</td><td>SDK 从供应商流中读到的增量对象</td><td>稳定业务协议</td></tr>
+  <tr><td>ModelStreamEvent</td><td>Adapter 归一化后的模型事件</td><td>SSE 文本帧</td></tr>
+  <tr><td>RunEvent</td><td>Harness 对外发布的运行事实</td><td>只有文本 delta</td></tr>
+  <tr><td>HTTP chunk</td><td>网络层一次读写到的字节</td><td>一条完整 SSE event</td></tr>
+  <tr><td>SSE frame</td><td>event/data/id 组成的文本帧</td><td>模型 Token</td></tr>
+  <tr><td>Checkpoint</td><td>可恢复的任务执行状态</td><td>保存每个网络包</td></tr>
+</table>
+<p>三个关键事实：一次 Provider chunk 可能没文本也可能含多个 Token；一次网络读取可能只有半个 SSE frame 也可能粘着三条 frame（客户端要「增量解码 -&gt; 按空行切 frame -&gt; 按类型分发」三层处理）；一次 SSE frame 可能对应多个模型事件也可能只是心跳。TTFT 记录在<strong>第一个非空 text.delta 到达时</strong>，不是响应头也不是首个 chunk。</p>
+<p class="sidenote">为什么要 ModelStreamEvent 这一层：供应商 chunk 是协议细节，直接转发给前端，换模型就要 Web、CLI、日志、Trace、重连逻辑全链路修改--这是主题课 1「Adapter 收敛差异」在流式场景的复现。</p>
+
+<h3>4. 终态与取消：断开连接 ≠ 停止生成</h3>
+<ul>
+  <li><strong>唯一终态</strong>：客户端只有收到 <code>run.completed</code> / <code>run.failed</code> / <code>run.cancelled</code> 三者之一才能确认 Run 已终止；同一个 Run 只能产生一个终态（完成与取消同时发生时要测试竞态，最终只保留一个）。</li>
+  <li><strong>cancelling 中间态</strong>：取消请求被接受时资源可能还没释放，直接显示 cancelled 会让用户误以为成本和副作用已停止。</li>
+  <li><strong>创建 Run 与订阅 Run 分离</strong>：页面刷新不会自动创建第二次模型请求；客户端断线只中断订阅，不等于取消业务 Run。</li>
+  <li><strong>部分输出</strong>：应保留（partial_text、last_seq、当前 step、工具状态、usage、cancel reason），但不能自动当成最终业务结果--被截断的 JSON、SQL、补丁不能直接进下游执行器。</li>
+  <li><strong>run_id + seq</strong>：客户端去重、Event Store 排序、重连确认位置、Trace 还原，四个用途共用这一对字段。断线续传是<strong>重放已保存事件</strong>（按 Last-Event-ID 从 Event Store 查询），不是重新调用模型。</li>
+</ul>
+
+<h3>5. 失败分阶段：重试还是重放（本课第二张必背表）</h3>
+<table>
+  <tr><th>失败阶段</th><th>示例</th><th>正确动作</th></tr>
+  <tr><td>建立流之前</td><td>连接超时、429、503</td><td>有界重试</td></tr>
+  <tr><td>已连接未产生业务事件</td><td>上游提前关闭</td><td>按策略有限重试</td></tr>
+  <tr><td>已发出 text.delta</td><td>网络中断</td><td><strong>不盲目重跑并拼接</strong></td></tr>
+  <tr><td>工具调用已开始</td><td>执行器失联</td><td>先查询工具状态</td></tr>
+  <tr><td>已产生终态但客户端掉线</td><td>ACK 丢失</td><td><strong>重放事件，不重跑任务</strong></td></tr>
+</table>
+<p>三个不能混的概念：<strong>Model Retry</strong>（重新推理）、<strong>Transport Replay</strong>（重发已保存事件）、<strong>Task Resume</strong>（从 checkpoint 继续）。核心纪律：一旦向下游产生不可重复的业务事件，就停止自动重新生成。伪流式的三个来源（代码层面看不出）：先收集完整文本再 yield、同步 SDK 阻塞事件循环、Nginx/CDN/压缩层缓冲响应--所以验收要从客户端实测首事件时间，不能只看代码里有没有 <code>StreamingResponse</code>。</p>
+<p class="sidenote">工作对应：你在 OpenViking 日常处理的 MCP 工具流式结果与 Claude Code 插件的上下文注入，走的都是这条「内部事件 -&gt; 对外协议」的分层路子；「通知可以丢，事实事件不能丢」也是你做 benchmark 跑批时的同款约束。</p>
+
+<h3>6. Structured Output：四层术语一句话收束</h3>
+<blockquote>JSON 解决「能不能解析」，Schema 解决「长什么样」，Pydantic 解决「Python 程序怎样定义和验收」，业务代码解决「这个结果能不能用」。</blockquote>
+<p>自然语言、关键词、正则解析没有稳定边界：「暂时不要转交」仍然包含「转交」，解析器不报错却选了错误分支。即使 Prompt 强调「只返回 JSON」，<code>{"action":"route","team":123}</code> 也是合法 JSON 却不符合协议。Agent 不应猜测一句话大概是什么意思，只接收<strong>通过明确协议校验的对象</strong>。Prompt 约束行为倾向，Structured Output 把结果变成协议对象，两者不能互相替代。</p>
+<p>字段设计<strong>从下游消费方出发，不从模型能生成什么出发</strong>：字段名面向业务接口（action/team/question），不面向模型思考过程（model_thought/thought_2 迫使调用方再次猜测）。Pydantic Model 是协议的单一来源：<code>model_json_schema()</code> 发给模型描述结构，<code>model_validate_json()</code> 验收实际返回，两端共享同一份定义不漂移。注意 model_validator 的业务组合关系不一定能完整投影成 Schema，所以即使 Provider 支持原生 Structured Output，服务端仍要保留统一验收入口（跨 Provider 稳定边界 + 业务组合规则 + 完成状态都靠它）。</p>
+
+<h3>7. 校验三层 + 修复循环五检查点</h3>
+<p>一次校验区分三类错误：<strong>JSON 语法</strong>（无法解析）、<strong>字段结构</strong>（缺失/类型/枚举/额外字段）、<strong>业务组合</strong>（字段单独合法但整体不可用，如 route_to_team 却没有 team）。错误不能只是一句「不合法」，要归一化成带 path/code/message 的 ValidationIssue 列表--日志能统计失败原因，修复循环才知道改什么。全有或全无：不能从失败对象取 team 再给 action 补默认值，那会伪造一份模型没作出的决策。</p>
+<p>有边界的 repair loop 五个检查点：</p>
+<ol>
+  <li>所有调用共用同一份 Schema（生成端 = 校验端）；</li>
+  <li>每次返回都重新校验，第二次也不绕过；</li>
+  <li>只有 valid=True 才返回类型对象，失败对象不进下游；</li>
+  <li>上一份输出 + 具体错误进入下一轮--让模型<strong>修复已有结果</strong>，不是重新猜一次（修复提示三要点：指出哪里错、限制只修协议问题、只返回 JSON）；</li>
+  <li>max_repairs 有限预算（默认修复 2 次、总调用最多 3 次），用完抛 StructuredOutputFailure。</li>
+</ol>
+<p>只有<strong>输出协议错误</strong>适合交给模型修复；网络超时归 Provider 调用层退避重试、认证失败立即终止修配置、权限不足归业务策略。宽泛的 <code>except Exception</code> 把所有错误都送回模型，是本课审查题的标准答案之一。</p>
+
+<h3>8. 失败收口：三种状态与缓存四条件</h3>
+<p>最终失败也要有稳定协议：DecisionResult 返回 <code>ok</code> / <code>degraded</code> / <code>failed</code>，其中 <strong>failed 状态下 decision 必须为空</strong>--系统不能为了流程继续而伪造一个团队，也不能从最后一次错误输出拼半成品。处理顺序固定：先有限修复，修不好再查合格缓存，缓存不可用就明确失败。缓存成为降级结果的四个条件：<strong>同一输入、同一协议版本、有效期内、历史上通过校验</strong>；是否允许用缓存仍是业务决定（快速变化的订单状态、权限判断、写操作不能因为结构合法就复用旧结果）。处理顺序固定之外还有个纪律：只捕获 StructuredOutputFailure，不要把程序 Bug 或数据库故障伪装成输出格式问题。</p>
+<p class="sidenote">工作对应：你在 de-test 里 fact 族（entities/events/preferences）的输出协议，就是这条「定义协议 -&gt; 校验 -&gt; 定向修复 -&gt; 失败收口」链路的真实实例--模型产出的记忆字段必须过校验才能落盘，落错了不改旧文件、新增修正，正是「非法结果不进下游」的变体。</p>
+
+<hr>
+
+<h2>回读与验证指引</h2>
+<p>按诊断报告的薄弱点，对照回读（不需要重读整份笔记）：</p>
+<ul>
+  <li>三个延迟指标 / Streaming 边界 -&gt; 笔记 1.3「二、」（行 2890–3005）；代码 <code>1-3/latency.py</code>（StreamMetrics 里 first_event_at 与 first_token_at 是分开的，正好对应「TTFT 记在哪」）。</li>
+  <li>术语 / 主链 / Adapter 归一化 -&gt; 笔记 1.3「三、四、」（行 3009–3175）；代码 <code>1-3/stream_deepseek.py</code>。</li>
+  <li>RunEvent / SSE / 创建订阅分离 -&gt; 笔记 1.3「五、六、」（行 3177–3340）；代码 <code>1-3/app.py</code>、<code>1-3/eventsource.js</code>。</li>
+  <li>取消 / 失败分阶段 / 重放 -&gt; 笔记 1.3「八、九、」（行 3400–3497）；代码 <code>1-3/retry.py</code>（有边界的流重试范本）、<code>1-3/cli.py</code>。</li>
+  <li>四层术语 / 字段设计 / 原生 Structured Output -&gt; 笔记 1.5「二、三、四、」（行 4928–5215）；代码 <code>1-5/fieldrule.py</code>、<code>1-5/textformat.py</code>。</li>
+  <li>三层校验 / 修复循环 -&gt; 笔记 1.5「五、六、」（行 5218–5457）；代码 <code>1-5/validation.py</code>、<code>1-5/validationIssue.py</code>、<code>1-5/repair.py</code>、<code>1-5/repairloop.py</code>、<code>1-5/validate_decision.py</code>。</li>
+  <li>失败收口 / 缓存 -&gt; 笔记 1.5「七、八、」（行 5460–5907）；代码 <code>1-5/decisionResult.py</code>、<code>1-5/cache.py</code>、<code>1-5/all.py</code>（四条验收路径可无 Key 运行，SequenceModel 不依赖网络）。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<p>本课最可信的原始材料仍是课程自身的笔记与代码：先读 <a href="../course_code/week01/第一章 学习笔记/第一章 学习笔记.md">第一章 学习笔记</a> 1.3 的「1.3 能干活儿的标准是什么」（行 2877–2886）和 1.5 的「1.2 这节课真正训练哪四项能力」（行 4859–4867）对照自评；再跑 <code>1-5/all.py</code>（用 SequenceModel 可无 Key 运行，验证四条路径：一次成功、修复成功、缓存降级、最终失败）。外部文档仅作字段核对用：<a href="https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events">MDN: Using server-sent events</a>、<a href="https://docs.pydantic.dev/latest/concepts/models/">Pydantic Models 官方文档</a>、<a href="https://developers.openai.com/api/docs/guides/structured-outputs">OpenAI Structured Outputs 指南</a>。</p>
+
+<div class="ask-reminder">
+<strong>卡住了就问你的 agent。</strong>精讲里任何一处让你觉得「等等，为什么」--比如为什么流中失败不能重跑拼接、为什么 failed 时 decision 必须为空、为什么缓存还要重新校验一次--直接回到对话里问。输出侧工程的所有边界都在回答同一个问题：模型给了东西之后，程序凭什么敢用。
+</div>
+
+<div class="lesson-footer">
+  主题课序列：<a href="./0001-llm-to-agent-loop.html">1/4 从 LLM 到 Agent</a>（1-1 + 1-2）· <strong>2/4 Streaming 与 Structured Output</strong>（本课）· <a href="./0003-prompt-engineering.html">3/4 Prompt Engineering</a>（1-4）· <a href="./0004-llm-gateway.html">4/4 LLM Gateway</a>（1-6 + 1-7）<br>
+  测验做完后隔 1–2 天重做一次（间隔重复），正确率稳定在 85% 以上即通过本主题。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  title: '第一部分：检索式测验（18 题，先凭记忆作答）',
+  questions: [
+    {
+      type: 'choice',
+      concept: '【复习】谁决定系统何时停止',
+      section: '1-1 复习',
+      notesRef: '笔记 1.1 七、7.5（行 1720 起）',
+      question: '（间隔复习题）Agent Loop 中「整个系统什么时候停止」由谁决定？',
+      options: [
+        '工程系统用确定性规则控制，如 max_turns 与预算',
+        '模型自己判断任务已经完成，然后主动停止运行',
+        '模型供应商的服务端超时机制自动切断连接',
+        '用户在每一轮工具调用前手动确认是否继续执行'
+      ],
+      answer: 0,
+      explanation: '这是最小 Loop 检查点⑤：模型可以决定下一步做什么，但不能决定整个系统什么时候停止。把停止交给模型，等价于把预算控制权交给不确定性。答错请回做主题课 1 的测验。'
+    },
+    {
+      type: 'recall',
+      concept: '【复习】贯穿整门课的原则',
+      section: '1-1/1-2 复习',
+      notesRef: '笔记 1.1 七、（行 1595–1730）',
+      question: '贯穿整门课的一条职责划分原则是什么？并用本课的内容举一个例子。',
+      hint: '一方处理不确定性，另一方守住确定性边界。',
+      modelAnswer: '<strong>LLM 负责不确定性决策，工程系统负责确定性边界。</strong><br><br>本课的例子：模型决定输出什么内容（不确定），但「输出是否合法」由 Pydantic 校验决定、「Run 何时终止」由唯一终态和取消信号决定、「重试几次」由有限预算决定（都是确定性边界）。Streaming 和 Structured Output 都是在输出侧落实这条原则的工程结构。'
+    },
+    {
+      type: 'choice',
+      concept: 'Streaming 改善什么',
+      section: '1-3',
+      notesRef: '笔记 1.3 二、2.1（行 2890 起）',
+      question: '关于 Streaming 到底带来什么，课程的核心结论是？',
+      options: [
+        '改善感知延迟与过程可见性，不会缩短总生成时间',
+        '通过并行解码显著提升模型的推理速度与吞吐',
+        '通过压缩上下文让模型每次都能生成更长的输出',
+        '通过缓存历史输出减少模型调用的次数与总成本'
+      ],
+      answer: 0,
+      explanation: '流式让用户更早看到内容、更早判断方向、必要时提前停止，但总生成时间不变。它也解决不了模型本身慢、Prompt 过长、工具阻塞、Context Window 不足--那些分别属于其他工程结构的职责。'
+    },
+    {
+      type: 'choice',
+      concept: '三个延迟指标的归因',
+      section: '1-3',
+      notesRef: '笔记 1.3 二、2.1（行 2918 起）',
+      question: '用户抱怨「等了很久才看到第一个字」。这个等待主要对应哪个指标、受什么影响？',
+      options: [
+        'TTFT，主要受排队、网络、输入长度与 Prefill 影响',
+        'Generation Time，主要受输出长度与解码速度影响',
+        'End-to-End Latency，主要受多轮 Loop 与工具影响',
+        'TTFT，主要受输出长度与模型解码速度的影响'
+      ],
+      answer: 0,
+      explanation: '「多久看到第一个字」就是 TTFT（首 Token 时间）。注意 D 选项的干扰：指标判断对但归因错了--输出长度和解码速度影响的是首 Token 之后的 Generation Time。优化 TTFT 要看排队、网络、输入长度和 Prefill，不是让模型写得更快。'
+    },
+    {
+      type: 'choice',
+      concept: '网络读取与 SSE frame 的关系',
+      section: '1-3',
+      notesRef: '笔记 1.3 三、3.1（行 3011 起）',
+      question: '关于流式链路中各层的数据单位，以下说法正确的是？',
+      options: [
+        '一次网络读取可能只有半个 frame，也可能粘着三条',
+        '一个 Provider chunk 严格对应一个模型 Token一一对应',
+        '一条 SSE frame 一次编码必然只承载一个 Token 的文本',
+        '一次网络读取总是恰好返回一条完整 frame 的全部字节'
+      ],
+      answer: 0,
+      explanation: '网络会拆包也会粘包，一个中文字符的 UTF-8 字节甚至可能被拆到两次读取中。所以客户端要做三层处理：TextDecoder 增量解码 -> buffer 按空行切 frame -> 按事件类型分发。这是拆包/粘包/Unicode 测试要覆盖的边界。'
+    },
+    {
+      type: 'choice',
+      concept: 'TTFT 的记录口径',
+      section: '1-3',
+      notesRef: '笔记 1.3 四、4.3（行 3169 起）',
+      question: '课程认为 TTFT（首 Token 时间）应该在哪里记录？',
+      options: [
+        '第一个非空 text.delta 到达时，首事件不一定是文本',
+        '收到 HTTP 响应头时，响应头代表模型已开始工作',
+        '收到第一个 Provider chunk 时，任何首事件都可计数',
+        '收到 run.completed 终态时，终态说明输出全部完成'
+      ],
+      answer: 0,
+      explanation: '第一个供应商事件可能是 usage 或空 choices，不是用户可见文本；响应头到达更不代表开始生成。指标口径是工程师要定义的决策--AI 能生成计时代码，但不能替你决定「首响应」指响应头、首事件还是首个可显示字符。代码里 1-3/latency.py 的 first_event_at 和 first_token_at 就是分开的两个字段。'
+    },
+    {
+      type: 'recall',
+      concept: 'run_id + seq 与终态语义',
+      section: '1-3',
+      notesRef: '笔记 1.3 五、5.1–5.2（行 3177–3235）',
+      codeRef: 'course_code/week01/1-3/eventsource.js',
+      question: 'RunEvent 上最关键的定位字段是哪一对？它们支撑哪四个下游用途？另外终态是哪三种事件、有什么约束？',
+      hint: '一对字段标识「事件在 Run 中的位置」；终态三选一且有唯一性约束。',
+      modelAnswer: '<strong>run_id + seq</strong>：标识一条事件在某次 Run 中的位置。<br>四个用途：① 客户端按它去重（EventSource 自动重连、服务端重放都可能造成重复）；② Event Store 按它排序；③ 重连时按它确认从哪里继续（Last-Event-ID）；④ Trace 按它还原任务过程。<br><br>终态是 <strong>run.completed / run.failed / run.cancelled</strong> 三者之一；约束是<strong>同一个 Run 只能产生一个终态</strong>（完成与取消同时发生时要测竞态，最终只保留一个）。'
+    },
+    {
+      type: 'choice',
+      concept: '断线不等于取消',
+      section: '1-3',
+      notesRef: '笔记 1.3 八、8.1（行 3400 起）',
+      question: '浏览器 SSE 连接断开后，后台发生了什么？正确的认识是？',
+      options: [
+        '断线只中断订阅；Run 可能仍在跑，取消要走 API',
+        '断线即自动取消，网关检测到断开会终止后台生成',
+        '断线会暂停生成，供应商自动挂起请求等待重连恢复',
+        '断线即任务失败，网关自动写入 run.failed 并释放资源'
+      ],
+      answer: 0,
+      explanation: '连接断开只证明订阅者不再接收事件；Agent Loop 可能作为后台任务继续运行，供应商仍在生成，工具可能已产生副作用。用户停止的完整链路是：POST /runs/{run_id}/cancel -> Run 进入 cancelling -> Loop 在安全点检查信号 -> 关闭模型流或停止工具 -> 写入唯一 run.cancelled。'
+    },
+    {
+      type: 'choice',
+      concept: '能审查：伪流式',
+      section: '1-3',
+      notesRef: '笔记 1.3 六、6.4（行 3325 起）',
+      question: '审查这段 AI 生成的流式代码，最主要的隐患是什么？<pre style="margin:0.8rem 0">async def stream_answer(question):\n    result = await client.chat.completions.create(\n        model="deepseek-v4-flash", messages=[question])\n    words = result.choices[0].message.content\n    for w in words:\n        yield f"data: {json.dumps({\'delta\': w})}\\n\\n"</pre>',
+      options: [
+        '非流式拿完整结果再逐词吐出，TTFT 没有被改善',
+        '缺少心跳帧，空闲时代理会关闭长连接需补 heartbeat',
+        '逐词 yield 过于细碎，应按批次合并以减少帧数量',
+        '没有按 seq 去重，客户端重连后会重复渲染同段文本'
+      ],
+      answer: 0,
+      explanation: 'create() 没传 stream=True，服务端等完整答案后才返回，再逐词 yield 只是「看起来在打字」的伪流式--用户仍要等完整生成时间才看到第一个字。B/C/D 都是流式链路里真实存在的问题，但都建立在这段代码真的在流式传输的前提上。验收要从客户端实测首事件时间，不能只看有没有 yield。'
+    },
+    {
+      type: 'choice',
+      concept: '流中失败不能重跑拼接',
+      section: '1-3',
+      notesRef: '笔记 1.3 九、9.1（行 3447 起）',
+      question: '流已经输出了一半 text.delta 时网络中断，正确的处理是？',
+      options: [
+        '不盲目重新生成后拼接，重放已保存事件或收口',
+        '立即重新请求模型，把新输出拼接到已有半截文本后',
+        '静默丢弃已产生的半截文本，让客户端无感知地重来',
+        '直接写入 run.failed 终态，禁止任何形式的恢复操作'
+      ],
+      answer: 0,
+      explanation: '模型一旦已输出部分文本，重新请求可能走向另一套表达，即使温度为零也不能保证可拼接。区分三个概念：Model Retry（重新推理，只适用于流前失败）、Transport Replay（重发已保存事件）、Task Resume（从 checkpoint 继续）。A 涵盖了 Replay 和安全收口两条正路。'
+    },
+    {
+      type: 'choice',
+      concept: '四层术语的职责边界',
+      section: '1-5',
+      notesRef: '笔记 1.5 二、2.1（行 4930 起）',
+      question: 'JSON、JSON Schema、Pydantic、原生 Structured Output 分别解决什么问题？',
+      options: [
+        'JSON 管能否解析，Schema 管长什么样，Pydantic 管验收，原生 SO 管生成约束',
+        'JSON 管字段枚举，Schema 管能否解析，Pydantic 管生成约束，原生 SO 管验收',
+        'JSON 管生成约束，Schema 管业务组合，Pydantic 管能否解析，原生 SO 管接口',
+        'JSON 管能否解析，Schema 管业务语义，Pydantic 管传输编码，原生 SO 管缓存'
+      ],
+      answer: 0,
+      explanation: '笔记原句：JSON 解决「能不能解析」，Schema 解决「长什么样」，Pydantic 解决「Python 程序怎样定义和验收」，业务代码解决「这个结果能不能用」。原生 Structured Output 是在生成阶段按 Schema 约束模型输出--它保证结构一致性，不保证业务正确性。'
+    },
+    {
+      type: 'choice',
+      concept: '字段设计从消费方出发',
+      section: '1-5',
+      notesRef: '笔记 1.5 三、3.1（行 4988 起）',
+      question: '设计输出协议的字段时，课程要求面向谁？为什么协议里没有 model_thought 这类字段？',
+      options: [
+        '面向下游消费方，模型推理过程不是下游需要的接口',
+        '面向模型的表达习惯，字段越接近模型用语就越稳',
+        '面向数据库的表结构，输出协议应与存储列名一致',
+        '面向日志的可读性，字段名要让运维直接理解意图'
+      ],
+      answer: 0,
+      explanation: '下游只需要回答：信息足够时交给哪个团队、不足时问什么。action/team/question 能直接被程序分支使用；model_decision_text、thought_2 这类字段会迫使调用方再次猜测模型的意思。字段名面向业务，不面向模型思考过程--这一步必须由工程师完成，AI 可以建议字段但不知道哪个系统消费结果。'
+    },
+    {
+      type: 'choice',
+      concept: '原生 Structured Output 之后仍要校验',
+      section: '1-5',
+      notesRef: '笔记 1.5 四、4.3（行 5186 起）',
+      question: 'Provider 已经支持原生 Structured Output（text_format 传 Pydantic Model），为什么服务端仍要保留验收入口？',
+      options: [
+        '它只约束结构，不保证完成状态、业务规则与跨 Provider 一致',
+        '它只在最新模型上可用，旧 Provider 需要服务端模拟其行为',
+        '它生成的对象没有经过序列化，必须由服务端重新编码存储',
+        '它会隐式放宽 strict 模式，服务端需要再校验一次枚举值'
+      ],
+      answer: 0,
+      explanation: '原生 SO 约束的是输出结构，不替系统判断：请求是否正常完成、模型是否拒答、Pydantic 业务组合规则是否通过、内容是否符合业务事实、下游是否允许消费。真实平台接多个 Provider（严格 Schema / JSON mode / 部分兼容），服务端统一验收才能形成跨 Provider 稳定边界。职责划分：模型生成符合协议的候选对象，应用侧负责验收调用状态、业务规则和失败路径。'
+    },
+    {
+      type: 'choice',
+      concept: '三类校验错误的归类',
+      section: '1-5',
+      notesRef: '笔记 1.5 五、5.1（行 5220 起）',
+      question: '模型返回 action=ask_user 且 team=billing（ask_user 时 team 必须为 null）。summary 长度合规、所有枚举值都合法。这属于哪类错误？',
+      options: [
+        '业务组合错误，字段单独合法但整体不可用',
+        'JSON 语法错误，文本根本无法完成解析',
+        '字段结构错误，对象不符合接口类型定义',
+        'Provider 错误，模型没有按 Schema 进行生成'
+      ],
+      answer: 0,
+      explanation: '三层校验：JSON 语法（缺引号括号未闭合）、字段结构（缺失/类型/枚举/额外字段）、业务组合（转交没团队、追问没问题、两分支字段同时出现）。本题每个字段单独都合法，冲突出在组合关系上，由 model_validator 检查。区分三层的意义：日志能统计失败原因，修复循环才知道改什么。'
+    },
+    {
+      type: 'recall',
+      concept: 'repair loop 的检查点',
+      section: '1-5',
+      notesRef: '笔记 1.5 六、6.2（行 5343 起）',
+      codeRef: 'course_code/week01/1-5/repairloop.py',
+      question: '一个有边界的修复循环（repair loop）有五个必须守住的检查点。请凭记忆列出，并说明修复提示要满足哪三个要求。',
+      hint: '从「协议用哪份」开始，到「预算用完怎么办」结束。',
+      modelAnswer: '① 所有调用共用同一份 Schema（model_json_schema()，生成端 = 校验端）；<br>② 每次返回都重新进 validate_output()，第二次修复也不绕过校验；<br>③ 只有 valid=True 才返回类型对象，失败对象不能进入下游；<br>④ 上一份输出 + 具体错误一起进入下一轮--让模型修复已有结果，不是重新猜一次；<br>⑤ max_repairs 有限预算（默认修复 2 次、总调用最多 3 次），用完抛 StructuredOutputFailure。<br><br>修复提示三要求：指出哪里错了；限制只修正协议问题、不改原任务含义；只返回修正后的 JSON。'
+    },
+    {
+      type: 'choice',
+      concept: '哪些错误适合交给模型修复',
+      section: '1-5',
+      notesRef: '笔记 1.5 六、6.3（行 5438 起）',
+      question: '以下哪种失败应该把具体错误反馈给模型修复？',
+      options: [
+        '字段缺失与跨字段组合冲突，模型能重新组织输出',
+        '网络超时与限流，模型重试时能修复传输层故障',
+        '认证失败与权限不足，重复生成可以恢复凭证',
+        '数据库写入异常，模型能补偿已执行一半的副作用'
+      ],
+      answer: 0,
+      explanation: '只有输出协议错误（字段、类型、枚举、跨字段组合）适合反馈修复。网络/限流归 Provider 调用层退避重试，认证失败立即终止修配置，权限不足归业务策略--模型没有能力也没有权限修这些。用宽泛的 except Exception 把所有错误送回模型重试，是 AI 生成代码的典型隐患。'
+    },
+    {
+      type: 'choice',
+      concept: 'failed 状态的关键约束',
+      section: '1-5',
+      notesRef: '笔记 1.5 七、7.1（行 5462 起）',
+      question: 'DecisionResult 的 status=failed 时，最关键的约束是什么？',
+      options: [
+        'decision 必须为空，不能拼半成品或伪造默认决策',
+        'message 必须为空，避免把内部错误细节暴露给调用方',
+        'model_calls 必须归零，失败调用的成本不计入统计',
+        'source 必须是 cache，失败时优先返回历史缓存结果'
+      ],
+      answer: 0,
+      explanation: 'failed 表示没有结果可以安全使用：系统不能为了流程继续而伪造一个团队，也不能从最后一次错误输出中拼出半成品。三种状态分工：ok（模型生成合法对象）、degraded（模型失败但找到合格缓存）、failed（无安全可用结果）。这条约束和「不能给缺失的 action 补默认值」是同一个纪律：非法结果不进下游。'
+    },
+    {
+      type: 'choice',
+      concept: '缓存降级的资格条件',
+      section: '1-5',
+      notesRef: '笔记 1.5 七、7.2（行 5485 起）',
+      codeRef: 'course_code/week01/1-5/cache.py',
+      question: '一份历史结果要成为 degraded 降级结果，必须同时满足哪些条件？',
+      options: [
+        '同一输入、同一协议版本、有效期内、历史已通过校验',
+        '同一用户、同一团队、同一模型、同一会话内产生',
+        '结构合法、字段完整、长度合规、枚举在允许范围',
+        '缓存命中率高、生成成本低、时效性弱、可重放执行'
+      ],
+      answer: 0,
+      explanation: '四个条件：task_key 输入哈希一致、schema_version 一致（协议变了旧结果格式可能不再合法）、有效期内、且历史上已通过校验（最后还要按当前协议再校验一次）。是否允许用缓存是业务决定：快速变化的订单状态、价格、权限判断和写操作不能因为结构合法就复用旧结果；无法确认时效就返回 failed 转人工。'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>
