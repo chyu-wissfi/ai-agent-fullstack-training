@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>补课 · trace_id 的画面与有证明力的测试</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+<style>
+  .log-pre { font-size: 0.78rem; line-height: 1.65; }
+  .id-tree { border-left: 3px solid var(--accent-soft); padding: 0.2rem 0 0.2rem 1.2rem; margin: 1.2rem 0; font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 0.85rem; line-height: 2.1; }
+  .id-tree .lvl { display: block; }
+  .id-tree .who { font-family: "Source Han Serif SC", "Noto Serif CJK SC", serif; color: var(--ink-soft); font-size: 0.8rem; margin-left: 1rem; }
+  .id-tree b { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 01 · 补课 · 主题课 4 薄弱点专项（Q13 四级 ID 链 · Q19 有证明力的断言）</p>
+<h1>trace_id 的画面，与「给不发生的坏事开收据」</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：主题课 4（<a href="0004-llm-gateway.html">LLM Gateway</a>）的两个薄弱点专项补课。你的原话是「trace_id 标识整条追踪链究竟指什么？没这个画面」--所以本课<strong>先讲画面，后测验</strong>，和前四课的先考后讲相反。<br>
+  <strong>笔记定位</strong>：<a href="../course_code/week01/第一章-学习笔记/第一章 学习笔记.md">第一章 学习笔记</a> 1.7 十三章 13.3（Trace 关系树）+ 十四章（测试策略）+ 1.6 行 6075–6088（ID 边界）<br>
+  <strong>预计用时</strong>：讲解 15 分钟 + 测验 10 分钟
+</div>
+
+<h2>第一部分：trace_id 的画面</h2>
+
+<h3>1. 先把场景立起来：一次报障</h3>
+<p>周五 16:32，业务方报障：「客服 Agent 的退款任务跑了 40 秒，最后失败了，用户还在页面上等」。你面对的是三个服务（API 入口、Agent Harness、LLM Gateway），每秒几千行日志，分部署在多台机器上。翻日志是不可能的。</p>
+<p>你手里只有一样东西：前端在发请求时，把响应头里的 <code>trace_id</code> 记了下来，值是 <code>tr_9f2c41</code>。你 grep 它：</p>
+
+<pre class="log-pre">$ grep tr_9f2c41 logs/*     <span style="color:#8a8a8a">← 你手里唯一的钥匙</span>
+16:32:01 api       tr_9f2c41                     请求进入，解析用户消息「查订单并退款」
+16:32:01 harness   tr_9f2c41  run_a1             启动任务：查询订单状态
+16:32:01 harness   tr_9f2c41  run_a1 step_01     模型规划：需调用订单查询工具
+16:32:01 gateway   tr_9f2c41  run_a1 step_01 call_c1   路由到 provider-a，请求发出
+16:32:03 gateway   tr_9f2c41  run_a1 step_01 call_c1   429 限流，退避 2s 后重试（attempts=2）
+16:32:08 gateway   tr_9f2c41  run_a1 step_01 call_c1   成功，TTFT 487ms
+16:32:09 harness   tr_9f2c41  run_a1 step_01 tool_t1  订单查询返回：ORD-8817 已发货
+16:32:10 harness   tr_9f2c41  run_a1 step_02     模型总结，run_a1 完成（2 calls / 1 tool）
+16:32:11 harness   tr_9f2c41  run_b2             启动任务：提交退款
+   …（run_b2 的 step_01 至 step_04 正常）…
+16:32:39 gateway   tr_9f2c41  run_b2 step_05 call_c9   5xx，重试耗尽，Run 预算 deadline 到期
+16:32:40 harness   tr_9f2c41  run_b2             失败：BUDGET_EXCEEDED（40s / 9 calls / 3 retries）</pre>
+
+<p><strong>这就是「整条追踪链」的画面</strong>：这次用户请求从进入系统到最终失败，跨了三个服务、两个任务、五个步骤、九次模型调用。<code>trace_id</code> 是把这一切缝成一条故事线的那根线。没有它，16:32:01 的请求和 16:32:40 的失败，在你眼里毫无关系；有了它，一次 grep 就是完整的因果链。</p>
+<p>顺着这条线你还能回答业务方的问题「40 秒花在哪了」：<code>call_c1</code> 被限流退避吃掉 6 秒、<code>run_b2</code> 里的三次重试（<code>attempts</code> 字段）和最终 <code>5xx</code> 各占多少，一数便知--这是「延迟不能只记一个数字」能落地的前提。</p>
+
+<h3>2. 每行日志的四级家谱</h3>
+<p>笔记 13.3 的原图，配上每级「回答的问题」--ID 体系存在的意义就是让任何一行日志能回答五个定位问题：</p>
+
+<div class="id-tree">
+  <span class="lvl"><b>trace_id</b> = tr_9f2c41 <span class="who">← 属于哪次用户旅程？（你 grep 用的钥匙，跨所有服务）</span></span>
+  <span class="lvl">└─ <b>run_id</b> = run_a1 <span class="who">← 是哪个任务？（一次 Agent Run，含多轮模型与工具调用）</span></span>
+  <span class="lvl">&nbsp;&nbsp;&nbsp;├─ <b>step_id</b> = step_01 <span class="who">← 任务走到第几步？（一个 Loop Step）</span></span>
+  <span class="lvl">&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;├─ <b>call_id</b> = call_c1 <span class="who">← 这一步的哪次模型调用？（attempts=2 是它内部的事）</span></span>
+  <span class="lvl">&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;└─ <b>tool_call_id</b> = tool_t1 <span class="who">← 哪次工具调用？</span></span>
+  <span class="lvl">&nbsp;&nbsp;&nbsp;└─ <b>step_id</b> = step_02 <span class="who">← ……任务可以有很多步</span></span>
+  <span class="lvl">└─ <b>run_id</b> = run_b2 <span class="who">← 同一次旅程的第二个任务</span></span>
+</div>
+
+<p>注意树里最容易漏的一点：<strong>重试不产生新的 call_id</strong>。<code>call_c1</code> 下 <code>attempts=2</code>，指的是这一次模型调用的第二次尝试。而 Structured Output 校验失败后的<strong>修复调用</strong>会拿一个新的 call_id、并关联原调用--它是「又一次调用」，不是「同一次调用的重试」。</p>
+
+<h3>3. trace_id 和 run_id 什么时候是两回事</h3>
+<p>你背的口径「trace_id 标识整条追踪链；run_id 标识一次 Agent Run」之所以模糊，是因为<strong>在简单系统里两者恰好重合</strong>：笔记 1.6 阶段（单文件 gateway.py）就是这么用的--行 6078 写「trace_id：一次 Agent Run」，那时一个请求就是一个任务，分不出两层。1-7 接入完整 Harness 后才拆成四级。</p>
+<p>分开后，trace 比 run 大的典型情形：<strong>一次用户旅程触发多个任务</strong>--上面的例子里「查订单并退款」被拆成 run_a1、run_b2；主 Agent 派发子 Agent、并行 Run、一个任务跨会话续跑，都是同一个 trace 下多个 run。反过来不成立：一次 Run 只属于一个 trace。更本质地说，trace_id 是分布式追踪的标准概念（OpenTelemetry / W3C <code>traceparent</code> 请求头），它跨服务、跨进程传播--请求每进入一个新服务，那一行的日志继续带着它。课程四级链是这套工业标准在 Agent 栈上的领域化投影。</p>
+
+<h3>4. 谁生成谁：Gateway 与 Harness 的分工</h3>
+<p>Q13 后半问「谁负责把 call_id 放进完整的因果链」，答案是那句口诀：<strong>Gateway 负责 call_id 内部细节，Harness 负责把它放进完整 Run 的因果链。</strong>翻译成画面：run_id / step_id 由 Agent Loop 所在的 Harness 生成，随 <code>CallContext(trace_id=…, run_id=…, step_id=…)</code> 传给 Gateway；Gateway 只在这些字段下补充自己这层的细节--call_id、attempts、fallback、provider_request_id。Gateway 不知道也不需要知道任务拆了几步；Harness 不知道也不需要知道一次 call 重试了几次。两层各自加自己那层的坐标，日志才能拼出完整家谱。</p>
+
+<h3>5. ID 对照排查动作表（背这张就够了）</h3>
+<table>
+  <tr><th>你拿到</th><th>能回答</th><th>典型动作</th></tr>
+  <tr><td>trace_id</td><td>这次旅程的全部</td><td>grep 一次，拿到跨所有服务的完整故事线</td></tr>
+  <tr><td>run_id</td><td>某个任务的全部</td><td>聚焦单任务日志，统计它的总 calls / tokens / 成本</td></tr>
+  <tr><td>step_id</td><td>第几步出的事</td><td>定位失败发生在哪个 Loop Step</td></tr>
+  <tr><td>call_id</td><td>哪次模型调用</td><td>看 attempts、延迟分解、错误码；与 Cost Ledger 对账</td></tr>
+  <tr><td>provider_request_id</td><td>供应商侧的那次请求</td><td>提工单时附上--供应商唯一能对上号的编号</td></tr>
+  <tr><td>业务 ID（工单号）</td><td>领域对象</td><td>查业务库；不能拿来关联模型调用</td></tr>
+</table>
+<p class="sidenote">工作对应：你 8 月排查 AISphere 空间管理搜索不生效时，沿着「前端 → llmops_app → IAM 服务」的链路走通了一次微型追踪--那条链路上的日志能串起来，靠的正是这类贯穿 ID。Agent 平台的 trace 只会更长：OpenCode → plugin-daemon → OpenViking → VikingDB，每一跳都该带着同一个 trace_id。</p>
+
+<hr>
+
+<h2>第二部分：Q19--有证明力的断言</h2>
+
+<h3>6. 心法一句话：给「不发生的坏事」开收据</h3>
+<p>Q19 问的是：审查一份「能返回 200」的 AI 生成 Gateway 实现，哪组测试断言最有证明力？心法只有一句：<strong>测试的证明力不在于证明「能跑」，而在于证明「不允许发生的行为确实不会发生」。</strong></p>
+<p>「能返回 200」为什么没证明力，你其实亲身经历过：AISphere 空间管理那次故障里，<code>ListAllWorkspace</code> 接口一直正常返回 200--前端请求组装时没读取搜索框字段，接口照样 200，搜索就是不生效。200 证明的只是「没崩」，不证明「行为正确」，更不证明「边界守住了」。</p>
+<p>这在你审查 AI 生成代码时尤其致命：AI 生成的代码恰恰 happy path 写得最流畅、失败边界写得最潦草。所以审查每条测试时问一句：「<strong>这条断言证明了什么不会发生？</strong>」答不上来，它就只是「能返回 200」。</p>
+
+<h3>7. 正确项的每条断言 ↔ 它堵住的坏事</h3>
+<table>
+  <tr><th>断言</th><th>堵住的坏事</th><th>对应纪律（主题课 4 精讲）</th></tr>
+  <tr><td>未知模型 / 非法请求 / 缺模板变量时，Provider 调用次数为零</td><td>确定性错误被白白重试，烧钱且无效</td><td>入口处拒绝；模板校验先于模型请求</td></tr>
+  <tr><td>一次失败一次成功时 attempts == 2</td><td>SDK 隐式重试掩盖真实调用量</td><td>max_retries=0</td></tr>
+  <tr><td>非法 JSON 不产生 parsed</td><td>未复验的 Structured Output 流进下游</td><td>本地两层校验（语法 + Schema）</td></tr>
+  <tr><td>流式首块后失败不调备用模型</td><td>重复文本、双倍计费、无法对账</td><td>首块为界</td></tr>
+  <tr><td>取消后只有一个 cancelled 终态、用量只落一次</td><td>用量对不上账</td><td>compare_and_set 唯一终态</td></tr>
+  <tr><td>Trace 不含 API Key、堆栈、完整 Prompt</td><td>密钥扩散、数据治理事故</td><td>不默认落敏感数据</td></tr>
+</table>
+
+<h3>8. 三个误导项为什么诱人</h3>
+<p>覆盖率 90%、类型注解完整、静态检查零告警、README 完整、Docker 能启动--这些都是<strong>代码卫生指标</strong>：它们描述「代码长什么样」「项目好不好上手」，不描述「运行时守不守边界」。90% 覆盖率可以全部由 happy path 提供；类型注解一个不少的代码照样可以无限重试、密钥写进日志。卫生值得要，但卫生不是证明力--这正是把正确选项和其他三个区分开的唯一标尺。</p>
+
+<hr>
+
+<h2>第三部分：测验（换问法重测）</h2>
+<div id="quiz"></div>
+
+<hr>
+
+<h2>第四部分：回读与延伸</h2>
+<h3>推荐原始材料</h3>
+<p><strong>本周首选（10 分钟）</strong>：<a href="https://opentelemetry.io/docs/concepts/signals/traces/">OpenTelemetry 官方文档 - Traces</a>--trace / span 概念的工业标准出处。读完你会发现课程的四级链正是它在 Agent 栈上的投影：一次 trace 由多段 span 组成，跨服务靠 <code>traceparent</code> 请求头传播（规范见 <a href="https://www.w3.org/TR/trace-context/">W3C Trace Context</a>，笔记 1.7 代码里 <code>request.headers.get("traceparent")</code> 引用的就是它）。</p>
+<p><strong>笔记回读</strong>：1.7 十三章 13.3（Trace 关系树原文）与十四章（六类测试的完整断言清单，比本课表格更全）。</p>
+<p class="sidenote">有任何不清楚的地方，随时回到 agent 提问--比如「修复调用为什么是新 call_id 而不是 attempt」，这正是本课画面里最值得追问的一条边界。</p>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  title: '补课测验 · 四级 ID 链与证明力（7 题）',
+  questions: [
+    {
+      type: 'choice',
+      concept: 'trace_id 的用途',
+      section: '1-7',
+      notesRef: '笔记 1.7 十三、13.3（行 8798 起）',
+      question: '业务方报障，你手里只有一个 trace_id 和全量日志。用它首先能做到的事是？',
+      options: [
+        'grep 出这次任务在所有服务上的完整日志故事线',
+        '定位某次调用失败时实际切换到的真实模型版本',
+        '统计出这个租户本季度累计消耗的 Token 总量',
+        '证明供应商确实把同一次请求完整地执行了两遍'
+      ],
+      answer: 0,
+      explanation: 'trace_id 是贯穿所有服务的那根线：一次 grep 拿到整条故事线，这是它不可替代的用途。真实模型版本要沿着故事线找 resolved_model 字段；租户季度用量要按 tenant_id 聚合；「证明供应商执行两次」任何 ID 都做不到（幂等键只管平台侧不重复建调用记录）。'
+    },
+    {
+      type: 'choice',
+      concept: 'trace 与 run 的分界',
+      section: '1-7',
+      notesRef: '笔记 1.6 行 6075–6088 + 1.7 十三',
+      question: '排查时发现同一个 trace_id 下出现了两个 run_id，最合理的解释是什么？',
+      options: [
+        '上层把一次用户旅程拆成了两个 Agent 任务来执行',
+        '网关对同一次模型调用悄悄做了一次隐藏的重试',
+        '同一个工具调用意外产生了两次重复的副作用',
+        '供应商把一次请求当成两次请求分别进行了计费'
+      ],
+      answer: 0,
+      explanation: 'trace 比 run 大：一次用户旅程可拆成多个任务（查订单 + 退款）、主 Agent 派发子 Agent、并行 Run。重试属于 call_id 内部的 attempts，不产生新 run；工具副作用对应 tool_call_id；供应商计费对应 provider_request_id 层面。在简单系统里 trace 与 run 重合，所以 1.6 阶段的笔记口径才写成「trace_id：一次 Agent Run」。'
+    },
+    {
+      type: 'recall',
+      concept: '四级 ID 链（Q13 原题重测）',
+      section: '1-7',
+      notesRef: '笔记 1.7 十三、13.3',
+      question: '不看前文，凭记忆写出四级追踪链的完整顺序，并说出每级分别回答什么定位问题。再补一句：Gateway 和 Harness 各负责链上的哪一段？',
+      hint: '从「哪次旅程」一直排到「哪次模型调用」。',
+      modelAnswer: '<strong>trace_id -> run_id -> step_id -> call_id / tool_call_id。</strong>trace_id 回答「属于哪次用户旅程」（跨所有服务贯穿，grep 的钥匙）；run_id 回答「是哪个任务」（一次 Agent Run，含多轮模型与工具调用）；step_id 回答「任务走到第几步」（一个 Loop Step）；call_id 回答「这一步的哪次模型调用」（含其多次 attempt）；tool_call_id 标识一次工具调用；provider_request_id 用于向供应商排查。<strong>Gateway 负责 call_id 内部细节（attempts / fallback / 供应商请求号），Harness 负责把 call 放进完整 Run 的因果链。</strong>'
+    },
+    {
+      type: 'choice',
+      concept: 'ID 选用场景',
+      section: '1-7',
+      notesRef: '笔记 1.6 行 6084',
+      question: '要给供应商提工单排查一次 5xx 失败，随工单附上的编号应该用哪个？',
+      options: [
+        'provider_request_id，供应商侧唯一能对上号的编号',
+        'trace_id，供应商靠它检索自己的全部调用日志',
+        'run_id，供应商按任务粒度定位到失败的那次请求',
+        '业务工单号，业务系统用它来关联所有模型调用'
+      ],
+      answer: 0,
+      explanation: '供应商只认识自己发出的 provider_request_id--平台侧的 trace / run / call 都是「我们的家谱」，他们侧没有这些坐标。业务 ID 用于查询领域对象，同样不能拿到供应商那里对号。这就是「各 ID 不能互换」的实操版。'
+    },
+    {
+      type: 'choice',
+      concept: 'call_id 与 attempts',
+      section: '1-7',
+      notesRef: '笔记 1.7 十四、14.2（行 8178 起）',
+      question: '一条 Trace 显示某个 call_id 下 attempts=3。这次模型调用实际向上游发出了几次请求？',
+      options: [
+        '三次，attempts 计的就是真实发出的上游请求数',
+        '一次，attempts 只是预留给观测用的元数据字段',
+        '两次，首次失败的那一次不计入 attempts 统计',
+        '不确定，attempts 与真实请求数没有必然对应关系'
+      ],
+      answer: 0,
+      explanation: '这正是「max_retries=0 关闭 SDK 隐式重试」的原因：只有自己数、自己退避，attempts 才严格等于真实上游请求数，成本对账才可信。若 SDK 在底层悄悄重试，你会看到 attempts=1 而上游实际执行了三次。'
+    },
+    {
+      type: 'choice',
+      concept: '卫生指标 vs 证明力',
+      section: '1-7',
+      notesRef: '笔记 1.7 十四（行 8400 起）',
+      question: '「覆盖率 90%＋类型注解完整＋静态检查零告警」的测试套件，为什么仍然没有证明力？',
+      options: [
+        '它们度量代码卫生，不度量运行时失败边界是否守住',
+        '覆盖率统计存在延迟，测试窗口切换时会漏统计',
+        '类型注解运行时失效，静态检查又只覆盖入口层',
+        '90% 未达到行业共识的证明力门槛即 95% 覆盖率'
+      ],
+      answer: 0,
+      explanation: '覆盖率、类型、静态检查描述「代码长什么样」；证明力问的是「运行时守不守边界」。90% 覆盖率可以全部由 happy path 提供--非法输入不重试、密钥不落日志、取消只落一次账，这些一个覆盖率数字都证明不了。这是 Q19 区分正确项与三个干扰项的唯一标尺。'
+    },
+    {
+      type: 'choice',
+      concept: '负向断言的读法',
+      section: '1-7',
+      notesRef: '笔记 1.7 十四',
+      question: '审查 AI 生成的 Gateway 实现时，「未知模型名时 Provider 调用次数为零」这条断言证明了什么？',
+      options: [
+        '非法输入在模型请求之前就被入口处拒绝了',
+        '未知模型会自动触发有限次数的退避重试机制',
+        '供应商对未知模型名返回了稳定的错误码映射',
+        '路由器把未知模型请求转移到了备用模型执行'
+      ],
+      answer: 0,
+      explanation: '「次数为零」是负向断言：证明确定性错误没有烧掉任何一次真实调用。若入口不拒绝，同一个未知模型请求会被 Gateway 重试四次、每次都失败--浪费钱且毫无意义。读法模板：每条负向断言都对应一件「不允许发生的坏事」，断言就是它的收据。'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>
