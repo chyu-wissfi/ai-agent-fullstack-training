@@ -1,6 +1,8 @@
 ex_ctx/*
 .DS_Store
-docs/
+/docs/
+node_modules/
+dist/
 .env
 .qoder
 CLAUDE.md
