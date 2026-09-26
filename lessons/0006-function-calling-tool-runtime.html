@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week02 主题课 1/4 · Function Calling 与 Tool Runtime：从提出动作到受控执行</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 02 · 主题课 1 / 4 · 覆盖课程小节 2-1 + 2-2</p>
+<h1>Function Calling 与 Tool Runtime：从提出动作到受控执行</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：Week02 首课。延续测验驱动模式：先凭记忆做检索式测验暴露薄弱点，再看精讲补课。第 1 题是 Week01 薄弱点（四级 ID 链）的接续重测——这次落到工具侧的 <code>tool_call_id</code> 上。<br>
+  <strong>笔记定位</strong>：<a href="../course_code/week02/第二章-学习笔记.md">第二章-学习笔记.md</a> 2.1（行 116–389）+ 2.2（行 393–720）<br>
+  <strong>代码定位</strong>：<code>course_code/week02/2-1/</code>（tool_definition / tool_messages / tool_call_id / tool_batch / minimal_tool_loop / tool_runtime）+ <code>2-2/</code>（tool_runtime_demo_v2：Registry / Snapshot / invoke 完整骨架，invoke_many：并行编排）<br>
+  <strong>预计用时</strong>：测验 25 分钟 + 精讲 20 分钟 + 第二层动手练习 30 分钟<br>
+  <strong>本课验收标准</strong>（笔记原文）：能讲清--模型为什么提出动作、为什么要有 Runtime 受控执行；借助 AI 调试时能发现四类错误--模型填写身份或审批、参数未经校验、模型直调 handler、Tool Result 丢失 tool_call_id。重点掌握：ToolDefinition 三类字段；注册、发现与执行的区别；Snapshot 一致性；prepare → execute → finalize；写操作重试与幂等；唯一 <code>invoke()</code>。
+</div>
+
+<h2>怎么用这一课</h2>
+<p><strong>先考后讲</strong>：20 题检索式测验，做完页面底部自动生成诊断报告，按报告决定精讲读哪里、笔记回读哪里。这一课是 Week02 的地基：后面三课（MCP、工具治理、阶段二项目）全部建立在这条「模型提议 → Runtime 受控执行」的边界上。</p>
+<p><strong>这一课在三层学法里的位置</strong>（老师方法论）：整门课按周搭一个可控系统--Week01 让模型稳定输入输出，<strong>Week02（当前）让模型能安全地发现并调用工具、并记录工具执行结果</strong>，Week03 循环/规划/暂停/恢复，Week04 上下文与记忆，Week05 多 Agent / skill / 评估 / trace，Week06 监控/灰度/回滚/多租户。本课三个部分分别落在三层上：<strong>第一层建地图</strong>--精讲第 1、2 节的主线，先不逐个查术语，不熟的概念记下来等代码部分再补；<strong>第二层跑代码</strong>--第三部分的动手清单：跑 2-1/2-2 代码观察输入/中间/输出/出错，再主动改造（传错误参数、让工具超时、超过最大轮数），用 AI 扫读和写改造代码都行；<strong>第三层工程师级</strong>--测验后半 + 精讲 5、7、9 节集中回答「哪些事给模型决定、哪些给程序控制」，这是面试最重要的基础，也是后续章节的地基。</p>
+<p class="sidenote">就业面试视角：Function Calling 和 Tool Use 是 Agent 岗面试的必问题，而且面试官几乎一定沿着追问链往下挖——「Tool Call 之后发生了什么？」「为什么不让模型直接调函数？」「超时了能不能重试？」。这一课的每个知识点都对应一条真实追问链；结课时你应该能不看稿 2 分钟讲完这条主链。</p>
+
+<h2>第一部分：检索式测验</h2>
+<div id="quiz"></div>
+
+<hr>
+
+<h2>第二部分：精讲（测验后再读）</h2>
+
+<h3>1. 一条主链：Tool Call 是「建议」，不是「执行」</h3>
+<p>2-1 的定义句：<strong>Function Calling 让模型用结构化方式提出动作，但不会赋予模型真实执行权限。</strong>模型返回的 <code>{"id": "call_01", "name": "get_order", "arguments": {...}}</code> 表达的是「我建议调用 get_order」，它不是 Python 函数调用、不能证明用户有权限、更不表示订单已经被查到。完整闭环六步：</p>
+<pre>① 用户消息 + 本轮可见工具 Schema 交给模型
+② 模型直接回答，或生成一个/多个 Tool Call
+③ Runtime 查找工具，校验参数、权限、风险
+④ 通过检查后，handler 才访问数据库 / HTTP API / 文件系统
+⑤ Runtime 把成功或失败包装成 Tool Result
+⑥ Agent Loop 把结果写回 Context，模型继续决策或结束</pre>
+<p>最重要的可信边界只有一句话：<strong>Tool Call 和用户输入一样，都是不可信数据。</strong>模型可以帮我们理解意图，但不能给自己授权，也不能宣布某次操作已获批准。这条边界是后面 2-4 整节工具治理的种子。</p>
+
+<h3>2. 三对象分工 + 六名词表（本课第一张必背表）</h3>
+<table>
+  <tr><th>概念</th><th>准确含义</th><th>不负责什么</th></tr>
+  <tr><td>Tool</td><td>交给模型选择的一项受管理能力</td><td>不等于某次调用</td></tr>
+  <tr><td>Tool Call</td><td>模型生成的工具名、参数和调用 ID</td><td>不表示函数已经执行</td></tr>
+  <tr><td>handler</td><td>真正访问数据库/外部系统的业务函数</td><td>不负责模型选择、权限和完整 Loop</td></tr>
+</table>
+<table>
+  <tr><th>对象（2-2）</th><th>负责什么</th><th>不负责什么</th></tr>
+  <tr><td>ToolDefinition</td><td>契约、治理规则和真实实现</td><td>不决定本轮一定开放</td></tr>
+  <tr><td>Tool Registry</td><td>管理有哪些工具和版本</td><td>不执行 Tool Call</td></tr>
+  <tr><td>工具发现</td><td>按 Agent/用户/模式/策略筛选候选</td><td>不等于模型选择工具</td></tr>
+  <tr><td>ToolSnapshot</td><td>冻结某一轮实际开放的协议与实现</td><td>不是普通缓存</td></tr>
+  <tr><td>Tool Runtime</td><td>查找、校验、拦截、执行、收口结果</td><td>不负责模型下一轮推理</td></tr>
+  <tr><td>handler</td><td>执行确定的业务动作</td><td>不应承担完整治理与 Loop</td></tr>
+</table>
+<p>为什么拆成这么多对象？笔记给的 why：<strong>它们面对的变化不同</strong>——工具版本可能升级（Registry）、本轮开放范围可能变化（发现）、执行期权限和依赖状态也可能变化（Snapshot/Runtime）。揉在一个函数里，任何变化都会同时影响提示词、权限和真实执行。代码里就是三张脸：<code>2-1/tool_definition.py</code> 的 <code>to_model_tool()</code> 只投影名称/描述/输入 Schema（安全投影：模型看得到怎样申请，看不到 handler、权限集合、审批记录、密钥、重试策略）；<code>2-2/tool_runtime_demo_v2.py</code> 把它拆成 ToolSchema / ToolDefinition / ToolSnapshot 三层。</p>
+
+<h3>3. 契约三件套：Input、Output、Error Schema</h3>
+<ul>
+  <li><strong>Input Schema</strong>：把模型生成的非可信参数转换成 handler 可安全接收的业务对象。<code>extra="forbid"</code> 是关键——模型传 <code>{"order_id": "ord_1001", "approved": true, "role": "admin"}</code> 时，静默忽略额外字段会让调用「看起来成功」，但审查者无法证明模型没有试图越过边界；严格拒绝把协议漂移、提示注入和错误假设尽早暴露出来。</li>
+  <li><strong>两层检查缺一不可</strong>：结构校验只回答「参数能否被解析」，不回答「业务上能否执行」。金额在允许范围内不代表订单属于当前租户；订单号格式正确不代表状态允许退款。所以 Pydantic 查字段/类型/格式/额外参数在前，Business Precheck 查归属/状态/额度在后，且都在 handler 之前。</li>
+  <li><strong>Output Schema</strong>：限制 handler 返回形状，不让 ORM 对象、内部字段和不稳定字典直接进入模型。</li>
+  <li><strong>Error Schema</strong>：把失败变成 Loop 能处理的协议（<code>{"ok": false, "code": "ORDER_NOT_FOUND", "retryable": false}</code>）。稳定错误码让 Loop 可以决定改参数、询问用户、换工具、等待审批或停止，而不必解析异常字符串。</li>
+</ul>
+<p>工具粒度的配套纪律：不要把订单系统做成万能工具 <code>order_api(method, path, payload)</code>——这相当于把底层 API 的表达能力全部交给模型。拆成任务级工具 <code>get_order(order_id)</code> / <code>create_refund(...)</code>：<strong>工具越窄，参数空间越小，权限、审批、测试和审计越容易落在明确的位置。</strong></p>
+
+<h3>4. tool_call_id 与 ID 纪律（接 Week01 四级链）</h3>
+<p>Week01 你建立过四级链 <code>trace_id → run_id → step_id → call_id / tool_call_id</code>。这一课落到最后一级：<strong>tool_call_id 是一条模型 Tool Call 与其执行过程、Tool Result 之间的关联键</strong>，全生命周期都要带上——一个是并发的需要（两个同名 get_order 调用可能乱序完成，Runtime 不能靠工具名或数组位置判断结果属于谁，见 <code>2-1/tool_call_id.py</code> 和 <code>tool_batch.py</code> 的 as_completed + 断言），一个是 trace 的需要（开始、进度、重试、结束事件都用同一个 ID）。可靠实现四保证：每个 Tool Call 只产生一份权威结果；成功、拒绝、超时、内部异常都保留原始 ID；并行结果可乱序完成但不能错配；全程事件同一 ID。</p>
+<p>常见误区（也是面试陷阱）：<strong>tool_call_id 不能替代业务幂等键</strong>。模型重新规划后可能生成新调用 ID，却仍请求执行同一笔退款。副作用防重需要业务对象 + 动作 + 参数摘要或下游幂等机制。</p>
+
+<h3>5. Runtime 为什么必须独立存在：把确定性判断放在副作用之前</h3>
+<p>如果 Loop 里直接写 <code>if call.name == "get_order": result = await get_order(**call.arguments)</code>，问题不是不优雅，而是它没有回答：这个工具是否属于本轮开放范围？Schema 与 handler 是否同一版本？参数和业务状态是否合法？用户与租户是否有权限？工具是否被临时停用？超时后能否重试？失败怎样归一化、结果怎样审计？</p>
+<p>Runtime 的价值就是<strong>把这些确定性判断放在副作用之前</strong>，并让 CLI、测试、模型调用、MCP 和未来的 HTTP 入口都走同一个 handler（框架常把执行动作称作 <code>invoke()</code>）。<code>2-2/tool_runtime_demo_v2.py</code> 是完整骨架：Registry 按 <code>(name, version)</code> 注册 → 按路由和启停生成 Snapshot → Runtime 在 invoke 里依次查工具、查启停、校验参数、查权限、查审批、查依赖，全过才碰 handler。</p>
+
+<h3>6. Snapshot：版本一致与紧急停用是一对张力</h3>
+<p>为什么发现结果要冻结成 Snapshot？因为<strong>模型生成 Tool Call 和 Runtime 执行之间存在时间差</strong>：模型看到 v1 Schema，执行时却从全局 Registry 取到 v2 handler，就发生版本漂移。顺序固定为：版本路由与灰度选择 → 工具发现与启停过滤 → 创建不可变 Snapshot → 模型和 Runtime 本轮共同使用。旧会话继续用旧快照直到自然结束。</p>
+<p>但 Snapshot 保证的是版本一致，<strong>不应该冻结紧急停用状态</strong>——生产系统必须能阻止旧快照中尚未执行的危险工具。所以启停和依赖要查两次：发现时检查（避免模型围绕不可用工具制定计划）+ 执行前复查（防止工具在模型思考期间被紧急停用或依赖失效）。demo_v2 里这两道检查分别落在 <code>snapshot()</code> 和 <code>invoke()</code> 开头的 <code>TOOL_DISABLED</code>/<code>DEPENDENCY_UNAVAILABLE</code> 分支。</p>
+
+<h3>7. prepare → execute → finalize：顺序本身就是契约（第二张必背表）</h3>
+<pre>prepare   查工具 → 校验参数 → 注入可信上下文 → 权限/风险/审批/依赖检查
+execute   在 deadline、取消、并发、重试和幂等策略下调用 handler
+finalize  校验输出 → 结果投影 → 脱敏 → 审计 → 包装 Tool Result</pre>
+<p>顺序不能交换的三个反例（面试可直接引用）：权限判断放在 handler 之后——退款已经发生，权限过滤失去意义；脱敏放在消息回写之后——敏感数据已经进入模型上下文；execute 再读全局 Registry——快照就失去固定版本的意义。prepare 阶段还有一条铁律：模型参数中不应包含 <code>user_id</code>、<code>tenant_id</code>、<code>role</code>、<code>approved</code>、<code>risk</code>，这些必须来自服务端可信上下文（ExecutionContext）或 ToolDefinition。</p>
+<p>execute 阶段的超时语义是本课最容易答错的点：<strong>超时只表示调用方没在期限内得到结果，不代表业务动作一定失败。</strong>只读查询遇连接抖动可有限重试；非幂等写操作超时后状态未知，返回 <code>TIMEOUT_UNKNOWN</code>，不能盲目重试；写操作只有在下游支持幂等键、去重表或业务唯一约束时才适合自动重试。重试纪律与 Week01 的 Gateway 完全同构：<strong>一次失败只能有一个明确的重试 owner</strong>——Provider SDK、Gateway、Agent Loop、MCP Client、Tool Runtime 各重试三次会指数相乘。</p>
+<p>finalize 的边界也记一条：after Hook 可以参与结果治理，但<strong>不能假装撤销已经发生的业务动作</strong>——撤销必须实现补偿接口、状态查询或人工接管。</p>
+
+<h3>8. 并行编排与插件化：效率不能换掉入口</h3>
+<p>多个 Tool Call 不能无脑 <code>gather()</code>，先判断三种关系：互相独立（有限并行，查两笔不同订单）、数据依赖（显式串行，先查状态再退款）、争用同一资源（按资源键排队，同一订单两次退款）。见 <code>2-2/invoke_many.py</code>：任一 sequential 工具就把整批降级为串行。即使工具标记 parallel，Runtime 仍要自主限制全局、工具、租户三级并发。插件化同理：插件负责注册与清理（谁注册谁负责卸载时清理），<strong>不能另起一套 Loop、不能绕过 invoke() 直调 handler</strong>——效率手段永远不能制造第二个执行入口。</p>
+
+<h3>9. 面试视角：这一课怎么被问</h3>
+<ul>
+  <li><strong>开放题</strong>：「讲一次完整的 Tool 调用流程」——就按第 1 节六步闭环讲，重点强调 Tool Call 是建议、不可信数据。</li>
+  <li><strong>追问链 1</strong>：「为什么不让模型直接调函数？」→ 权限/校验/审计都在模型侧失控 → 引出 Runtime 把确定性判断放在副作用之前。</li>
+  <li><strong>追问链 2</strong>：「工具超时了怎么办？」→ 先分读/写和幂等性 → 非幂等写返回 TIMEOUT_UNKNOWN、先查状态或人工处理 → 引出唯一重试 owner。</li>
+  <li><strong>追问链 3</strong>：「两个同名并发调用怎么对上结果？」→ tool_call_id 全生命周期保留 + 乱序不错配；顺势主动指出它不能当业务幂等键——能说出这一条通常就是「有没有真做过」的分水岭。</li>
+  <li><strong>追问链 4</strong>：「为什么要 Snapshot？」→ 模型所见与执行之间有时间差，防版本漂移；主动补上「但紧急停用不能被冻结」体现深度。</li>
+  <li><strong>反向题（审查岗）</strong>：「给你一段 AI 写的工具调用代码，你查什么？」→ 四类错误：模型填写身份或审批、参数未经校验、模型直调 handler、Tool Result 丢失 tool_call_id。</li>
+</ul>
+
+<hr>
+
+<h2>第三部分：第二层练习——跑起来，再主动改造（测验与精讲之后）</h2>
+<p>听懂概念只是第一层。第二层的目标是把概念变成<strong>可观察的运行结果</strong>：先跑起来，观察四个点--输入是什么、中间做了什么、输出是什么、出错时发生什么动作。然后主动制造故障，看系统的处理机制是否真如笔记所说。改造代码可以让 AI 帮你写，但<strong>「你应该观察到什么」这一列必须在动手前自己写出来</strong>--写不出预期，说明还停在第一层；预期写对、运行验证，就是在练第三层「用测试日志证明机制生效」的验收方式。</p>
+<table>
+  <tr><th>实验</th><th>怎么做</th><th>预期观察（先写再跑）</th></tr>
+  <tr>
+    <td>① 跑通主线<br>（观察四点）</td>
+    <td>设 <code>DEEPSEEK_API_KEY</code> 跑 <code>2-1/minimal_tool_loop.py</code>；无 key 时先离线跑 <code>2-2</code> 的 <code>pytest</code>（test_tool_runtime_demo_v2.py，不依赖模型 API）。可以让 AI 先扫读代码讲一遍数据流。</td>
+    <td>每轮先打印「当前可见工具」（安全投影）；Assistant 消息先写回 messages、再追加 Tool Result；trace 事件带 tool_call_id / status / attempt / latency；模型不返回 Tool Call 时 Loop 自然结束。</td>
+  </tr>
+  <tr>
+    <td>② 传错误参数</td>
+    <td>把订单号改成 <code>"1001"</code>（不匹配 <code>^ord_[0-9]{4,12}$</code>），或直接构造一条参数非法的 ToolCall 调 <code>runtime.execute/invoke</code>。</td>
+    <td><code>INVALID_ARGUMENT</code>：Pydantic 层拒绝，handler 一次都没被调用（零副作用），trace 里 status=error、error_code=INVALID_ARGUMENT，且 tool_call_id 原样保留。</td>
+  </tr>
+  <tr>
+    <td>③ 让工具超时</td>
+    <td>在 handler 里注入 sleep 超过 timeout_seconds；再分别把工具的 <code>idempotent</code> 设为 True / False 各跑一次。</td>
+    <td>idempotent=True → TIMEOUT 且 retryable，退避后出现第二次 attempt；idempotent=False → <code>can_retry</code> 门控为 False，单次尝试即返回、绝不重试（对照 <code>2-1/tool_runtime.py</code> 的 <code>can_retry = error.retryable and tool.idempotent</code>）。</td>
+  </tr>
+  <tr>
+    <td>④ 超过最大轮数</td>
+    <td>把 <code>MAX_STEPS</code> 改成 1，或让模型反复提议工具调用。</td>
+    <td><code>RuntimeError("agent exceeded maximum steps")</code> 由 Loop 抛出--终止条件属于 Harness，模型没有权力也没有能力自己决定无限运行。</td>
+  </tr>
+  <tr>
+    <td>⑤ 伪造身份/审批</td>
+    <td>在工具参数里塞 <code>{"user_id": "admin", "approved": true}</code> 再调用。</td>
+    <td><code>extra="forbid"</code> 在校验层直接拒绝（INVALID_ARGUMENT）--验收四类错误的第一类（模型填写身份或审批）当场复现：模型永远无法通过参数给自己授权。</td>
+  </tr>
+</table>
+<p>这五个实验把本课验收「四类错误」里的三类亲手制造了一遍（参数未经校验、超轮数、伪造身份），第 ③ 个实验同时验证了超时语义和幂等门控。做完后问自己老师的第三层问题：哪些事给模型决定、哪些给程序控制？哪次错误能重试、哪次必须先查现场？--这一课的答案全部在精讲第 5、7 节。</p>
+
+<hr>
+
+<h2>回读与验证指引</h2>
+<p>按诊断报告的薄弱点，对照回读（不需要重读整份笔记）：</p>
+<ul>
+  <li>Function Calling 本质 / 六步闭环 / 不可信边界 -&gt; 笔记 2.1 一、（行 118–166）；代码 <code>2-1/minimal_tool_loop.py</code>（循环只抓四点：快照工具、Assistant 先写回、不分派 handler、MAX_STEPS 属 Harness）。</li>
+  <li>Tool / Tool Call / handler / 安全投影 / 工具粒度 -&gt; 笔记 2.1 二、（行 168–225）；代码 <code>2-1/tool_definition.py</code> 的 <code>to_model_tool()</code>。</li>
+  <li>Input / Output / Error Schema / 两层检查 / extra="forbid" -&gt; 笔记 2.1 三、（行 227–276）；代码 <code>2-2/tool_runtime_demo_v2.py</code> 开头三组 StrictModel。</li>
+  <li>tool_call_id / ID 纪律 / 幂等键误区 -&gt; 笔记 2.1 四、（行 278–317）；代码 <code>2-1/tool_call_id.py</code>（call_B 先回）+ <code>tool_batch.py</code>（as_completed 断言）。</li>
+  <li>Runtime 存在意义 / 六名词表 / ToolDefinition 三类字段 -&gt; 笔记 2.2 一、二、三、（行 395–523）；代码 <code>2-2/tool_runtime_demo_v2.py</code> 的 Registry / ToolDefinition。</li>
+  <li>发现 + 快照 / 版本漂移 / 两次检查 -&gt; 笔记 2.2 四、（行 525–576）；代码 <code>tool_runtime_demo_v2.py</code> 的 <code>snapshot()</code> 与 <code>invoke()</code> 开头分支。</li>
+  <li>prepare / execute / finalize / 超时语义 / 重试 owner -&gt; 笔记 2.2 五、（行 578–668）；代码 <code>2-1/tool_runtime.py</code>（重试与幂等门控 <code>can_retry = error.retryable and tool.idempotent</code>）。</li>
+  <li>并行三关系 / 插件化边界 -&gt; 笔记 2.2 六、七、（行 670–697）；代码 <code>2-2/invoke_many.py</code>、<code>2-1/plugins.py</code>。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<p>本课最可信的原始材料是课程自身的笔记与代码：先读 <a href="../course_code/week02/第二章-学习笔记.md">第二章-学习笔记.md</a> 2.1「本节重点与验收」（行 379–389）和 2.2「本节重点回顾」（行 708–712）对照自评；再沿一次调用读 <code>2-2/tool_runtime_demo_v2.py</code>：ToolDefinition → Registry.snapshot() → Runtime.invoke() → ToolResultMessage，这条文件内闭环就是本课全部主链的实物版。外部文档作字段核对用：<a href="https://platform.openai.com/docs/guides/function-calling">OpenAI Function Calling 指南</a>（Tool Call 字段与 tool role 消息格式；课程用 DeepSeek 的 OpenAI 兼容协议，字段差异由 Gateway/Adapter 吸收，笔记明确「了解即可」）。面试拓展可对照 <a href="https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/overview">Anthropic Tool Use 文档</a>看另一家供应商对同一问题的表述。</p>
+
+<div class="ask-reminder">
+<strong>卡住了就问你的 agent。</strong>精讲里任何一处让你觉得「等等，为什么」——比如为什么 Snapshot 不冻结紧急停用、为什么超时不能当失败处理——直接回到对话里问。这一课全部内容都在回答同一个问题：<strong>模型输出的候选动作，凭什么敢让它碰到真实世界。</strong>
+</div>
+
+<div class="lesson-footer">
+  Week02 主题课序列：<strong>1/4 Function Calling 与 Tool Runtime</strong>（本课，2-1 + 2-2）· 2/4 MCP 外部能力接入（2-3）· 3/4 工具治理与安全边界（2-4）· 4/4 阶段二项目（2-5，结课课）<br>
+  Week01 回顾：<a href="./0001-llm-to-agent-loop.html">从 LLM 到 Agent</a> · <a href="./0002-streaming-structured-output.html">Streaming 与 Structured Output</a> · <a href="./0003-prompt-engineering.html">Prompt Engineering</a> · <a href="./0004-llm-gateway.html">LLM Gateway</a> · <a href="./0005-trace-id-picture-and-provable-tests.html">补课：trace_id 画面</a><br>
+  结课条件：① 测验隔 1–2 天重做一次（间隔重复），正确率稳定在 85% 以上；② 完成第三部分至少 3 个改造实验，且预期一列全部先写后验；③ 不看稿 2 分钟讲清六步闭环 + prepare/execute/finalize 三阶段。三者都过，再向你的 agent 要主题课 2/4（MCP）。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  title: '第一部分：检索式测验（20 题，先凭记忆作答）',
+  questions: [
+    {
+      type: 'recall',
+      concept: '【复习】tool_call_id 与 ID 纪律',
+      section: '2-1（Week01 四级链接续）',
+      notesRef: '笔记 2.1 四、（行 278–317）',
+      codeRef: 'course_code/week02/2-1/tool_call_id.py、tool_batch.py',
+      question: 'tool_call_id、trace_id/run_id、业务 ID 各标识什么？为什么 tool_call_id 不能替代业务幂等键？',
+      hint: 'Week01 的四级链是 trace → run → step → call；这道题落到最后一级，并追问它的边界。',
+      modelAnswer: '<strong>tool_call_id</strong> 标识模型某一轮提出的一次具体工具调用；<strong>trace_id/run_id</strong> 标识一次完整 Agent 任务；<strong>order_id 等业务 ID</strong> 标识真实业务对象。<br>全生命周期保留它的两个理由：并发需要（两个同名调用可能乱序完成，Runtime 不能靠工具名或数组位置匹配结果）和 trace 需要（开始、进度、重试、结束事件共用同一 ID）。<br>不能当幂等键的原因：<strong>模型重新规划后可能生成新的调用 ID，却仍请求执行同一笔退款</strong>。副作用防重需要业务对象 + 动作 + 参数摘要或下游幂等机制共同完成。'
+    },
+    {
+      type: 'choice',
+      concept: 'Function Calling 的本质',
+      section: '2-1',
+      notesRef: '笔记 2.1 一、（行 118–166）',
+      question: '关于 Function Calling 到底解决了什么问题，正确的理解是？',
+      options: [
+        '让模型用结构化方式提出动作建议，但不赋予执行权限',
+        '让模型获得直接调用数据库和企业 API 的执行权限',
+        '把模型输出的文本自动转换成 Python 函数调用并执行',
+        '让模型证明当前用户具有调用该工具的业务权限'
+      ],
+      answer: 0,
+      explanation: '模型返回的 Tool Call 表达的是「我建议调用 get_order，参数是 ord_1001」——它不是函数调用、不能证明用户有权限、更不表示订单已被查到。核心可信边界：Tool Call 和用户输入一样，都是不可信数据。'
+    },
+    {
+      type: 'choice',
+      concept: 'Tool / Tool Call / handler 分工',
+      section: '2-1',
+      notesRef: '笔记 2.1 二、（行 168–177）',
+      question: '关于 Tool、Tool Call 和 handler 三个概念的分工，正确的是？',
+      options: [
+        'Tool 是受管理能力；Tool Call 是候选动作；handler 执行副作用',
+        'Tool 是一次调用记录；Tool Call 是注册表对象；handler 负责选工具',
+        'Tool 是 Schema 文件；Tool Call 是权限集合；handler 负责审计',
+        'Tool 是模型侧对象；Tool Call 是服务端凭证；handler 负责重试'
+      ],
+      answer: 0,
+      explanation: '很多人 codex 玩得溜，一旦要把业务拆成带验证的工具就遗留权限或审计不完整——因为三个概念混了。handler 只负责执行确定的业务动作，不负责模型选择、权限和完整 Loop。'
+    },
+    {
+      type: 'recall',
+      concept: 'to_model_tool 的安全投影',
+      section: '2-1',
+      notesRef: '笔记 2.1 二、（行 180–192）',
+      codeRef: 'course_code/week02/2-1/tool_definition.py',
+      question: '模型应该看到的 Tool 包含哪三部分？to_model_tool 除了格式转换，更重要的作用是什么——模型能看到什么、看不到什么？',
+      hint: '对比 ToolDefinition 的完整字段和投影后的字典。',
+      modelAnswer: '模型只看到三部分：<strong>名称、描述、输入 Schema</strong>。<br>to_model_tool 的本质是一次<strong>安全投影（snapshot）</strong>：模型可以看到怎样申请调用，却看不到 handler、数据库连接、权限集合、审批记录、密钥、重试策略和内部依赖。<br>对比代码：ToolDefinition 有 output_model、permission、risk、timeout、idempotent、handler 等治理字段，to_model_tool() 只返回 function 的 name/description/parameters。'
+    },
+    {
+      type: 'choice',
+      concept: '工具粒度：万能工具的危害',
+      section: '2-1',
+      notesRef: '笔记 2.1 二、（行 210–225）',
+      question: '为什么不把订单系统做成 order_api(method, path, payload) 一个万能工具？',
+      options: [
+        '底层 API 表达能力全部交给模型，权限审计无法落位',
+        '参数数量太少，模型难以理解每个字段的具体业务含义',
+        '名称过于通用，模型在多工具场景下无法正确选中它',
+        '返回结果缺少包装，ORM 对象会直接进入模型上下文'
+      ],
+      answer: 0,
+      explanation: '万能工具相当于把底层 API 的表达能力全部交给模型，会被利用干坏事。拆成任务级工具 get_order(order_id)、create_refund(order_id, amount, reason)：工具越窄，参数空间越小，权限、审批、测试和审计越容易落在明确的位置。'
+    },
+    {
+      type: 'choice',
+      concept: 'extra="forbid" 的意义',
+      section: '2-1',
+      notesRef: '笔记 2.1 三、（行 241–253）',
+      question: 'Input Schema 使用 extra="forbid" 严格拒绝额外字段，最重要的理由是？',
+      options: [
+        '静默忽略时无法证明模型没有试图越过边界',
+        '额外字段会让 JSON 序列化抛出不可恢复的编码错误',
+        '供应商接口会拒绝包含额外字段的全部合法请求',
+        '额外字段会导致 Pydantic 模型之间发生命名冲突'
+      ],
+      answer: 0,
+      explanation: '模型传入 {"order_id": "ord_1001", "approved": true, "role": "admin"} 时，如果系统静默忽略额外字段，调用看起来仍然成功，但审查者无法证明模型没有试图越界。严格拒绝把协议漂移、提示注入和错误假设尽早暴露出来。'
+    },
+    {
+      type: 'choice',
+      concept: '结构校验与业务预检查',
+      section: '2-1',
+      notesRef: '笔记 2.1 三、（行 255–263）',
+      question: '参数的两层检查分别负责什么？为什么缺一不可？',
+      options: [
+        'Pydantic 查字段类型格式；Precheck 查归属状态额度',
+        'Pydantic 查业务归属；Precheck 查字段类型和格式',
+        'Pydantic 查权限集合；Precheck 查 JSON 语法合法性',
+        'Pydantic 查输出协议；Precheck 查输入字段的长度'
+      ],
+      answer: 0,
+      explanation: '结构校验只回答「参数能否被解析」，不回答「业务上能否执行」：金额在允许范围内不代表订单属于当前租户；订单号格式正确不代表状态允许退款。两层都必须位于 handler 之前。'
+    },
+    {
+      type: 'choice',
+      concept: 'Error Schema 的用途',
+      section: '2-1',
+      notesRef: '笔记 2.1 三、（行 265–276）',
+      question: '把失败包装成稳定错误码协议（Error Schema）而不是自然语言异常，主要收益是？',
+      options: [
+        'Loop 据此决定改参、追问、换工具或停止',
+        '用户界面可以把异常堆栈完整地展示给最终客户',
+        'Provider 在传输层自动重试失败的临时性错误',
+        'handler 免于实现任何输入参数校验的业务逻辑'
+      ],
+      answer: 0,
+      explanation: '稳定错误码（如 {"ok": false, "code": "ORDER_NOT_FOUND", "retryable": false}）让 Agent Loop 可以确定性地决定修改参数、询问用户、换工具、等待审批或停止，而不必推测或解析异常字符串。这也是后续 Loop 功能的决策输入。'
+    },
+    {
+      type: 'choice',
+      concept: '并发调用与结果匹配',
+      section: '2-1',
+      notesRef: '笔记 2.1 四、（行 294–315）',
+      codeRef: 'course_code/week02/2-1/tool_call_id.py、tool_batch.py',
+      question: '用户一次查询两笔订单，模型生成两个同名 get_order 调用并行执行，后生成的先完成。Runtime 应该怎样匹配结果？',
+      options: [
+        '保留原始 tool_call_id，不依赖工具名或数组位置',
+        '按工具名匹配，同名调用共享同一份聚合后的结果',
+        '按数组位置匹配，先完成的结果对应先生成的调用',
+        '按参数内容匹配，相同订单号的调用结果自动合并'
+      ],
+      answer: 0,
+      explanation: '只读同名调用可以并行，且基于调用链长短差异可能后生成先完成。tool_batch.py 用 as_completed 接收乱序结果，但每份结果断言 tool_call_id 与原调用一致——乱序完成可以，错配不可以。'
+    },
+    {
+      type: 'choice',
+      concept: '最小 Tool Loop 的纪律',
+      section: '2-1',
+      notesRef: '笔记 2.1 五、（行 319–364）',
+      codeRef: 'course_code/week02/2-1/minimal_tool_loop.py',
+      question: '读最小 Tool Loop 代码，以下实现纪律正确的是？',
+      options: [
+        'Assistant 消息先写回；MAX_STEPS 由 Harness 强制执行',
+        'Tool Result 先写回，Assistant 消息在任务结束后补写',
+        'MAX_STEPS 由模型根据任务复杂度自行判断和调整',
+        'Loop 用 if tool_name == 直接分派 handler 提升效率'
+      ],
+      answer: 0,
+      explanation: '四个要点：模型看到的是本轮快照中的 Tool Schema；Assistant Message 要先写回再追加对应 Tool Result；Loop 不用 if tool_name == 直接分派业务函数；MAX_STEPS 由 Harness 强制执行，模型不能自己决定无限运行。'
+    },
+    {
+      type: 'choice',
+      concept: 'Runtime 独立存在的价值',
+      section: '2-2',
+      notesRef: '笔记 2.2 一、（行 395–426）',
+      question: '相比在 Loop 里 if/elif 直接调业务函数，Tool Runtime 的核心价值是？',
+      options: [
+        '把确定性判断放在副作用之前，所有入口走同一 handler',
+        '把模型推理逻辑集中起来，替代 Agent Loop 的决策职责',
+        '把权限判断放在 handler 之后，便于执行后统一回收证据',
+        '把工具注册和发现合并成一个步骤，减少调用链路延迟'
+      ],
+      answer: 0,
+      explanation: 'if/elif 没有回答：工具是否属于本轮开放范围、Schema 与 handler 是否同版本、参数和业务状态是否合法、用户与租户是否有权限、工具是否被停用、超时后能否重试、失败怎样归一化。Runtime 把这些确定性判断放在副作用之前，并让 CLI、测试、模型调用、MCP 和未来 HTTP 入口都走同一个 handler（invoke）。'
+    },
+    {
+      type: 'recall',
+      concept: '六名词职责表',
+      section: '2-2',
+      notesRef: '笔记 2.2 二、（行 428–461）',
+      question: 'ToolDefinition、Registry、工具发现、Snapshot、Runtime、handler 各负责什么、不负责什么？为什么要把对象拆开？',
+      hint: '每个对象一条「负责」+ 一条「不负责」；拆开的理由与「变化」有关。',
+      modelAnswer: '① <strong>ToolDefinition</strong>：描述工具契约、治理规则和真实实现--不决定本轮一定开放；<br>② <strong>Registry</strong>：管理系统中有哪些工具和版本--不执行 Tool Call；<br>③ <strong>工具发现</strong>：按 Agent、用户、模式和策略筛选候选工具--不等于模型选择工具；<br>④ <strong>Snapshot</strong>：冻结某一轮实际开放的协议与实现--不是普通缓存；<br>⑤ <strong>Runtime</strong>：查找、校验、拦截、执行、收口结果--不负责模型下一轮推理；<br>⑥ <strong>handler</strong>：执行确定的业务动作--不应承担完整治理与 Loop。<br>拆开的 why：<strong>它们面对的变化不同</strong>--工具版本可能升级、本轮开放范围可能变化、执行期权限和依赖状态也可能变化；揉在一个函数里，任何变化都会同时影响提示词、权限和真实执行。'
+    },
+    {
+      type: 'choice',
+      concept: 'ToolDefinition 三类信息',
+      section: '2-2',
+      notesRef: '笔记 2.2 三、（行 463–523）',
+      question: 'ToolDefinition 为什么不能只保存 handler？它的三组信息分别回答什么问题？',
+      options: [
+        '调用契约、治理字段、handler 分别回答申请、安全和执行',
+        '名称、版本、描述分别回答路由、灰度和服务发现的配置',
+        '输入模型、输出模型、错误码分别面向三家供应商的协议',
+        '权限、风险、超时分别由模型、用户和运维三方来填写'
+      ],
+      answer: 0,
+      explanation: '调用契约回答「怎样申请和返回」（name/version/description/input_model/output_model/error_codes）；治理字段回答「怎样安全运行」（permission/risk/timeout/retry/dependencies/execution_mode）；handler 才回答「业务动作怎样完成」。字段可按项目裁剪，但这三类职责一般都不能丢。'
+    },
+    {
+      type: 'choice',
+      concept: 'Snapshot 与版本漂移',
+      section: '2-2',
+      notesRef: '笔记 2.2 四、（行 525–568）',
+      question: '工具发现的结果为什么必须冻结成不可变 Snapshot？',
+      options: [
+        '模型看到 v1 而执行取到 v2 会版本漂移，快照冻结本轮',
+        '快照可以缓存模型输出，减少重复调用的 Token 消耗',
+        '快照把权限集合复制给模型，便于模型自行完成鉴权',
+        '快照记录工具的历史调用，用于事后的审计和回放'
+      ],
+      answer: 0,
+      explanation: '模型生成 Tool Call 和 Runtime 执行之间存在时间差（并非原子操作）：模型看到 v1 Schema，执行时 Runtime 却从全局 Registry 取到 v2 handler，就会版本漂移。顺序固定：版本路由与灰度选择 → 发现与启停过滤 → 创建不可变 Snapshot → 本轮共同使用。旧会话继续用旧快照直到自然结束。'
+    },
+    {
+      type: 'choice',
+      concept: 'Snapshot 与紧急停用',
+      section: '2-2',
+      notesRef: '笔记 2.2 四、（行 568–576）',
+      question: '关于 Snapshot 与工具启停/依赖检查的关系，正确的是？',
+      options: [
+        '快照保证版本一致，但不应冻结紧急停用的检查',
+        '快照创建后，本轮内权限和启停状态都不再发生变化',
+        '紧急停用必须销毁全部旧快照并强制结束所有旧会话',
+        '执行前复查只针对依赖，启停状态以发现阶段检查为准'
+      ],
+      answer: 0,
+      explanation: '生产系统必须能够阻止旧 Snapshot 中尚未执行的危险工具。所以版本一致性检查两次：发现时检查（避免模型围绕当前不可用工具制定计划）+ 执行前复查（防止工具在模型思考期间被紧急停用或依赖突然失效）。demo_v2 的 invoke() 里 TOOL_DISABLED / DEPENDENCY_UNAVAILABLE 分支就是执行前复查。'
+    },
+    {
+      type: 'recall',
+      concept: 'prepare / execute / finalize',
+      section: '2-2',
+      notesRef: '笔记 2.2 五、（行 578–668）',
+      codeRef: 'course_code/week02/2-2/tool_runtime_demo_v2.py 的 invoke()',
+      question: 'invoke() 三个阶段各自完成什么？举出三个「顺序写错」的具体后果。',
+      hint: '三阶段各一行；三个反例分别关于权限、脱敏、Registry。',
+      modelAnswer: '① <strong>prepare</strong>：查工具 → 用具体版本 Input Model 校验参数 → 从服务端 ExecutionContext 读取用户/租户/权限/审批 → 检查最新启停状态、风险、业务前置条件和依赖 → 生成只读 PreparedCall；<br>② <strong>execute</strong>：只接收已通过检查的 PreparedCall，在 deadline、取消传播、并发限制、重试和幂等策略下调用 handler；<br>③ <strong>finalize</strong>：按 Output Model 校验 → 只投影模型下一步所需字段 → 脱敏 → 限长 → 异常映射成稳定错误码 → 写 Trace 和审计 → 保留 tool_call_id。<br>顺序写错的后果：<strong>权限判断在 handler 之后</strong>--退款、删除、邮件已发生无法再过滤；<strong>脱敏在回写之后</strong>--敏感数据已进入模型上下文；<strong>execute 再读全局 Registry</strong>--快照失去固定版本的意义。'
+    },
+    {
+      type: 'choice',
+      concept: '超时的正确语义',
+      section: '2-2',
+      notesRef: '笔记 2.2 五、execute（行 625–642）',
+      question: '非幂等写操作（如创建退款）执行到超时，正确的处理是？',
+      options: [
+        '返回 TIMEOUT_UNKNOWN，不能盲目重试，先查状态或人工',
+        '立即自动重试直到获得确定的成功或失败结果为止',
+        '超时代表业务一定失败，直接告知用户操作未被执行',
+        '重新生成新的调用 ID 后原样重放同一笔退款请求'
+      ],
+      answer: 0,
+      explanation: '超时只表示调用方没有在期限内得到结果，不代表业务动作一定失败。非幂等写超时后结果状态未知，盲目重试可能造成重复退款。写操作只有在下游支持幂等键、去重表或业务唯一约束时才适合自动重试。'
+    },
+    {
+      type: 'choice',
+      concept: '重试的唯一 owner',
+      section: '2-2',
+      notesRef: '笔记 2.2 五、execute（行 644–646）',
+      question: 'Provider SDK、Gateway、Agent Loop、MCP Client 和 Tool Runtime 都可以加重试，最佳实践是？',
+      options: [
+        '一次失败只能有一个明确的重试 owner，避免多层相乘',
+        '每层都配置三次重试，用冗余保证最终一定调用成功',
+        '重试次数集中配置在 Provider SDK 并让全部层级共享',
+        'Agent Loop 消费 Runtime 的重试结果并原样重放请求'
+      ],
+      answer: 0,
+      explanation: '五层各重试三次，最坏会产生指数级请求。最佳实践是一次失败只能有一个明确的重试 owner。这与 Week01 Gateway 的 max_retries=0 纪律同构：重试集中在一层，attempts 才与真实调用数对应，预算才可信。'
+    },
+    {
+      type: 'choice',
+      concept: '并行编排三关系',
+      section: '2-2',
+      notesRef: '笔记 2.2 六、（行 670–680）',
+      codeRef: 'course_code/week02/2-2/invoke_many.py',
+      question: '模型一次返回多个 Tool Call，Runtime 编排前应该先判断什么？',
+      options: [
+        '独立、数据依赖、争用资源三种关系分别处理',
+        '全部并行 gather 执行，由 handler 内部自行加锁',
+        '全部显式串行，保证结果顺序与调用顺序一致',
+        '按工具风险等级排序，高风险工具放到最后执行'
+      ],
+      answer: 0,
+      explanation: '互相独立有限并行（查两笔不同订单）；存在数据依赖显式串行（先查订单状态再决定退款）；争用同一资源按资源键排队（同一订单两次退款）。invoke_many.py：只要有一个 sequential 工具，整批就降级串行。即使工具标记 parallel，Runtime 仍要限制全局、工具、租户并发。'
+    },
+    {
+      type: 'choice',
+      concept: '插件化的边界',
+      section: '2-2',
+      notesRef: '笔记 2.2 七、（行 682–697）',
+      question: '工具越来越多以后由插件完成注册，插件的作用范围边界是？',
+      options: [
+        '不能另起一套 Loop，也不能绕过 invoke 直调 handler',
+        '可以持有私有连接池，必要时绕过 Runtime 提升吞吐',
+        '卸载时把注册的全部工具迁移到系统默认命名空间',
+        '负责在工具执行前后改写参数与结果的业务语义'
+      ],
+      answer: 0,
+      explanation: '把声明依赖、注册能力和保存撤销动作从 Runtime 抽出来交给插件，Runtime 仍然负责所有执行（谁注册能力，谁负责卸载时清理）。插件不能另外启动一套 Loop，也不能绕过 invoke() 直调 handler——效率手段不能制造第二个执行入口。'
+    },
+    {
+      type: 'choice',
+      concept: '能审查：四类工具调用错误',
+      section: '2-1 + 2-2',
+      notesRef: '笔记 2.1 验收（行 387）+ 2.2 五、（行 607–621）',
+      question: '审查一份 AI 生成的工具调用实现，以下哪组问题是你必须能发现的？',
+      options: [
+        '模型填写身份审批、参数未校验、直调 handler、丢 tool_id',
+        '提示词过长、响应时间慢、界面报错文案不友好、缓存未命中',
+        '代码风格不统一、缺少注释、依赖版本过旧、目录结构混乱',
+        '模型回答不礼貌、拒绝次数过多、重试间隔太短、日志颜色刺眼'
+      ],
+      answer: 0,
+      explanation: '笔记 2.1 验收原文的四类错误：模型填写身份或审批、参数未经校验、模型直调 handler、Tool Result 丢失 tool_call_id。配套铁律：user_id、tenant_id、role、approved、risk 必须来自可信上下文或 ToolDefinition，模型参数中不应包含这些字段。'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>
