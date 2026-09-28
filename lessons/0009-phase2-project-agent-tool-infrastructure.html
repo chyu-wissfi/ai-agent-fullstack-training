@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week02 主题课 4/4 · 阶段二项目：Agent 工具调用基础设施</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 02 · 主题课 4 / 4 · 覆盖课程小节 2-5 · 结课课 · 前 3 题为 0008 三个薄弱点换形式重测</p>
+<h1>阶段二项目：Agent 工具调用基础设施</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：Week02 收官课。前四课的零件——Function Calling、Tool Runtime、MCP、治理——在这一课装回一个真实项目：<code>2-5/agent-tool-runtime-pi-v2</code>（基于 pi 框架的 Codebase Agent + LiteLLM Gateway + 瑞幸 MCP）。延续测验驱动模式：前 3 题是 0008 三个薄弱点（门禁优先级、SQL/Shell 收窄、审计两阶段）的换形式重测，第 4 题是上次对话里你主动问过的「治理的编排与事实归属」。<br>
+  <strong>笔记定位</strong>：<a href="../course_code/week02/第二章-学习笔记.md">第二章-学习笔记.md</a> 2.5（行 1298–1518）+ 本章总结（行 1523–1545）<br>
+  <strong>代码定位</strong>：<code>course_code/week02/2-5/agent-tool-runtime-pi-v2/</code>（runtime/src：registry / policy / runtime / loop-guard / store / mcp/adapter；gateway/：Python 业务服务与 Schema 导出；config/platform.yaml；README 有完整启动手册）<br>
+  <strong>预计用时</strong>：测验 25 分钟 + 精讲 25 分钟 + 第二层动手练习 40 分钟<br>
+  <strong>本课验收标准</strong>（笔记 2.5 九）：口头验收——画出完整业务流程图并说清 Function Calling、MCP、Runtime、Handler 的边界；代码验收——八条硬性要求；审查验收——能发现六类 AI 生成代码的典型错误。
+</div>
+
+<h2>怎么用这一课</h2>
+<p><strong>先考后讲</strong>：20 题检索式测验。前 3 题重测 0008 的三个点，全部换形式：一道「顺序交换事故场景」、一道「窄工具 vs run_sql+Sandbox 论证」、一道「被拒调用的时间线长什么样」。</p>
+<p><strong>这一课在三层学法里的位置</strong>：<strong>第一层建地图</strong>——精讲开头的交付链全景图，就是笔记 2.5 一的链路原文，也是口头验收要画的图；<strong>第二层跑代码</strong>——第三部分实验：确定性测试和本地工具发现<strong>不需要任何 key</strong>，全链路 Live（Gateway + DeepSeek + 审批流）需要配环境变量；<strong>第三层工程师级</strong>——这个项目本身就是「外包给 AI 写、自己验收」的 spec-driven 实践：你理解运行原理，才能通过对话校验 AI 写的代码对不对，而不是一行一行看代码。</p>
+<p class="sidenote">就业面试视角：这是你简历上能直接写的项目。面试官问「你做过什么 Agent 项目」，这一课的交付链 + 八条代码验收 + 六类审查错误就是完整答案——它证明你理解的不是 API 调用，是<strong>从不确定模型输出到确定性业务执行的边界</strong>（本章总结原话）。</p>
+
+<h2>第一部分：检索式测验</h2>
+<div id="quiz"></div>
+
+<hr>
+
+<h2>第二部分：精讲（测验后再读）</h2>
+
+<p>先装全景图——这就是阶段二的交付物形状（笔记 2.5 一原文），也是口头验收要默画的图：</p>
+<pre>用户任务
+  → Agent Loop / Pi Harness
+  → 第一章 LLM Gateway（平台模型名 agent-default）
+  → DeepSeek 生成 Tool Call
+  → Tool Registry 与 Run Snapshot
+  → Tool Runtime
+  → Schema / Policy / Approval / Deadline
+  → 本地 Tool、Python 服务或 MCP Server
+  → Tool Result / Audit / Trace
+  → 下一轮模型决策
+
+三个工具来源，汇入同一个 invoke()：
+  本地函数（read / write / edit / bash）
+  Python 业务服务（order.get_status，Pydantic Schema）
+  MCP Server（mcp.my-coffee.*，默认 high 风险）
+      └── 全部先包装成 ManagedTool → Registry → Snapshot → Policy → Runtime
+横切：LoopGuard（预算与终止）+ Audit/Trace（责任与过程）</pre>
+
+<h3>1. 这个项目要证明什么</h3>
+<p>综合场景选 <strong>Codebase Agent</strong>，不是为了展示模型会写多少代码，而是因为<strong>文件、Shell、测试和外部服务同时存在，能直接暴露执行边界、超时、审批、审计和 Loop 终止问题</strong>（笔记原话）。项目要回答的核心工程问题（PDF 开场列的三问）：</p>
+<ul>
+  <li>handler 完全忽略 AbortSignal 时，Runtime 能否按时返回 <code>TOOL_TIMEOUT</code>？</li>
+  <li>超时后，重试和降级从哪里接上？</li>
+  <li>Trace 能否还原整个执行过程？</li>
+</ul>
+
+<h3>2. 复用阶段一 Gateway</h3>
+<p>Agent 不直接持有供应商 Key，也不重复实现模型重试和路由——只依赖<strong>平台逻辑模型名</strong> <code>agent-default</code>，把请求发给第一章的 OpenAI-compatible Gateway（本章用 LiteLLM 组合 FastAPI，业务逻辑与第一章实现相同）。平台模型名与真实供应商模型分离后，<strong>Gateway 可以在不修改 Agent Prompt、工具或 Loop 的情况下切换底层端点</strong>；供应商 Key 留在 Gateway，Agent 进程只持有访问 Gateway 的受管凭证。三条工程纪律（PDF）：</p>
+<ul>
+  <li>LiteLLM <code>max_retries=0</code>——<strong>重试的唯一负责方是 Gateway</strong>，工具重试由 Runtime 负责，两层不共用车计数；</li>
+  <li>流式响应首段发出前允许切换模型，之后中断返回 <code>STREAM_INTERRUPTED</code>，不中途换模型；</li>
+  <li>预算用价格上界配置，LoopGuard 在风险发生前停止——不能等最终账单出现才发现超支。</li>
+</ul>
+
+<h3>3. 注册三合一：内部命名、模型投影、能力快照</h3>
+<p>Registry 中的完整元数据（ToolMetadata）一次声明：internalName、risk（read/write/high）、permissions、requiresConfirmation、timeoutMs、maxRetries、idempotent、source（local/python/mcp）。三个动作同时完成：</p>
+<ul>
+  <li><strong>内部命名保留领域语义</strong>：<code>order.get_status</code>、<code>ticket.create</code>、<code>mcp.my-coffee.query_order</code>；</li>
+  <li><strong>模型投影</strong>：Provider 不接受点号就投影为 <code>order__get_status</code>，注册时维护 internalName 和 modelName <strong>两个索引</strong>，双向映射可逆、可预测、不自动截断——名称碰撞直接<strong>启动失败</strong>，不带病运行；</li>
+  <li><strong>能力快照</strong>：模型能看到的 Tool Schema、Runtime 能执行的具体版本、风险和治理配置<strong>一起冻结进 Run Snapshot</strong>，按用户、Agent、租户、模式过滤；模型请求与后续 Runtime 不能各自重新查全局 Registry。</li>
+</ul>
+
+<h3>4. Schema 单一来源</h3>
+<p>Python 业务服务用 Pydantic 定义输入模型（<code>extra="forbid"</code> + <code>strict=True</code>），再通过 <code>model_json_schema()</code> 导出给 Node 侧读取（<code>python -m app.export_schemas</code> 生成 <code>config/schemas/*.json</code>，CI 检查 diff）。<strong>不要手工维护 Python 与 TypeScript 两份 Schema</strong>——两份契约独立演进后，模型按一份生成参数，业务服务却按另一份拒绝。关键句：<strong>单一来源不等于只校验一次</strong>。仍然保留两道校验：① Pi/Runtime 边界尽早拒绝模型生成的非法调用；② Python 服务入口再次校验——<strong>因为业务服务不能假设所有调用方都来自当前 Agent</strong>。两道校验使用同一份契约事实。</p>
+
+<h3>5. 审批设计成可恢复状态</h3>
+<p>审批不是对话布尔值：持久化 <code>approval_id</code>、参数摘要（canonicalJson + SHA-256，绑定 trace_id、tool_call_id、tool_name、user、tenant、args）和等待状态。pi-agent-core 通过 <code>shouldStopAfterTurn</code> 检测待审批，停止 Loop 返回 <code>AWAITING_APPROVAL</code>。人通过 CLI 或 API 处理（list / decide / execute）。<strong>执行审批时重新完整校验</strong>：工具存在且名称映射未变、参数仍符合当前 Schema、用户权限和租户范围未变、参数摘要与批准时一致——然后<strong>原子领取</strong>（SQL <code>UPDATE approvals SET status='executing' WHERE id=? AND status='approved' AND expires_at&gt;?</code>，防并发双执行）。状态流转：pending → approved → executing → consumed（或 rejected/failed）。恢复的三重含义全部落地：恢复同一任务而不是让模型假装完成、重新检查权限与启停、原子消费审批。</p>
+
+<h3>6. 硬超时与重试</h3>
+<p>执行入口用 <code>runWithDeadline</code> 包住 handler。实现是 <strong>Promise.race + controller.abort()</strong>——分工必须背准（PDF 明确点名的关键命中）：</p>
+<ul>
+  <li><strong>真正保证按时返回的是 Promise.race</strong>：deadline Promise 到时 reject，无论 handler 是否响应；测试用故意忽略 signal 的 handler 验证（超时 15ms、断言错误码和返回时间）；</li>
+  <li><strong>AbortController 负责通知合作型下游取消</strong>——但 Runtime 不能假设所有 handler 都会响应；本地超时不代表远端副作用停止。</li>
+</ul>
+<p>重试只有一个 owner：Tool Runtime 只恢复明确瞬时故障，Agent Loop 负责重新规划，两者都消费 Run 的统一预算。重试条件是 <code>ToolRuntimeError.retryable</code> 且工具声明 <code>idempotent</code>，<strong>maxAttempts = idempotent ? maxRetries + 1 : 1</strong>。写操作超时返回 <code>TIMEOUT_UNKNOWN</code>，保留 Trace，用幂等键查询或人工核对——不自动重放。降级（fallbackHandler）同样经过 deadline helper，成功码是 <code>FALLBACK_OK</code>；降级返回明确的不确定性（如 <code>status: "unknown"</code>），<strong>不能伪装成正常成功</strong>。</p>
+
+<h3>7. MCP 工具进同一条治理链</h3>
+<p>远端工具发现后（<code>mcp.my-coffee.*</code>，streamable HTTP，Token 从环境变量读取、缺失直接失败），每个远端工具转为内部 ManagedTool 再进入 Registry、Snapshot、Policy、Approval 和 Runtime。两个易错点：① <code>trusted: true</code> 只表示 Server 来源经过配置，<strong>不表示其中每个工具都可以无条件执行</strong>——远端工具仍是默认 high 风险、要权限和确认；② 取消信号传递给 MCP SDK，MCP 结果做归一化、限长和脱敏。验收标准（笔记原话）：不止要成功列出远端工具，<strong>还得验证本地 Tool、Python 服务和 MCP Tool 都无法绕过同一个 invoke()</strong>。</p>
+
+<h3>8. Audit 与 Trace 怎样分工</h3>
+<p>一次 Run 的形状（笔记原文）：</p>
+<pre>trace_id = tr_01
+└── run_id = run_01
+    ├── step_01：LLM Call
+    ├── step_02：Tool Call / order.get_status
+    ├── step_03：LLM Call
+    ├── step_04：Tool Call / filesystem.read_file
+    ├── step_05：Tool Call / bash.run_tests
+    └── step_06：Final Answer</pre>
+<p><strong>Trace 用来还原调用链、时间和依赖；Audit 用来记录身份、策略与业务动作。</strong>所有事件共享关联 ID，但保存范围不同、分表存储、保留周期不同。四条纪律：① 脱敏必须发生在日志写入<strong>之前</strong>，而不是事后清洗（配置敏感字段 + 通用正则）；② <strong>即时失败事件也要进入 Trace</strong>，不能只记录成功调用；③ 审计写入异常单独告警，不能把已成功的业务动作改写成失败并触发重试；④ 查看用 <code>npm run cli -- trace &lt;trace-id&gt;</code>，策略拒绝、成功、失败均记录。pi 已实现的 <code>tool_execution_start / update / end</code> 事件是优秀参考实现。</p>
+
+<h3>9. LoopGuard 为什么属于 Harness</h3>
+<p>为什么不能交给模型：模型可能<strong>每一步都合法，却始终重复调用工具</strong>——终止条件不能交给模型，它也无法自动增加限制。所以 Harness 至少限制六个预算（工具调用前和每轮结束后检查）：</p>
+<pre>max_turns: 8              # 轮数
+max_tool_calls: 12         # 工具调用总数
+max_repeated_call: 2       # 相同调用重复次数
+max_total_tokens: 30000    # Token 预算
+max_cost_usd: 0.25         # 成本预算
+max_duration_ms: 120000    # 总时限</pre>
+<p>三个设计细节：① <strong>重复调用判断用「工具内部名 + 规范化参数摘要」</strong>，而不是只看工具名称（<code>signature = toolName + ":" + canonicalJson(args)</code>）；② <strong>等待审批期间任务进入显式暂停状态，不继续消耗模型调用预算</strong>；③ 分工句（必背）：<strong>Tool Runtime 决定一条调用能否执行；LoopGuard 决定整个 Run 是否还能继续。两者都属于 Harness 的确定性控制，不能只写进 System Prompt。</strong></p>
+
+<h3>10. 阶段二最终验收清单 + 面试视角</h3>
+<p>笔记 2.5 九的三层验收，也是 Week02 的结业标准：</p>
+<ul>
+  <li><strong>口头</strong>：画出 <code>Gateway → Model → Tool Call → Snapshot → Runtime → Policy / Approval → Handler / MCP → Tool Result → Loop</code>，说清 Function Calling（模型选工具生成参数）、MCP（外部能力发布发现调用）、Runtime（单次调用校验执行收口）、Handler（业务动作本体）的边界；</li>
+  <li><strong>代码</strong>：模型无法伪造身份/租户/审批；模型与 Runtime 使用同一 Run Snapshot；所有入口共用 invoke()；写操作无幂等保证时不因超时自动重试；本地/Python/MCP 工具经过相同治理链；成功与失败都保留 tool_call_id；Tool Result 和日志写入前完成脱敏；审计与 Trace 能关联模型调用、工具调用和业务结果；</li>
+  <li><strong>审查</strong>（面对 AI 生成代码能发现）：权限发生在副作用之后；SDK、Runtime 和 Loop 同时重试；超时被错误解释为写操作失败；原始异常、Token 或客户数据进入模型和日志；测试只检查错误文本没有检查副作用；Tool Result 丢失原始调用 ID。</li>
+</ul>
+<p>面试收尾句（本章总结）：第二章完成的不是「给模型注册几个函数」，而是建立了一条<strong>从不确定模型输出到确定性业务执行的边界</strong>——模型负责理解、选择和生成候选参数，工程师负责协议、可信边界、风险、失败语义和验收证据。真正的标准是：错误动作能否在副作用前停止，失败能否被恢复，结果能否被追踪，系统能否用测试证明自己的行为。</p>
+
+<hr>
+
+<h2>第三部分：第二层练习——跑起来，再主动改造（测验与精讲之后）</h2>
+<p>规则不变：「预期观察」<strong>动手前先写</strong>。实验 ①②③ 完全离线（无需任何 key）；实验 ④⑤ 需要完整环境。所有命令默认在 <code>course_code/week02/2-5/agent-tool-runtime-pi-v2/</code> 下执行。环境要求：Node.js 22.19+、Python 3.12+。</p>
+
+<h3>实验 ①：跑确定性测试套件（无需任何 key）</h3>
+<p><strong>怎么做</strong>：</p>
+<pre>cd course_code/week02/2-5/agent-tool-runtime-pi-v2/runtime
+
+# 安装依赖并构建
+npm ci
+npm run build
+
+# 全量确定性测试：不依赖模型 API，也不连接真实支付或 Shell
+npm test</pre>
+<p><strong>预期观察（先写再跑）</strong>：</p>
+<ul>
+  <li>全部通过——README 声明覆盖：Schema、Registry、RBAC、租户边界、审批绑定、幂等、重试、降级、脱敏、Trace、Loop Budget 与 MCP Adapter（本地 stdio）；</li>
+  <li>对照 0008 的八项安全测试：同一套「错误码 + 副作用」断言思路跨语言成立——治理与编程语言无关（笔记 2.5 四特意用 TypeScript + Python 双语言证明这一点）。</li>
+</ul>
+
+<h3>实验 ②：本地工具发现与命名投影（无需任何 key）</h3>
+<p><strong>怎么做</strong>：</p>
+<pre>cd runtime
+
+# 只验收本地工具，显式隔离 MCP（不替换正式配置，仅隔离测试）
+npm run cli -- tools --without-mcp</pre>
+<p><strong>预期观察（先写再跑）</strong>：</p>
+<ul>
+  <li>列出本地注册的工具，内部名保留领域语义（如 order.get_status），模型名投影为双下划线形式（order__get_status）；</li>
+  <li>对照精讲第 3 节：注册时维护 internalName / modelName 两个索引，名称碰撞启动失败——这就是 0007「限定名 + 双向映射」在项目里的落地；</li>
+  <li>思考题（第三层）：pi 注册工具的 <code>execute</code> 回调内部调用的是什么？（答案：<code>runtime.invoke()</code>——扩展也不能另造执行入口。）</li>
+</ul>
+
+<h3>实验 ③：源码定位——硬超时与 LoopGuard（无需任何 key）</h3>
+<p><strong>怎么做</strong>：</p>
+<pre>cd runtime/src
+
+# 硬超时的真正保证：Promise.race，不是 abort 信号
+grep -n "Promise.race" runtime.ts
+grep -n "controller.abort" runtime.ts
+
+# 重复调用判断的签名：工具内部名 + 规范化参数摘要
+grep -n "repeatedCalls" loop-guard.ts
+grep -n "canonicalJson" loop-guard.ts store.ts</pre>
+<p>再跑 <code>npm test</code>，在输出里找到硬超时与 Loop Budget 相关的测试条目对照。</p>
+<p><strong>预期观察（先写再跑）</strong>：</p>
+<ul>
+  <li>runWithDeadline 的实现：deadline Promise 到时 reject（TOOL_TIMEOUT, retryable=true），Promise.race 保证本地按时返回；abort 只负责通知合作型下游；</li>
+  <li>超时测试用故意忽略 signal 的 handler，断言错误码且返回时间在时限内；</li>
+  <li>LoopGuard 的 signature 是 <code>工具名:canonicalJson(参数)</code>——只看工具名会把「换参数重查」误判成重复调用。</li>
+</ul>
+
+<h3>实验 ④：全链路 Live——查询、审批、Trace（需完整环境）</h3>
+<p><strong>配置</strong>：</p>
+<pre># README 明确：项目不自动读取或提交明文 .env，需手工 export 四个值
+export DEEPSEEK_API_KEY="..."
+export GATEWAY_API_KEY="..."
+export APPROVAL_API_KEY="..."
+export LUCKIN_MCP_TOKEN="..."   # 瑞幸 MCP Token（不用 MCP 可暂缺）</pre>
+<p><strong>怎么做</strong>：</p>
+<pre># 终端 A：启动 Gateway
+python -m venv .venv
+.venv/bin/pip install -e 'gateway[dev]'
+GATEWAY_CONFIG=config/gateway.yaml \
+  .venv/bin/python -m uvicorn app.main:app --app-dir gateway --host 127.0.0.1 --port 8000
+
+# 终端 B（runtime/ 目录下）：跑一个任务
+npm run cli -- agent "查询订单 ORD-A-1001 的状态"
+
+# 触发高风险工具后 Loop 暂停，返回 pending_approval_id；另开审批
+npm run approval-api
+npm run cli -- approvals list
+npm run cli -- approvals decide &lt;approval-id&gt; --decision approve --actor teacher
+npm run cli -- approvals execute &lt;approval-id&gt;
+
+# 查看 Trace 还原整条链
+npm run cli -- trace &lt;trace-id&gt;</pre>
+<p><strong>预期观察（先写再跑）</strong>：</p>
+<ul>
+  <li>Agent 用平台模型名 agent-default，不持有 DeepSeek Key；</li>
+  <li>高风险工具返回 APPROVAL_REQUIRED 后 Loop 停止（AWAITING_APPROVAL），期间不消耗模型调用预算；</li>
+  <li>approve 后 execute 重新完整校验（工具存在、Schema、权限、参数摘要）再原子消费审批；</li>
+  <li>trace 输出能看到 LLM Call 与 Tool Call 交替的 step 序列，tool_call_id 全程一致。</li>
+</ul>
+
+<h3>实验 ⑤：反面验证——缺凭证必须失败（治理的诚实性）</h3>
+<p><strong>怎么做</strong>：不设置（或清空）DEEPSEEK_API_KEY，在 runtime/ 下运行：</p>
+<pre>npm run test:live</pre>
+<p>对照观察后恢复环境。想进一步看「无法伪造」的同款纪律，无 LUCKIN_MCP_TOKEN 时跑 <code>npm run test:mcp:live</code>，预期相同。</p>
+<p><strong>预期观察（先写再跑）</strong>：</p>
+<ul>
+  <li><strong>测试直接失败</strong>——README 原话：缺 DEEPSEEK_API_KEY 时必须失败，绝不回退到假模型；</li>
+  <li>对照 0008 审计的 why：证据链不能伪造。如果 live 测试在缺真实模型时悄悄用假实现通过，那「模型决策验收」就是自欺——治理体系对测试自己和对待模型一样诚实。</li>
+</ul>
+
+<hr>
+
+<h2>回读与验证指引</h2>
+<p>按诊断报告的薄弱点，对照回读（不需要重读整份笔记）：</p>
+<ul>
+  <li>交付链 / 为什么选 Codebase Agent -&gt; 笔记 2.5 一（行 1300–1319）。</li>
+  <li>Gateway 复用 / 平台模型名分离 / LoopGuard 预算 -&gt; 笔记 2.5 二（行 1321–1340）+ 八（行 1450–1470）。</li>
+  <li>注册三合一 / ToolMetadata / Run Snapshot -&gt; 笔记 2.5 三（行 1342–1361）；代码 <code>runtime/src/registry.ts</code>、<code>name-mapping.ts</code>。</li>
+  <li>Schema 单一来源 / 两道校验 -&gt; 笔记 2.5 四（行 1363–1380）；代码 <code>gateway/app/export_schemas.py</code>、<code>config/schemas/</code>。</li>
+  <li>审批可恢复 / 硬超时 / 重试 owner -&gt; 笔记 2.5 五（行 1382–1411）；代码 <code>runtime/src/runtime.ts</code> 的 runWithDeadline、<code>store.ts</code> 的 claimApproval。</li>
+  <li>MCP 进同一条治理链 / trusted 含义 -&gt; 笔记 2.5 六（行 1413–1421）；代码 <code>runtime/src/mcp/adapter.ts</code>、<code>config/platform.yaml</code>。</li>
+  <li>Audit 与 Trace 分工 / 脱敏前置 -&gt; 笔记 2.5 七（行 1423–1448）。</li>
+  <li>验收清单三层 -&gt; 笔记 2.5 九（行 1472–1518）+ 本章总结（行 1523–1545）。</li>
+  <li>【重测错题回读】门禁优先级 / SQL 与 Shell 收窄 / 审计两阶段 -&gt; 笔记 2.4 二（行 1078–1096）、三（行 1137–1153）、五（行 1210–1247）；治理编排与事实的归属图见 <code>2-4/架构图/tool_governance_architecture.md</code> 末节。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<p>本课最可信的原始材料是项目本身：<a href="../course_code/week02/2-5/agent-tool-runtime-pi-v2/README.md">项目 README</a> 是完整启动手册（环境、安装、审批、pi 两种入口、测试、安全约束六条）；<code>docs/requirement-verification.md</code> 是需求验收对照；<code>diagrams/</code> 里有业务流程图。讲课原片 <code>course_materials/week02/2-5.pdf</code>（运行演示脚本、按调用链拆解：模型入口 → 工具注册 → 参数校验 → 权限控制 → 人工审批 → 超时重试 → MCP 接入 → Trace）。外部参考：<a href="https://docs.litellm.ai/docs/">LiteLLM 文档</a>（Gateway 路由与降级）、<a href="https://modelcontextprotocol.io/specification/2025-06-18">MCP 规范</a>（Streamable HTTP 传输）、<a href="https://mcp.run/">pi 框架生态</a>（Provider / Tool 注册与扩展机制）。</p>
+
+<div class="ask-reminder">
+  <strong>卡住了就问你的 agent。</strong>任何一处让你觉得「等等，为什么」——比如为什么快照冻结了还要执行期复查、为什么 Promise.race 而不是只发 abort、为什么 live 测试宁可不通过也不许造假——直接回到对话里问。本课全部内容都在回答一个问题：<strong>四个课的零件装在一起之后，凭什么说这是一条没有分叉、可审计、可验收的执行底座。</strong>
+</div>
+
+<div class="lesson-footer">
+  Week02 主题课序列：1/4 <a href="./0006-function-calling-tool-runtime.html">Function Calling 与 Tool Runtime</a> · 2/4 <a href="./0007-mcp-external-capabilities.html">MCP 外部能力接入</a> · 3/4 <a href="./0008-tool-governance-and-security.html">工具治理与安全边界</a> · <strong>4/4 阶段二项目</strong>（本课，2-5，结课课）<br>
+  Week02 回顾：<a href="./0001-llm-to-agent-loop.html">从 LLM 到 Agent</a> · <a href="./0002-streaming-structured-output.html">Streaming 与 Structured Output</a> · <a href="./0003-prompt-engineering.html">Prompt Engineering</a> · <a href="./0004-llm-gateway.html">LLM Gateway</a> · <a href="./0005-trace-id-picture-and-provable-tests.html">补课：trace_id 画面</a> · <a href="./0006-function-calling-tool-runtime.html">Function Calling 与 Tool Runtime</a> · <a href="./0007-mcp-external-capabilities.html">MCP</a> · <a href="./0008-tool-governance-and-security.html">工具治理</a><br>
+  Week02 结业条件：① 前 3 题重测全对（0008 三个薄弱点确认消除）且正题（第 4 题起）正确率 85% 以上；② 完成第三部分至少 3 个实验，预期先写后验（①②③ 离线即可）；③ 口头验收：不看稿画出「Gateway → Model → Tool Call → Snapshot → Runtime → Policy / Approval → Handler / MCP → Tool Result → Loop」并说清 Function Calling、MCP、Runtime、Handler 的边界；④ 审查自测：从六类典型错误中任选两类，说清你怎么在 AI 生成的代码里发现它们。四者都过即 Week02 结业，下一站 Week03（Agent Loop、Planning、State Machine、Checkpoint、Sandbox——从「能安全调用工具」到「能可靠完成长程任务」）。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  title: '第一部分：检索式测验（20 题 · 前 3 题为 0008 薄弱点换形式重测）',
+  questions: [
+    {
+      type: 'choice',
+      concept: '【重测】门禁的固定优先级（顺序交换事故形式）',
+      section: '0008 薄弱点重测',
+      notesRef: '0008 重测 · 笔记 2.4 二（行 1078–1096）',
+      question: '同事把门禁顺序改成「强制审批 → 业务预检查」（先问人、再查订单状态与额度），其他层不变。这个改动最直接的后果是什么？',
+      options: [
+        '没有实质问题：审批在前只是让用户更早参与决策，交互体验反而更好且治理等价',
+        '唯一影响是审计顺序：decision 和 execution 两条记录的时间戳颠倒，其余行为不变',
+        '白耗最贵的资源：订单已退款或额度不足的调用也会先打断人工，审批绑定了必然被拒的参数',
+        '权限检查整体失效：审批排到前面会直接跳过白名单和 RBAC，任意主体都能执行写操作'
+      ],
+      answer: 2,
+      explanation: '排序总原则两条：拒绝永远压过放行（后续不能推翻前序拒绝）；便宜检查在前、贵的在后——本地判断 → 要 I/O 的（查订单状态、额度）→ 要问人的（人工审批最贵）。交换后：一笔业务上必然被拒的调用也先获得人工确认，用户批准的参数摘要绑定的是一个 precheck 会拒绝的动作——既浪费人工，又制造「我批了怎么又不行」的困惑。注意第四项说过头了：交换这两层不会跳过 RBAC（RBAC 仍在链上），错的是顺序不是缺失。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测】SQL / Shell 能力收窄（论证形式）',
+      section: '0008 薄弱点重测',
+      notesRef: '0008 重测 · 笔记 2.4 三（行 1137–1153）',
+      question: '新需求「按状态查订单」。同事提议直接 run_sql + Sandbox 一步到位，你坚持先做窄业务工具。最准确的论证是？',
+      options: [
+        '窄工具是结构性防御：参数位里不存在能承载攻击的载荷，安全不依赖后续检查不失手',
+        '窄工具性能更好：SQL 语句更短，数据库解析耗时低，接口吞吐量显著高于通用查询',
+        'Sandbox 不隔离网络：只要数据库可达任意 SQL 都能执行，唯一能挡住的就是窄工具',
+        '两者安全等价：窄工具和 run_sql 加 Sandbox 最终都靠 fail closed 兜底，选择只看成本'
+      ],
+      answer: 0,
+      explanation: '收窄优先级的第一条永远是更窄的业务 Tool（query_orders(status)）：它的参数里根本不存在能承载攻击的东西，安全是结构性的——不依赖任何检查通过。run_sql 的参数本身就是攻击载荷，它的安全依赖后面每层检查（参数化、只读账号、白名单、Sandbox、fail closed）都不失手。Sandbox 是爆炸半径控制不是资格判断（它管「失控后炸多大」），也拦不住越权的合法查询；fail closed 是最后兜底，不是两者等价的理由。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测】审计与时间线（证据链形式）',
+      section: '0008 薄弱点重测',
+      notesRef: '0008 重测 · 笔记 2.4 五（行 1210–1247）+ 2-5.pdf 时间线',
+      question: '成功调用的时间线：model_tool_call → schema_valid → policy_allow → tool_start → tool_end → result_redacted → tool_message。一条被策略拒绝的调用，时间线应该长什么样？',
+      options: [
+        '完整走到 tool_start 后中断：拒绝发生在 handler 执行之后，再通过回滚消除副作用',
+        '缺少 model_tool_call：被拒的调用没有产生过 Tool Call，直接从 policy_deny 开始记录',
+        '与成功调用完全相同：两类调用必须产生相同事件序列，否则统计口径不一致无法对比',
+        '停在 policy_deny，不出现 tool_start——证明不该执行的确实没有执行过'
+      ],
+      answer: 3,
+      explanation: '拒绝发生在 handler 之前（副作用为零），所以时间线停在拒绝事件，不会出现 tool_start——这条「缺失」本身就是证据：不该执行的确实没执行。model_tool_call 仍然要记录（模型确实提议了，拒绝的调用也要记，证明拦截发生了）；即时失败事件也要进入 Trace，不能只记录成功调用。这正是「handler 零调用」断言在时间线上的形状。'
+    },
+    {
+      type: 'choice',
+      concept: '治理的编排与事实归属',
+      section: '2-5 综合',
+      notesRef: '笔记 2.5 五（行 1386–1411）+ 2-4/架构图 归属图',
+      question: '权限判断、审批状态、策略规则在这个工程里分别放在哪里？为什么不在 handler 里做这些判断？',
+      options: [
+        '全部写在 handler 里：执行时顺手检查权限最准确，还能拿到最新的业务状态参与判断',
+        '全部硬编码在 ToolRuntime 源码里：Runtime 是唯一入口，规则和执行放在一起最难被绕过',
+        '全部写进 System Prompt：模型每轮阅读规则后自我约束，治理随对话上下文自动生效',
+        '编排集中在 invoke()：规则挂 ToolDefinition、身份由服务端传入、审批和审计是注入的协作者'
+      ],
+      answer: 3,
+      explanation: '治理的编排（顺序、唯一入口）在 ToolRuntime.invoke() 里，但治理的事实分布在外部：ToolPolicy 和 precheck 挂在 ToolDefinition 上、ExecutionContext 由服务端创建每次调用传入、PermissionEngine/ApprovalStore/AuditSink 是被注入的协作者。why 是一个对象管一种变化：改策略不动执行链、身份不固化为全局状态。放在 handler 里则权限判断发生在副作用位置之后无法前置；写进 Prompt 是行为提示不是确定性安全边界。'
+    },
+    {
+      type: 'choice',
+      concept: '为什么选 Codebase Agent 做综合场景',
+      section: '2-5 一',
+      notesRef: '笔记 2.5 一（行 1317–1319）',
+      question: '阶段二项目的综合场景为什么选择 Codebase Agent，而不是一个对话式客服？',
+      options: [
+        '为了展示模型写代码的能力上限：代码任务是衡量模型智力水平最好的基准',
+        '为了炫技 pi 框架：只有 pi 才能同时挂载本地函数与 MCP 工具供模型选择调用',
+        '文件、Shell、测试和外部服务同时存在，能直接暴露执行边界、超时、审批、审计与终止问题',
+        '因为客服场景没有写操作，治理链得不到真实锻炼，只有代码任务才有权限需求'
+      ],
+      answer: 2,
+      explanation: '笔记原话：选择 Codebase Agent 不是为了展示模型会写多少代码，而是因为文件、Shell、测试和外部服务同时存在，能直接暴露执行边界、超时、审批、审计和 Loop 终止问题。每一类治理问题都有一个真实的触发物（bash 撞 Sandbox 与审批、read 撞限长、外部服务撞超时与重试、循环撞 LoopGuard）。'
+    },
+    {
+      type: 'choice',
+      concept: '复用阶段一 Gateway：平台模型名分离',
+      section: '2-5 二',
+      notesRef: '笔记 2.5 二（行 1321–1336）',
+      question: 'Agent 只注册平台逻辑模型名 agent-default、Base URL 指向 Gateway。这个设计的直接收益是？',
+      options: [
+        '供应商 Key 留在 Gateway，切换底层端点不需要修改 Agent 的 Prompt、工具或 Loop',
+        '模型回答质量更高：Gateway 会自动挑选当前最强的供应商模型完成任务',
+        '省去所有重试逻辑：Gateway 层已经把瞬时故障全部消化，Agent 永远一次成功',
+        '成本下降一半：平台模型名享受供应商给 Gateway 的批量折扣价格'
+      ],
+      answer: 0,
+      explanation: '平台模型名与真实供应商模型分离后，Gateway 可以在不修改 Agent Prompt、工具或 Loop 的情况下切换底层端点；供应商 Key 留在 Gateway，Agent 进程只持有访问 Gateway 的受管凭证。B 是幻觉；C 错——Gateway 的 LiteLLM 配置 max_retries=0，重试的唯一负责方是 Gateway 的自身策略，工具重试由 Runtime 负责，两层不共用计数；D 无出处。'
+    },
+    {
+      type: 'choice',
+      concept: '注册三合一与命名碰撞',
+      section: '2-5 三',
+      notesRef: '笔记 2.5 三（行 1342–1361）+ registry.ts',
+      question: 'ToolRegistry.register() 发现 modelName 投影后与已有工具碰撞时，项目的处理方式是？',
+      options: [
+        '自动追加数字后缀生成唯一名，并在日志里记录一次命名冲突的告警事件',
+        '按注册顺序先到先得，后来者覆盖已注册的同名工具并继承其治理配置',
+        '直接抛错让启动失败，同时维护 internalName 和 modelName 两个索引防碰撞',
+        '保留两者但只向模型暴露其中一个，另一个转入 Run Snapshot 备用'
+      ],
+      answer: 2,
+      explanation: 'PDF 明确：内部名称保留点号，模型名称转换点号为双下划线，注册时检查碰撞，启动失败——不带病运行。Registry 维护 byInternalName 和 byModelName 两个索引，名称映射可逆、可预测、不自动截断。静默后缀或覆盖都会让「双向映射」失去可靠性，Trace 与审计也无法稳定区分来源。'
+    },
+    {
+      type: 'choice',
+      concept: 'Run Snapshot 冻结什么',
+      section: '2-5 三',
+      notesRef: '笔记 2.5 三（行 1361）',
+      question: '「能力快照冻结进 Run Snapshot」具体指冻结哪些东西？',
+      options: [
+        '只冻结工具的参数 Schema：治理配置每次执行时重新读取保持最新',
+        '模型能看到的 Tool Schema、Runtime 能执行的具体版本、风险和治理配置一起冻结',
+        '只冻结高风险工具：只读工具不需要快照，发现时过滤已经足够安全',
+        '冻结整份对话历史与工具结果，供模型在下一轮决策时完整回看'
+      ],
+      answer: 1,
+      explanation: '笔记原话：当前 Agent 能看到的 Tool Schema、Runtime 能执行的具体版本、风险和治理配置要一起冻结进 Run Snapshot，模型请求与后续 Runtime 不能各自重新查全局 Registry。快照按用户、Agent、租户、模式过滤。这样模型看到的与 Runtime 执行的是同一份事实——审批摘要、Schema 校验、风险判断在整轮内一致。'
+    },
+    {
+      type: 'choice',
+      concept: 'Schema 单一来源不等于只校验一次',
+      section: '2-5 四',
+      notesRef: '笔记 2.5 四（行 1363–1380）',
+      question: 'Python 用 Pydantic 定义模型、导出 JSON Schema 给 Node 读取。为什么 Node 侧校验通过后，Python 服务入口还要再校验一次？',
+      options: [
+        '因为 Node 的 JSON 解析不可靠：两次校验可以互相纠错，提高整体容错能力',
+        '因为校验逻辑有随机性：同一份参数在两次校验中可能得到不同结论需要复核',
+        '因为业务服务不能假设所有调用方都来自当前 Agent：两道校验用同一份契约事实',
+        '因为导出的 Schema 与 Pydantic 模型独立演进：两份契约需要分别验证各自有效'
+      ],
+      answer: 2,
+      explanation: '笔记关键句：单一来源不等于只校验一次，它表示两道校验使用同一份契约事实——① Pi/Runtime 边界尽早拒绝模型生成的非法调用；② Python 服务入口再次校验，因为业务服务不能假设所有调用方都来自当前 Agent（还有别的调用方、别的入口）。D 恰好是单一来源要消灭的问题：手工维护两份契约会独立演进，模型按一份生成参数、业务按另一份拒绝。export_schemas 可重复执行、CI 检查 diff 就是为了守住单一来源。'
+    },
+    {
+      type: 'choice',
+      concept: '审批的可恢复状态与原子领取',
+      section: '2-5 五',
+      notesRef: '笔记 2.5 五（行 1388）+ store.ts claimApproval',
+      question: '用户 approve 之后、execute 之前，两个并发请求同时消费同一张审批。工程上怎么防住？',
+      options: [
+        '用带条件的原子 UPDATE 领取审批（status=approved 才置为 executing），只允许一个成功',
+        '在应用层加互斥锁变量：第一个请求置 used 标志后第二个请求读取标志即放弃',
+        '不需要防：审批是一次性凭证，execute 天然幂等重复执行同一笔业务不会重复扣款',
+        '按请求到达顺序排队执行：两个请求都成功但只记录第一次的业务结果作为最终结果'
+      ],
+      answer: 0,
+      explanation: '项目用 SQL 原子领取：UPDATE approvals SET status=executing WHERE id=? AND status=approved AND expires_at>? ——只有 changes==1 的那个请求领取成功，另一个自然失败。这防止并发双执行。而且 execute 时重新完整校验：工具存在、名称映射未变、参数仍符合当前 Schema、权限和租户范围未变、参数摘要与批准时一致。B 的应用层标志在并发窗口内有竞态；C/D 都意味着重复副作用。'
+    },
+    {
+      type: 'choice',
+      concept: '硬超时：Promise.race 与 AbortController 的分工',
+      section: '2-5 五',
+      notesRef: '笔记 2.5 五（行 1390–1407）+ 2-5.pdf 关键命中',
+      question: 'handler 完全忽略 AbortSignal（继续空转或继续请求下游）。Runtime 怎样保证按时返回？',
+      options: [
+        '靠 AbortController：abort 信号会强制挂起未完成的 Promise，系统自动回收执行权',
+        '靠 Promise.race：deadline Promise 到时 reject，与 handler 的 Promise 竞速先到先得',
+        '靠把 timeoutMs 设得足够大：确保 handler 在期限内自然完成，无需竞争机制',
+        '靠操作系统的进程信号：Runtime 直接 kill 承载 handler 的整个 Node 子进程'
+      ],
+      answer: 1,
+      explanation: 'PDF 关键命中：真正保证按时返回的是 Promise.race；AbortController 负责通知取消，两者并存。runWithDeadline 里 deadline Promise 到时 reject（TOOL_TIMEOUT, retryable=true），Promise.race([work(), deadline]) 保证本地按时结束——哪怕 handler 无视信号。abort 只是通知合作型下游停止，Runtime 不能假设所有 handler 都会响应。测试用故意忽略 signal 的 handler 断言错误码和返回时间，证明硬超时成立；本地超时不代表远端副作用停止。'
+    },
+    {
+      type: 'choice',
+      concept: '重试的唯一 owner 与次数公式',
+      section: '2-5 五',
+      notesRef: '笔记 2.5 五（行 1411）+ 2-5.pdf',
+      question: '工具声明 maxRetries=2、idempotent=false，handler 抛出 retryable 的瞬时错误。实际会执行几次？为什么？',
+      options: [
+        '三次：maxRetries 加一等于总次数，retryable 错误总是值得再试一次',
+        '一次：不幂等的工具禁用自动重试，重试次数按幂等声明而不是错误性质决定',
+        '两次：retryable 与 idempotent 各贡献一次机会，取两者之和作为总尝试次数',
+        '零次：瞬时错误直接透传给模型，Runtime 从不对工具执行做任何形式的重试'
+      ],
+      answer: 1,
+      explanation: '重试条件是 ToolRuntimeError.retryable 且工具声明 idempotent，maxAttempts = idempotent ? maxRetries + 1 : 1。重试只有一个 owner：Tool Runtime 只恢复明确瞬时故障，Agent Loop 负责重新规划，两者都消费 Run 的统一预算——模型重试（Gateway）与工具重试（Runtime）分层，不共用计数。只读或真幂等才允许有限重试；写操作超时返回 TIMEOUT_UNKNOWN 查状态，不重放。'
+    },
+    {
+      type: 'choice',
+      concept: '降级不能伪装成功',
+      section: '2-5 五',
+      notesRef: '笔记 2.5 五（行 1407）+ 2-5.pdf',
+      question: '主 handler 超时，fallbackHandler 在期限内返回了一个部分数据。这个结果应该怎么表达？',
+      options: [
+        '返回正常成功码：降级也是成功，模型不需要知道主路径曾经失败过',
+        '返回明确的不确定性（如 status=unknown），成功码为 FALLBACK_OK，同样经过 deadline',
+        '抛出异常中断：降级属于系统内部实现细节，不能产生任何面向模型的结果',
+        '返回空对象：模型看到空结果会自然理解为查询失败并停止当前任务'
+      ],
+      answer: 1,
+      explanation: 'PDF：降级同样经过 deadline helper（fallback 不能绕过硬超时），成功码为 FALLBACK_OK；降级返回明确的不确定性（如 status="unknown"），不能伪装成正常成功。对照 2-4：依赖持续不可用时推荐缓存、只读降级或人工兜底，禁止动作是伪造成功结果——如果降级伪装成正常成功，模型会基于不完整数据继续规划，错误在下游放大。'
+    },
+    {
+      type: 'choice',
+      concept: 'MCP 配置中 trusted 的含义',
+      section: '2-5 六',
+      notesRef: '笔记 2.5 六（行 1413–1421）+ platform.yaml',
+      question: 'config/platform.yaml 里 my-coffee 标了 trust: trusted、default_risk: high。这句话的正确解读是？',
+      options: [
+        'trusted 表示来源经过配置：Server 可连，但其中每个工具仍要权限、确认、限长和脱敏',
+        'trusted 表示全部放行：经过配置的 Server 里的工具可以直接执行无需再确认',
+        'default_risk: high 只是展示用标签：审计里好看，对策略判断和审批没有任何影响',
+        'trusted 需要模型确认：模型每轮调用前向用户复述该 Server 的信任状态征求同意'
+      ],
+      answer: 0,
+      explanation: '笔记原话：trusted 只表示 Server 来源经过配置，不表示其中每个工具都可以无条件执行——远端工具仍需要默认风险、权限、审批、结果限长和脱敏策略。项目里 my-coffee 的远端工具默认 high 风险、requiresConfirmation 默认开启、Token 从环境变量读取（缺失直接失败，不能写入代码、模型消息或普通日志）。验收要验证本地、Python 和 MCP 工具都无法绕过同一个 invoke()。'
+    },
+    {
+      type: 'choice',
+      concept: 'Audit 与 Trace 的分工',
+      section: '2-5 七',
+      notesRef: '笔记 2.5 七（行 1423–1448）',
+      question: 'Trace 和 Audit 在这个项目里各记录什么、怎么存？',
+      options: [
+        'Trace 记录身份策略业务动作，Audit 记录调用链时间依赖；合表存储统一保留周期',
+        'Trace 还原调用链、时间和依赖；Audit 记录身份、策略与业务动作；分表存储保留周期不同',
+        '两者记录同一份事件的两个副本：写入双份防丢失，读取时按需选择其中一张表',
+        'Trace 只在出错时记录，Audit 只记成功调用：失败与成功分别走不同的证据链'
+      ],
+      answer: 1,
+      explanation: '笔记：Trace 用来还原调用链、时间和依赖（LLM Call 与 Tool Call 的 step 序列）；Audit 用来记录身份、策略与业务动作（who, when, what, on which resource）。所有事件共享关联 ID，但保存范围不同、分表存储、保留周期不同。补充纪律：脱敏发生在日志写入之前；即时失败事件也要进 Trace；审计写入异常单独告警，不能把已成功的业务动作改写成失败并触发重试。'
+    },
+    {
+      type: 'choice',
+      concept: 'LoopGuard 为什么属于 Harness',
+      section: '2-5 八',
+      notesRef: '笔记 2.5 八（行 1450–1466）',
+      question: '终止条件（最大轮数、预算上限）为什么不能交给模型自己判断？',
+      options: [
+        '因为模型没有时间观念：它感知不到已经运行了多久，只有 Harness 有时钟',
+        '因为模型可能每一步都合法却始终重复调用工具，且它无法自动增加对自己的限制',
+        '因为模型输出格式不稳定：数字上限经常生成错，Harness 解析后无法可靠执行',
+        '因为预算属于成本问题：成本核算只能由财务侧系统完成，模型无权访问账单'
+      ],
+      answer: 1,
+      explanation: '笔记原话：模型可能每一步都合法，却始终重复调用工具；因此终止条件不能交给模型，它也无法自动增加限制。所以 Harness 至少限制 max_turns、max_tool_calls、max_repeated_call、max_total_tokens、max_cost_usd、max_duration_ms，在工具调用前和每轮结束后检查——LoopGuard 的任务是在风险发生前停止运行，不能等最终账单出现后才发现超支。'
+    },
+    {
+      type: 'choice',
+      concept: '重复调用判断与审批等待',
+      section: '2-5 八',
+      notesRef: '笔记 2.5 八（行 1466–1468）+ loop-guard.ts',
+      question: 'LoopGuard 的重复调用判断用什么签名？等待人工审批期间预算怎么算？',
+      options: [
+        '只看工具名称：同名即重复；等待审批期间继续计数，防止用户拖延变相超支',
+        '工具内部名加规范化参数摘要；等待审批期间进入显式暂停状态，不消耗模型调用预算',
+        '完整的调用 ID 加参数哈希：每个 tool_call_id 天然唯一所以永不重复；审批期间冻结全部预算',
+        '模型自己报告重复：每轮让模型自检是否重复调用过相同参数并主动停止'
+      ],
+      answer: 1,
+      explanation: '笔记：重复调用判断可以使用「工具内部名 + 规范化参数摘要」，而不是只看工具名称（loop-guard.ts 的 signature = toolName + ":" + canonicalJson(args)——只看名称会把「换参数重查」误判成重复）。等待审批期间任务进入显式暂停状态，不继续消耗模型调用预算。C 前半句对但结论错：tool_call_id 每轮不同，拿它当签名等于永远检测不到重复（tool_call_id 是关联键不是内容签名）。'
+    },
+    {
+      type: 'choice',
+      concept: 'LoopGuard 与 Tool Runtime 的分工句',
+      section: '2-5 八',
+      notesRef: '笔记 2.5 八（行 1470）',
+      question: 'Tool Runtime 和 LoopGuard 各自决定什么？这句话为什么重要？',
+      options: [
+        'Runtime 决定一条调用能否执行；LoopGuard 决定整个 Run 是否还能继续——都属于 Harness 的确定性控制',
+        'Runtime 负责单次调用的性能优化；LoopGuard 负责把性能数据汇总成成本报表供运维查看',
+        'LoopGuard 决定单条调用放行与否；Runtime 在预算耗尽时负责优雅停止整个任务',
+        '两者职责相同只是层级不同：LoopGuard 是 Runtime 在 Run 粒度上的同一套检查的包装'
+      ],
+      answer: 0,
+      explanation: '必背分工句：Tool Runtime 决定一条调用能否执行；LoopGuard 决定整个 Run 是否还能继续。两者都属于 Harness 的确定性控制，不能只写进 System Prompt。粒度不同：一条调用合法但 Run 已超预算 → LoopGuard 停；Run 预算充足但这条调用越权 → Runtime 拒。两个粒度都不能交给模型自己。'
+    },
+    {
+      type: 'recall',
+      concept: '阶段二代码验收清单',
+      section: '2-5 九',
+      notesRef: '笔记 2.5 九（行 1485–1500）',
+      question: '阶段二的代码验收有八条硬性要求，至少回忆五条。',
+      hint: '覆盖：伪造、快照、入口、重试、同链、关联、脱敏、追踪。',
+      modelAnswer: '① 模型无法伪造身份、租户和审批；② 模型与 Runtime 使用同一 Run Snapshot；③ 所有入口共用 ToolRuntime.invoke()；④ 写操作没有幂等保证时不会因超时自动重试；⑤ 本地、Python 和 MCP 工具经过相同治理链；⑥ 成功与失败都保留 tool_call_id；⑦ Tool Result 和日志在写入前完成脱敏；⑧ 审计与 Trace 能关联模型调用、工具调用和业务结果。<br>配套的审查验收（发现 AI 生成代码的六类错）：权限发生在副作用之后；SDK、Runtime 和 Loop 同时重试；超时被错误解释为写操作失败；原始异常、Token 或客户数据进入模型和日志；测试只检查错误文本没检查副作用；Tool Result 丢失原始调用 ID。'
+    },
+    {
+      type: 'choice',
+      concept: '面试综合：两分钟讲清这个项目',
+      section: '2-5 九 + 本章总结',
+      notesRef: '笔记 2.5 九（行 1472–1483）+ 本章总结（行 1523–1545）',
+      question: '面试官：「说说你这个 Agent 工具调用项目。」你的开场主线是？',
+      options: [
+        '从技术栈讲起：TypeScript 加 Python 双语言微服务，LiteLLM 网关加 SQLite 存储，栈选型先进',
+        '从问题讲起：模型输出是不确定的候选动作，项目建立从候选动作到确定性业务执行的完整边界',
+        '从功能讲起：能查订单、能退咖啡钱、能读代码跑测试，功能丰富且全部由大模型自主完成',
+        '从对比讲起：先罗列与 LangChain、OpenAI Agents SDK 等框架的功能差异，突出自研优势'
+      ],
+      answer: 1,
+      explanation: '本章总结的核心句：第二章完成的不是给模型注册几个函数，而是建立了一条从不确定模型输出到确定性业务执行的边界。主线走口头验收的流程图：Gateway → Model → Tool Call → Snapshot → Runtime → Policy / Approval → Handler / MCP → Tool Result → Loop，收尾带四层边界（Function Calling 提议、MCP 接入、Runtime 收口、Handler 执行业务）和验收标准（错误动作在副作用前停止、失败可恢复、结果可追踪、系统可用测试证明行为）。'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>

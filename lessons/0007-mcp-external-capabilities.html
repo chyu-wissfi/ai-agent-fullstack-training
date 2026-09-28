@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week02 主题课 2/4 · MCP：外部能力标准化接入</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 02 · 主题课 2 / 4 · 覆盖课程小节 2-3 · 前 5 题为 0006 薄弱点换形式重测</p>
+<h1>MCP：外部能力标准化接入</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：Week02 第二课。延续测验驱动模式：先凭记忆作答。前 5 题是 0006 五个薄弱点的<strong>换形式重测</strong>（代码审查题、时间线场景题、变化场景题，不重复原题形式）；第 6 题起进入 MCP 正题。<br>
+  <strong>笔记定位</strong>：<a href="../course_code/week02/第二章-学习笔记.md">第二章-学习笔记.md</a> 2.3（行 730–986）<br>
+  <strong>代码定位</strong>：<code>course_code/week02/2-3/</code>（mcp_server_v1：Server 发布原形；mcp_client_v1：发现与结果归一化；mcp_host_v1：发现 → 适配 → Runtime → 契约断言；loop_v1：完整 Agent Loop）<br>
+  <strong>预计用时</strong>：测验 25 分钟 + 精讲 20 分钟 + 第二层动手练习 30 分钟<br>
+  <strong>本课验收标准</strong>（笔记 2.3 原文）：重点掌握——Host、Client、Server；三种原语；Server 发布；Client 发现；MCP Tool 到 ToolDefinition 的适配；结果归一化；回到 Loop。了解即可——JSON-RPC 编解码细节、历史协议版本、复杂连接池和 OAuth 实现。
+</div>
+
+<h2>怎么用这一课</h2>
+<p><strong>先考后讲</strong>：20 题检索式测验，做完页面底部自动生成诊断报告。前 5 题重测上次讲过的五个点，如果你已经把时间线画面和「一个对象管一种变化」的结构装进脑子，这 5 题应该全对——它们的形式和上次完全不同。</p>
+<p><strong>这一课在三层学法里的位置</strong>：<strong>第一层建地图</strong>——精讲第 1、2 节的主线：MCP 只是给 0006 那条「模型提议 → Runtime 受控执行」的链，加了一节「跨进程的标准化接入」，治理边界一条不变；<strong>第二层跑代码</strong>——第三部分动手清单：先跑 2-3 四个文件观察协议层与治理层各打印什么，再主动改造（本地拒绝 vs Server 端 Tool Error、超长结果、绕过 Runtime 直调）；<strong>第三层工程师级</strong>——精讲 7、8 节回答两个「为什么」：为什么外部工具必须先适配成内部 ToolDefinition（治理不分叉），为什么 MCP 结果和 Tool Call 一样是不可信数据（信任边界对称）。</p>
+<p class="sidenote">就业面试视角：MCP 是当前 Agent 岗的高频新考点，面试官最爱用两个坑考人——「MCP 是不是更高级的 Function Calling」（分工题）和「接了一个第三方 MCP Server 就安全了吗」（边界题）。两个坑的答案都在本课：前者看四组件分工，后者看适配与归一化。</p>
+
+<h2>第一部分：检索式测验</h2>
+<div id="quiz"></div>
+
+<hr>
+
+<h2>第二部分：精讲（测验后再读）</h2>
+
+<p>先装一张全景图再往下读——每个分支对应下面一节，读完精讲回来检查自己能不能默画出来：</p>
+<pre>MCP：外部能力标准化接入（2-3 全景）
+│
+├── 定位：Agent Host 与外部能力之间的标准接入协议
+│   ├── 解决：外部能力怎样发布、发现、调用
+│   └── 不替代：Function Calling · Tool Runtime · Agent Loop
+│
+├── 四组件（调用方向固定：Host → Client → Server → Tool）
+│   ├── Host      承载 Agent、会话、Runtime、Loop
+│   ├── Client    Host 内连接一个 Server 的协议组件
+│   ├── Server    发布能力，结果不天然可信
+│   └── Transport stdio / Streamable HTTP，不决定业务权限
+│
+├── 三原语 + 一条红线
+│   ├── Tool     有参数，执行查询或副作用（get_order）
+│   ├── Resource 稳定 URI 只读上下文（policy://order-status）
+│   ├── Prompt   用户显式选择的任务模板（order_assistant）
+│   └── 红线：权限不能只写在 Prompt —— 行为提示 ≠ 确定性安全边界
+│
+├── 失败四层（四种失败 → 四种下一步）
+│   ├── Transport → Client / Connection Manager（该重连的重连）
+│   ├── Protocol  → SDK / MCP Adapter（该修兼容的修兼容）
+│   ├── Tool      → Runtime 归一化后交给 Loop（读稳定错误码）
+│   └── Business  → 业务预检查 + Loop 重新规划（该换计划的换计划）
+│
+├── 发布（Server 侧三要点）
+│   ├── 类型注解生成输入 Schema
+│   ├── structured_output 结构化输出
+│   └── ToolError 稳定错误码
+│       └── 权限事实来自认证上下文 / Host 受控凭证，不由模型生成
+│
+├── 适配（Host 侧，本课核心）：治理不分叉
+│   └── 启动链：连接 → 发现 → 限定名 → 内部 ToolDefinition
+│             → Registry + Run 级 Snapshot → 投影 Schema
+│
+└── 归一化（结果侧）：MCP 结果也是外部输入
+    ├── 三分支：MCP_TOOL_ERROR / RESULT_TOO_LARGE / ok + content
+    └── 调用成功 ≠ 目标完成 —— Loop 仍要读结果定下一步</pre>
+
+<h3>1. MCP 解决什么，不解决什么</h3>
+<p>2-1、2-2 的所有工具都在 Agent <strong>同进程</strong>里：get_order 就是一个 Python 函数，handler 直接 import。但真实项目中，订单服务可能是 Java 写的，代码仓库由 GitHub 提供，文件能力位于本地子进程，企业知识库又是独立 HTTP 服务。如果没有 MCP，每个外部能力都要在 Harness 里手写一套 SDK 适配、发现和连接逻辑——<strong>接入成本随能力数量线性增加</strong>。MCP 让这些能力以相同协议发布出来，接入成本从每个工具一套降到每个 Server 一套。</p>
+<p>2-3 的定义句：<strong>MCP 是 Agent Host 与外部能力之间的标准接入协议。它负责发布、发现和调用能力，但不替代 Function Calling、Tool Runtime 或 Agent Loop。</strong>四组件分工（本课第一张必背表）：</p>
+<table>
+  <tr><th>组件</th><th>解决的问题</th></tr>
+  <tr><td>Function Calling</td><td>模型怎样选择工具并生成结构化参数</td></tr>
+  <tr><td>MCP</td><td>外部能力怎样发布、发现和调用</td></tr>
+  <tr><td>Tool Runtime</td><td>当前调用怎样校验、授权、执行和收口</td></tr>
+  <tr><td>Agent Loop</td><td>Tool Result 怎样进入下一轮决策</td></tr>
+</table>
+<p>一次远端调用的完整链路（笔记原文）：</p>
+<pre>模型通过 Function Calling 提出 orders.get_order
+        ↓
+Host 的 Runtime 接收候选动作
+        ↓
+MCP Client 把调用发送给订单 Server
+        ↓
+Server 执行真实 Tool 并返回结果
+        ↓
+Runtime 归一化 Tool Result
+        ↓
+Agent Loop 写回结果并继续</pre>
+<p>注意这条链和你 0006 学过的六步闭环是<strong>嵌套关系</strong>：MCP 只是把「③ Runtime 查找工具」里的 handler 换成了「跨进程调 Server」，其余每一步的纪律一条不变。这正是本课最重要的判断：MCP 是接入协议，不是新的执行体系。</p>
+
+<h3>2. Host、Client、Server、Transport：四名词表</h3>
+<table>
+  <tr><th>术语</th><th>本章中的含义</th><th>不负责什么</th></tr>
+  <tr><td>Host</td><td>承载 Agent、会话、Runtime 和 Loop 的应用</td><td>不等于某个 MCP Server</td></tr>
+  <tr><td>MCP Client</td><td>Host 内连接一个 Server 的协议组件</td><td>不替代 Runtime 的业务治理</td></tr>
+  <tr><td>MCP Server</td><td>通过协议发布 Tools、Resources、Prompts 的一端</td><td>不代表其结果天然可信</td></tr>
+  <tr><td>Transport</td><td>stdio 或 Streamable HTTP 等传输方式</td><td>不决定是否有业务权限</td></tr>
+</table>
+<p>调用方向固定为 <code>Host → Client → Server → Tool</code>。两条连接纪律：Client 管理协议通信，Connection Manager 管理连接生命周期，<strong>业务 Tool 不应该自己启动连接</strong>；也<strong>不应该把 SDK 对象穿透到 Agent Loop</strong>——SDK 对象一穿透，协议细节就漏进了治理链，「MCP 协议对象只停留在 Adapter 内部」这条边界（第 7 节）就破了。</p>
+
+<h3>3. 三种原语与一条红线</h3>
+<table>
+  <tr><th>原语</th><th>适用场景</th><th>订单案例</th></tr>
+  <tr><td>Tool</td><td>需要参数并执行查询或副作用动作</td><td>get_order、create_ticket</td></tr>
+  <tr><td>Resource</td><td>有稳定 URI、可重复读取的只读上下文</td><td>policy://order-status</td></tr>
+  <tr><td>Prompt</td><td>由用户显式选择的参数化任务模板</td><td>order_assistant(order_id)</td></tr>
+</table>
+<p>用购买咖啡的案例切分：真实订单状态<strong>必须</strong>来自 Tool（要真实查询）；状态说明可以是 Resource（只读、稳定 URI）；任务提示可以是 Prompt（参数化模板）。笔记明确不建议为了「完整使用 MCP」把同一份能力复制成三种原语。</p>
+<p>红线（也是第 9 节面试追问的常客）：<strong>业务权限不能只写在 Prompt 中，甚至不推荐放在 Prompt 中，因为 Prompt 是行为提示，不是确定性安全边界。</strong>这句话是 0006「Tool Call 是不可信数据」的姊妹句：提示词影响模型行为，治理链决定能不能执行——两者永远不能互相替代。</p>
+
+<h3>4. 四层失败：为什么不能全变成 Exception("tool failed")</h3>
+<p>MCP 消息建立在 JSON-RPC 之上，工程师不需要手写协议编解码，但要能分辨请求、响应、通知和错误，并区分四层失败（本课第二张必背表）：</p>
+<table>
+  <tr><th>失败层</th><th>例子</th><th>主要处理位置</th></tr>
+  <tr><td>Transport</td><td>子进程退出、HTTP 断连、请求超时</td><td>Client / Connection Manager</td></tr>
+  <tr><td>Protocol</td><td>方法不存在、版本或消息不兼容</td><td>SDK / MCP Adapter</td></tr>
+  <tr><td>Tool</td><td>ORDER_NOT_FOUND、is_error=true</td><td>Runtime 归一化后交给 Loop</td></tr>
+  <tr><td>Business</td><td>订单存在但状态不允许退款</td><td>业务预检查与 Loop 重新规划</td></tr>
+</table>
+<p>分层的 why：<strong>四种失败对应四种不同的下一步</strong>——该重连的重连、该修参数的修参数、该归一化交给 Loop 的交给 Loop、该重新规划的重新规划。如果全部塌缩成 <code>Exception("tool failed")</code>，系统就无从判断该重连、修参数、换计划还是停止。代码对照 <code>2-3/loop_v1.py</code> 的 <code>MCPToolRuntime.execute</code>：<code>except Exception</code> 分支归一化为 <code>MCP_TRANSPORT_ERROR</code>（Transport 层），<code>result_payload</code> 里 <code>is_error</code> 归一化为 <code>MCP_TOOL_ERROR</code>（Tool 层），参数不合法在本地 <code>validate_arguments</code> 直接拒绝（根本不发请求）。</p>
+
+<h3>5. 发布一个边界清楚的 MCP Server</h3>
+<p><code>2-3/mcp_server_v1.py</code> 是原形，三个要点抓代码里各自的对应物：</p>
+<ul>
+  <li><strong>类型注解生成输入 Schema</strong>：<code>def get_order(order_id: str)</code>——契约不需要手工维护 JSON 字符串；</li>
+  <li><strong>结构化输出避免 Host 从自然语言解析业务结果</strong>：<code>@mcp.tool(structured_output=True)</code> 返回 <code>{"ok": True, **order}</code>；</li>
+  <li><strong>稳定错误码让 Loop 能够采取下一步行动</strong>：<code>raise ToolError("ORDER_NOT_FOUND")</code>——和 0006 的 Error Schema 完全同一纪律。</li>
+</ul>
+<p>两条边界：① <strong>tenant_id、用户身份、授权凭证这些权限事实，不应由模型生成</strong>——Server 从认证上下文获取，或由 Host 使用受控凭证连接。这是 0006 prepare 阶段铁律（user_id/tenant_id/role/approved 必须来自服务端可信上下文）在 MCP 场景的翻译，而且更严：模型连连接凭证都碰不到。② <strong>MCP Server 是适配边界</strong>——它把内部系统收敛成稳定、任务级、可验证的能力，但不会把原有业务系统的一致性、权限和事务责任转移给模型。</p>
+
+<h3>6. stdio 与 Streamable HTTP：传输是治理对象，不是安全声明</h3>
+<table>
+  <tr><th>传输</th><th>典型场景</th><th>主要治理对象</th></tr>
+  <tr><td>stdio</td><td>Host 启动本地子进程（文件、开发工具）</td><td>可执行文件、参数、工作目录、环境变量、退出与重启</td></tr>
+  <tr><td>Streamable HTTP</td><td>团队共享、独立部署的远程服务</td><td>服务身份、鉴权、网络隔离、超时、容量和多租户</td></tr>
+</table>
+<p>最容易答错的一点：<strong>stdio 通讯简单原始，但不等于天然安全</strong>。一旦模型可以控制启动命令，stdio 就可能退化成任意命令执行；一旦 Host 把全部环境变量传给子进程，就非常容易泄漏无关的密钥。Streamable HTTP 则把风险转移到网络、身份、凭证和服务端隔离上，所以第三方 MCP 多数采用它。版本纪律：协议版本与握手细节交给固定版本的官方 SDK 适配，业务 Tool 不再做版本判断；升级 SDK 后要确认工具发现、输入 Schema、结构化结果、Tool Error 都兼容——工具正在执行时，应回到工具发现逻辑重新加载。</p>
+
+<h3>7. 适配：外部工具必须进同一条治理链（本课核心 why）</h3>
+<p>为什么不能把 MCP Client 直接交给模型、也不能让 Agent Loop 根据 Server 名称写特殊分支？因为<strong>治理链一旦分叉，就收不回来了</strong>：本地工具走 Runtime 的校验、权限、审计、trace，MCP 工具走另一条「特殊分支」，0006 建立的整条治理边界对一半的工具失效。正确启动链（必背）：</p>
+<pre>连接 Server
+  → 发现 Tools / Resources / Prompts
+  → 为工具增加 server_id 限定名
+  → 转换为内部 ToolDefinition
+  → 进入 Registry 并创建 Run 级 Snapshot
+  → 向模型投影 Function Calling Schema</pre>
+<p>限定名解决多 Server 撞名问题：不同 Server 都可能发布 <code>search</code>、<code>read</code>、<code>get_status</code>，Host 用 <code>orders.get_order</code>、<code>github.search_code</code>、<code>filesystem.read_file</code> 区分来源。如果 Provider 不允许点号（笔记点名 DeepSeek），可以在<strong>模型协议层</strong>投影为 <code>orders__get_order</code>，但<strong>内部名称保持稳定，并保存双向映射</strong>——绝不能依赖字符串替换猜测工具来源。<code>mcp_host_v1.py</code> 的 <code>discover_tools</code> 用 <code>f"{server_id}_{remote.name}"</code> 生成 <code>orders_get_order</code>，就是这层投影的实物。</p>
+<p>这段适配代码体现的三个判断边界（第三张必背表）：</p>
+<ul>
+  <li><strong>MCP 协议对象只停留在 Adapter 内部</strong>——client 不会出现在 Loop 或模型的视野里；</li>
+  <li><strong>远端 Tool 被包装成与本地工具相同的内部定义</strong>——Loop 分不出它是 MCP 工具，也不需要分；</li>
+  <li><strong>handler 返回前完成结果归一化，并保留原始 Tool Call 关联</strong>——进入 Registry 的每份定义都已经是收口后的形状。</li>
+</ul>
+<p>把这条链和 0006 的 Registry → Snapshot → invoke() 对齐看：外部工具从发现那一刻起就被「翻译」成了内部工具，之后走的每一步治理和本地函数没有区别。这就是「唯一 invoke()」原则在跨进程场景的延续。一张图记「治理不分叉」——两条路，只活一条：</p>
+<pre>外部工具接入的两条路
+│
+├── ✗ 分叉的路（治理失效，且收不回来）
+│   ├── 把 MCP Client 直接交给模型 / Loop
+│   │     └── SDK 协议对象穿透进治理链 → 「协议对象只留在 Adapter 内」被破
+│   └── Loop 按 Server 名称写 if 特殊分支
+│         └── 本地工具走 invoke()，远端走分支
+│               └── 权限、校验、审计、trace 对一半工具失效
+│
+└── ✓ 统一的路（启动链，唯一正解）
+    连接 Server → 发现 → 限定名 → 转换为内部 ToolDefinition
+                → Registry + Run 级 Snapshot → 投影 Schema
+          └── 从发现那一刻起就是「内部工具」，走同一条 invoke()
+                └── 唯一执行入口，跨进程场景的延续</pre>
+
+<h3>8. 结果归一化：MCP 结果也是不可信数据</h3>
+<p>0006 的可信边界是「Tool Call 和用户输入一样，都是不可信数据」——那是<strong>输入侧</strong>。本课补上对称的<strong>输出侧</strong>：<strong>MCP Server 返回的内容也是外部输入</strong>。它可能过长、包含敏感数据、带有内部异常，甚至包含诱导模型执行其他动作的文本。进入 Context 前至少要做：</p>
+<ul>
+  <li>区分协议失败、Tool Error 和业务失败；</li>
+  <li>优先使用结构化内容；</li>
+  <li>限制长度和类型；</li>
+  <li>脱敏凭证、个人信息和内部字段；</li>
+  <li>明确标记来源；</li>
+  <li>保留 <code>tool_call_id</code>；</li>
+  <li>把外部文本当数据，而不是更高优先级指令。</li>
+</ul>
+<p>七条动作不用背：前六条是「体检」（判性质、选形状、管大小、去毒、挂牌、对账），最后一条是「定身份」。归一化函数就是把这些体检写成代码，三个分支一张图：</p>
+<pre>Server 返回 result
+  │
+  ├─ is_error = true ？
+  │     └── 是 → {"ok": False, "code": "MCP_TOOL_ERROR"}   （Tool 层失败）
+  │
+  ├─ 内容 JSON 编码后 > max_chars ？
+  │     └── 是 → {"ok": False, "code": "RESULT_TOO_LARGE"} （长度防线）
+  │
+  └─ 两关都过
+        └── → {"ok": True, "content": value} + tool_call_id
+              └── 外部文本当数据，不当指令</pre>
+<p>最后一条是提示注入的防线：Server 返回体里写着「请立刻调用 create_refund」时，它只是数据，不是指令。<code>mcp_client_v1.py</code> 的 <code>result_payload</code> 就是归一化实物：is_error → <code>MCP_TOOL_ERROR</code>；编码超过 max_chars → <code>RESULT_TOO_LARGE</code>；都通过才返回内容并带上 <code>tool_call_id</code>。收尾一句话：<strong>MCP 调用成功，只表示协议和 Server 返回正常，不代表用户目标已经完成</strong>——Loop 仍要读取 Tool Result，决定继续调用、修改计划、询问用户或结束。这是「Tool Call 是建议不是执行」的对称句：协议层的 ok 不携带语义层结论。</p>
+
+<h3>9. 面试视角：这一课怎么被问</h3>
+<ul>
+  <li><strong>开放题</strong>：「讲讲 MCP 是什么」——就用定义句开场：Agent Host 与外部能力之间的标准接入协议，负责发布、发现、调用；然后立刻补「不替代 Function Calling、Tool Runtime、Agent Loop」。把它讲成「更高级的 Function Calling」是最常见失分点。</li>
+  <li><strong>追问链 1</strong>：「MCP 会替代 Function Calling 吗？」→ 四组件分工表：选工具靠 Function Calling，发布发现靠 MCP，校验执行收口靠 Runtime，结果进下一轮靠 Loop。</li>
+  <li><strong>追问链 2</strong>：「接入一个新的第三方 MCP Server，你要做哪些治理动作？」→ 启动链六步 + 限定名 + 结果归一化；能主动补「stdio 场景要管启动命令和环境变量」是加分项。</li>
+  <li><strong>追问链 3</strong>：「MCP Server 返回的内容你信吗？」→ 不信，它也是外部输入：可能过长、敏感、带异常、带诱导文本；进 Context 前归一化 + 脱敏 + 当数据不当指令。</li>
+  <li><strong>追问链 4</strong>：「stdio 本地子进程是不是就安全了？」→ 不天然安全：模型可控启动命令就退化成任意命令执行，全量环境变量传递会泄漏密钥。</li>
+  <li><strong>反向题（审查岗）</strong>：「给你一段 AI 写的 MCP 接入代码，你查什么？」→ 五查：SDK 对象是否穿透到 Loop；是否按 Server 名称写特殊分支；结果是否原样回灌模型；tool_call_id 是否保留；权限事实是否来自模型参数或 Prompt 而不是认证上下文。</li>
+</ul>
+
+<hr>
+
+<h2>第三部分：第二层练习——跑起来，再主动改造（测验与精讲之后）</h2>
+<p>规则不变：先跑再改，「预期观察」<strong>必须在动手前自己写出来</strong>（写在代码旁的注释里即可）。实验 ①③④ 不需要模型 API key（协议层全部本地完成），只有实验 ② 需要。所有命令默认在 <code>course_code/week02/2-3/</code> 目录下执行；课程代码会自己以 stdio 子进程方式启动 <code>mcp_server_v1.py</code>，<strong>不需要</strong>手动先跑 Server（<code>--http</code> 参数是另一种传输演示，本课 Client 都走 stdio）。</p>
+
+<h3>实验 ①：跑协议层（无需 API key）</h3>
+<p><strong>怎么做</strong>：</p>
+<pre># 一次性安装依赖（openai 只有实验②用到）
+pip install mcp jsonschema openai
+
+# 进入本课代码目录，后续所有实验都在这里执行
+cd course_code/week02/2-3
+
+# 跑 Client：stdio 启动本地 Server，列出工具并演示一次调用与归一化
+python mcp_client_v1.py
+
+# 跑 Host：发现 → 适配 → Runtime 三个契约断言（无 key 时停在 LIVE SKIP 并打印完整 trace）
+python mcp_host_v1.py</pre>
+<p><strong>预期观察（先写再跑）</strong>：</p>
+<ul>
+  <li><code>mcp_client_v1.py</code> 打印可用工具 get_order / create_ticket，以及一次 <code>result_payload</code> 归一化后的字典；</li>
+  <li><code>mcp_host_v1.py</code> 打印 PROTOCOL、TOOLS（限定名 <code>orders_get_order</code>）、RESOURCES（policy://order-status）、PROMPTS（order_assistant）；</li>
+  <li>三个契约断言全部通过：成功调用返回 ok=True；缺参 <code>{}</code> 被 Runtime 本地拒绝 INVALID_ARGUMENT（trace 只有 runtime_rejected，零 server_call）；ord_missing 归一化为 MCP_TOOL_ERROR；</li>
+  <li>结尾打印 LIVE SKIP 与完整 trace，runtime_rejected / server_call / tool_result 三类事件肉眼可数。</li>
+</ul>
+
+<h3>实验 ②：跑真实 Loop（需 API key）</h3>
+<p><strong>配置</strong>：</p>
+<pre># 必需
+export DEEPSEEK_API_KEY=sk-xxxxxxxx
+
+# 可选覆盖（不设则用默认值）
+# loop_v1.py 读：    DEEPSEEK_MODEL（默认 deepseek-chat）/ DEEPSEEK_BASE_URL（默认 https://api.deepseek.com）
+# mcp_host_v1.py 读：LLM_MODEL / LLM_BASE_URL（同上默认）</pre>
+<p><strong>怎么做</strong>：把 <code>loop_v1.py</code> 的 <code>main()</code> 里用户任务改成包含一次「订单不存在」，然后运行：</p>
+<pre>python loop_v1.py
+
+# 或者：设好 key 后重跑 host（内置任务已含 ord_missing，且会先重跑三个契约断言）
+python mcp_host_v1.py</pre>
+<p><strong>预期观察（先写再跑）</strong>：</p>
+<ul>
+  <li>每轮 trace 有 server_call → tool_result → result_written_to_context 三类事件，且同一个调用的 tool_call_id 全程一致；</li>
+  <li>订单不存在（MCP_TOOL_ERROR）后模型没有盲目重试同一调用，而是调整计划——SYSTEM_PROMPT 两条约束（必须用工具、失败不盲目重试）对应 Business 层失败由 Loop 重新规划，而不是重试。</li>
+</ul>
+
+<h3>实验 ③：分辨两类失败（无需 API key）</h3>
+<p><strong>怎么做</strong>：在 <code>mcp_host_v1.py</code> 的 <code>main()</code> 三个契约断言之后、LIVE 判断之前，追加两次执行：</p>
+<pre>a = await runtime.execute(
+    ToolCall("call_a", "orders_create_ticket", {}),
+    tools,
+)
+b = await runtime.execute(
+    ToolCall("call_b", "orders_create_ticket", {"order_id": "ord_1001", "reason": "太短"}),
+    tools,
+)
+print("A", a)
+print("B", b)</pre>
+<p>然后重跑 <code>python mcp_host_v1.py</code>，观察后删掉这两段。</p>
+<p><strong>预期观察（先写再跑）</strong>：</p>
+<ul>
+  <li>a（缺必填参数）：在 <code>validate</code> 本地拒绝，返回 INVALID_ARGUMENT，trace 只有 runtime_rejected、没有 server_call——<strong>零副作用</strong>；</li>
+  <li>b（参数合法但 reason 只有 2 个字符，Server 端要求 4–100）：通过 Schema 校验、真实发到 Server、Server 抛 <code>ToolError("INVALID_REASON")</code> 归一化为 MCP_TOOL_ERROR——trace 里有 server_call；</li>
+  <li>两类失败在 trace 上一眼可分：Runtime 拦下的没有 server_call，Server 报的一定有。</li>
+</ul>
+
+<h3>实验 ④：制造超长结果（无需 API key）</h3>
+<p><strong>怎么做</strong>：改 <code>mcp_server_v1.py</code> 的 <code>get_order</code> 返回值，加一个约 3000 字符的字段：</p>
+<pre>return {"ok": True, **order, "note": "长" * 3000}</pre>
+<p>重跑 <code>python mcp_client_v1.py</code>（它恰好调用 get_order ord_1001），观察后改回。</p>
+<p><strong>预期观察（先写再跑）</strong>：</p>
+<ul>
+  <li><code>result_payload</code> 把返回值 JSON 编码后超过 max_chars=2000，返回 <code>{"ok": False, "code": "RESULT_TOO_LARGE"}</code>；</li>
+  <li>超长内容不会进入模型上下文——归一化清单里「限制长度和类型」的实物验证。</li>
+</ul>
+
+<h3>实验 ⑤：绕过 Runtime 直调（反面教材，做完即删）</h3>
+<p><strong>怎么做</strong>：在 <code>loop_v1.py</code> 的 <code>run_order_agent</code> 里，把 <code>await runtime.execute(tool_call)</code> 临时换成直调：</p>
+<pre>tool_result = await runtime.client.call_tool(
+    tool_call.name, json.loads(tool_call.arguments_json)
+)</pre>
+<p>设好 key 跑一次 <code>python loop_v1.py</code>，对照观察后删掉恢复。</p>
+<p><strong>预期观察（先写再跑）</strong>：</p>
+<ul>
+  <li>trace 里没有这个调用的任何事件、参数未经 <code>validate_arguments</code> 校验、异常没有被归一化成 MCP_TRANSPORT_ERROR、返回的是原始协议对象——没有 tool_call_id 包装、没有大小限制，直接 <code>json.dumps</code> 甚至可能抛 TypeError；</li>
+  <li>这就是没有收口的直接后果：亲手复现「第二个执行入口」的全部危害。对照 0006 插件化边界——「效率手段永远不能制造第二个执行入口」这条红线在 MCP 场景的等价物。</li>
+</ul>
+<p>实验 ③④⑤ 分别验证了四层失败中的两层、归一化的长度防线、以及「唯一执行入口」红线。做完后问自己第三层问题：<strong>接入一个新 Server，哪些治理动作发生在发现时，哪些发生在执行时？</strong>——答案是 0006 的两次检查纪律在 MCP 场景的完整复用：发现时进 Snapshot，执行时 invoke 里校验。</p>
+
+<hr>
+
+<h2>回读与验证指引</h2>
+<p>按诊断报告的薄弱点，对照回读（不需要重读整份笔记）：</p>
+<ul>
+  <li>MCP 定位 / 四组件分工 / 一次远端调用链 -&gt; 笔记 2.3 一、（行 732–769）。</li>
+  <li>Host / Client / Server / Transport / 调用方向 / 连接纪律 -&gt; 笔记 2.3 二、（行 771–782）。</li>
+  <li>三种原语 / 权限不写在 Prompt / 四层失败 -&gt; 笔记 2.3 三、（行 784–809）；代码 <code>loop_v1.py</code> 的 execute 异常分支。</li>
+  <li>Server 发布三要点 / 权限事实来源 / 适配边界不转移责任 -&gt; 笔记 2.3 四、（行 811–850）；代码 <code>mcp_server_v1.py</code>。</li>
+  <li>stdio 与 Streamable HTTP / 版本纪律 -&gt; 笔记 2.3 五、（行 852–861）。</li>
+  <li>启动链 / 限定名 / discover 三边界 -&gt; 笔记 2.3 六、（行 863–917）；代码 <code>mcp_host_v1.py</code> 的 <code>discover_tools()</code>。</li>
+  <li>结果归一化 / 调用成功不等于目标完成 -&gt; 笔记 2.3 七、（行 919–961）；代码 <code>mcp_client_v1.py</code> 的 <code>result_payload()</code>。</li>
+  <li>【重测错题回读】最小 Loop 纪律 / 六名词表 / Snapshot 与紧急停用 / 插件边界 / tool_call_id 与幂等 -&gt; 笔记 2.1 四、五（行 278–364）+ 2.2 二、四、七（行 428–467、568–576、688–703）；代码 <code>2-1/minimal_tool_loop.py</code>、<code>2-1/plugins.py</code>、<code>2-2/tool_runtime_demo_v2.py</code>。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<p>本课最可信的原始材料仍是课程自身的笔记与代码：先读 <a href="../course_code/week02/第二章-学习笔记.md">第二章-学习笔记.md</a> 2.3「本节重点回顾」（行 972–976）对照自评；再沿一次调用读 <code>2-3/mcp_host_v1.py</code>：StdioServerParameters 启动子进程 → discover_tools 适配 → ToolRuntime.execute 契约断言 → run_agent 写回结果，这条文件内闭环就是「连接 → 发现 → 适配 → 投影 → 调用 → 归一化 → 回 Loop」的实物版。外部文档作协议核对用：<a href="https://modelcontextprotocol.io/specification/2025-06-18">MCP 官方规范</a>（Tools / Resources / Prompts 三原语与 stdio / Streamable HTTP 传输的权威定义）；架构背景可读 <a href="https://modelcontextprotocol.io/docs/getting-started/architecture">MCP Architecture 文档</a>。面试拓展可对照 <a href="https://docs.anthropic.com/en/docs/agents-and-tools/mcp">Anthropic MCP 文档</a>看协议设计方的表述。</p>
+
+<div class="ask-reminder">
+  <strong>卡住了就问你的 agent。</strong>任何一处让你觉得「等等，为什么」——比如为什么 Client 不能交给模型、为什么内部名和投影名要分开维护——直接回到对话里问。本课全部内容都在回答一个问题：<strong>外部世界的工具接进来之后，凭什么还敢说治理链没有分叉。</strong>
+</div>
+
+<div class="lesson-footer">
+  Week02 主题课序列：1/4 <a href="./0006-function-calling-tool-runtime.html">Function Calling 与 Tool Runtime</a> · <strong>2/4 MCP 外部能力接入</strong>（本课，2-3）· 3/4 工具治理与安全边界（2-4）· 4/4 阶段二项目（2-5，结课课）<br>
+  Week02 回顾：<a href="./0001-llm-to-agent-loop.html">从 LLM 到 Agent</a> · <a href="./0002-streaming-structured-output.html">Streaming 与 Structured Output</a> · <a href="./0003-prompt-engineering.html">Prompt Engineering</a> · <a href="./0004-llm-gateway.html">LLM Gateway</a> · <a href="./0005-trace-id-picture-and-provable-tests.html">补课：trace_id 画面</a> · <a href="./0006-function-calling-tool-runtime.html">Function Calling 与 Tool Runtime</a><br>
+  结课条件：① 前 5 题重测全对（0006 五个薄弱点确认消除）且 MCP 部分（第 6 题起）正确率 85% 以上；② 完成第三部分至少 3 个实验，预期一列全部先写后验；③ 不看稿 2 分钟讲清「连接 Server → 发现 → 适配 ToolDefinition → 投影 → 调用 → 归一化 → 回 Loop」这条链。三者都过，再向你的 agent 要主题课 3/4（工具治理与安全边界）。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  title: '第一部分：检索式测验（20 题 · 前 5 题为 0006 薄弱点换形式重测）',
+  questions: [
+    {
+      type: 'choice',
+      concept: '【重测】最小 Tool Loop 的纪律（代码审查形式）',
+      section: '0006 薄弱点重测',
+      notesRef: '0006 重测 · 笔记 2.1 五（行 319–364）+ 2-1/minimal_tool_loop.py',
+      question: '审查下面这段同事写的 Agent Loop：<pre>for step in itertools.count(1):\n    reply = provider.complete(messages, tools)\n    result = await runtime.execute(reply.tool_call)\n    messages.append({"role": "tool", "tool_call_id": reply.tool_call.id})\n    messages.append(reply.message)   # Assistant 消息最后补写\n    if reply.tool_call.name == "get_order":\n        result = await get_order(**reply.tool_call.arguments)</pre>以下审查结论正确的是？',
+      options: [
+        '三处违反纪律：循环无上界、结果先于 Assistant 写回、if 分派旁路 Runtime',
+        '代码整体合规，只是写法风格与课程示例不同，可以直接合入不必改动',
+        '唯一问题是变量命名不规范，导致 trace 事件无法按工具名对齐，其余完好',
+        '唯一问题是执行位置过早，把 execute 挪到两条消息写回之后即可全部合规'
+      ],
+      answer: 0,
+      explanation: '对照 minimal_tool_loop.py 的纪律逐条：①循环无上界——MAX_STEPS 必须由 Harness 强制执行，itertools.count 让任务可以无限消耗预算；②写回顺序——Assistant 消息必须先写回再追加 Tool Result，否则下一轮请求的对话里出现没有提出调用的结果，协议失效；③if call.name == 分派——Loop 不得直接分派业务函数，必须交给 runtime.execute，权限、校验、审计才不被旁路。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测】六名词职责表（变化场景形式）',
+      section: '0006 薄弱点重测',
+      notesRef: '0006 重测 · 笔记 2.2 二、四（行 428–467、525–576）',
+      question: '平台要把 get_order 从 v1 升级到 v2，新旧版本灰度共存两周。按六名词分工（ToolDefinition、Registry、工具发现、Snapshot、Runtime、handler），这次变化主要落在哪个对象上？',
+      options: [
+        '主要落在工具发现：版本属于本轮开放范围的一部分，Registry 只保存当前唯一生效版本',
+        '主要落在 Registry：它管理系统中有哪些工具和版本，其余对象的职责逻辑都不受影响',
+        '主要落在 Snapshot：版本升级就是把已创建的快照原地改写，旧会话立即切换到新协议',
+        '主要落在 handler：版本升级等于直接改写业务函数本体，Registry 与发现无需任何改动'
+      ],
+      answer: 1,
+      explanation: '六对象分工的结构是「一个对象管一种变化」：版本升级正是 Registry 面对的变化——它按 (name, version) 管理多版本共存与灰度路由。发现与 Snapshot 只消费 Registry 给出的路由结果；handler 换实现正是新版本注册进去的内容；快照只在本轮冻结，从不在原地改写。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测】Snapshot 与紧急停用（时间线形式）',
+      section: '0006 薄弱点重测',
+      notesRef: '0006 重测 · 笔记 2.2 四（行 568–576）',
+      question: '时间线：T0 本轮 Snapshot 创建（含 create_refund）；T1 Schema 投影给模型，模型开始思考；T2 运维发现漏洞，紧急停用 create_refund；T3 模型提出 create_refund 调用；T4 Runtime 执行前。正确的描述是？',
+      options: [
+        'Snapshot 不可变且已含该工具，T4 只能按快照执行，停用从下一轮快照开始生效',
+        '正确做法是 T2 时立刻销毁全部旧 Snapshot，并强制结束所有持有旧快照的会话',
+        'T4 执行前复查实时启停状态拦下调用；Snapshot 冻结版本，但不冻结紧急停用',
+        '该场景无法防住，只能在 T0 之前反复轮询启停状态，并禁止在模型思考期间停用工具'
+      ],
+      answer: 2,
+      explanation: '模型思考需要时间，T2 的停用改不进 T0 已冻结的快照，所以启停状态不能被快照冻结。两次检查分工：发现时检查避免模型围绕不可用工具制定计划；执行前复查防止「模型思考期间被紧急停用」这种时间差漏洞。demo_v2 的 invoke() 开头 TOOL_DISABLED / DEPENDENCY_UNAVAILABLE 分支就是执行前复查。版本冻结、启停现查，两者是一对张力：一致性换时间，可干预性保安全。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测】插件化的边界（代码审查形式）',
+      section: '0006 薄弱点重测',
+      notesRef: '0006 重测 · 笔记 2.2 七（行 688–703）+ 2-1/plugins.py',
+      question: '审查这段插件代码：<pre>class RefundPlugin:\n    def apply(self, ctx):\n        ctx.register_tool(CREATE_REFUND)\n        async def fast_path(arguments):\n            return await CREATE_REFUND.handler("call_x", arguments)\n        add_route("/refund-fast", fast_path)  # 不走 invoke()</pre>审查结论是？',
+      options: [
+        '插件本不应注册工具：工具只能由 Runtime 自身代码内置注册，外部不得增删能力',
+        '问题只在缺少撤销函数：补上卸载清理逻辑后，直调 handler 与快速通道都可以保留',
+        'fast_path 命名与内部规范不一致：把函数改名 handle 并补全注释后这条路径即可放行',
+        '直调 handler 且另造执行路径：权限、校验、审计、trace 全部旁路，必须拒绝合入'
+      ],
+      answer: 3,
+      explanation: '插件的作用范围只有三件事：声明依赖、注册能力、保存撤销动作（谁注册谁负责卸载时清理）；执行必须全部回到 Runtime 的 invoke()。绕过 invoke 直调 handler、或另起一条路由，等于制造第二个执行入口——「效率手段永远不能制造第二个执行入口」的实物化。审查题里凡是「快速通道」「直调」「旁路」字样，一律红灯。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测】tool_call_id 与业务幂等键（场景形式）',
+      section: '0006 薄弱点重测',
+      notesRef: '0006 重测 · 笔记 2.1 四（行 278–317）+ 2.2 五（行 639–648）',
+      question: 'create_refund 超时返回 TIMEOUT_UNKNOWN。下一轮模型重新规划，生成新的 tool_call_id，请求执行同一笔退款（同订单同金额）。如果系统的副作用防重只依赖 tool_call_id，会发生什么？正确做法是？',
+      options: [
+        '新旧 ID 不同，去重失效可能重复退款；防重要靠业务对象加动作加参数摘要',
+        '新旧 ID 相同，去重自然生效；Runtime 只需把上一次的 ID 复制进新的调用即可',
+        '超时后模型必然放弃这笔退款，不存在二次执行的可能，因此无需任何防重机制',
+        '下游幂等键用 tenant_id 加 call.id 拼接，就能同时防住自动重试与模型重新规划'
+      ],
+      answer: 0,
+      explanation: 'tool_call_id 是模型每轮输出的字段，模型重新规划就是一次全新提议，ID 必变；但业务上仍是同一笔退款——它管「本次对话内调用与结果的关联」，不管「跨轮次同一业务动作只做一次」。第四个选项是笔记里的真实例子（idempotency_key=f"{tenant_id}:{call.id}"），但它只保护 Runtime 自动重试（同一次 call，ID 不变）；模型重新规划是新 call，下游幂等键跟着失效——两条重试线要分开记。'
+    },
+    {
+      type: 'choice',
+      concept: 'MCP 的定位：解决什么不解决什么',
+      section: '2-3 一',
+      notesRef: '笔记 2.3 一（行 732–769）',
+      question: 'MCP 和 Function Calling、Tool Runtime、Agent Loop 是什么关系？',
+      options: [
+        'MCP 统一替代 Function Calling 与 Runtime 的职责，Loop 只负责收尾汇报结果',
+        '四者分工不同：选工具靠 Function Calling，发布发现靠 MCP，校验执行靠 Runtime',
+        'MCP 是某家供应商对 Function Calling 协议的换名实现，与 Runtime 没有任何交集',
+        'MCP 负责参数校验、授权与结果收口，Runtime 退化为协议编解码的传输适配层'
+      ],
+      answer: 1,
+      explanation: '笔记分工表：Function Calling 解决「模型怎样选择工具并生成结构化参数」；MCP 解决「外部能力怎样发布、发现和调用」；Tool Runtime 解决「当前调用怎样校验、授权、执行和收口」；Agent Loop 解决「Tool Result 怎样进入下一轮决策」。MCP 接入不改变 0006 建立的任何一条治理边界。'
+    },
+    {
+      type: 'choice',
+      concept: 'Host / Client / Server / Transport 四名词',
+      section: '2-3 二',
+      notesRef: '笔记 2.3 二（行 771–782）',
+      question: 'Host、MCP Client、MCP Server、Transport 各自负责什么、不负责什么？',
+      options: [
+        'Host 就是本地 Server 的别名，Client 承载 Agent Loop 与全部业务治理逻辑',
+        'Server 承载 Agent 与会话，Host 只负责 stdio 子进程的启动、退出与重启管理',
+        'Host 承载 Agent 与 Runtime；Client 管协议通信；Server 发布能力且结果不天然可信',
+        'Transport 决定业务权限与租户隔离，Client 与 Server 的身份在握手阶段可以互换'
+      ],
+      answer: 2,
+      explanation: '四名词表：Host 是承载 Agent、会话、Runtime 和 Loop 的应用；Client 是 Host 内连接一个 Server 的协议组件，不替代 Runtime 的业务治理；Server 通过协议发布 Tools/Resources/Prompts，其结果不代表天然可信；Transport 是 stdio 或 Streamable HTTP 等传输方式，不决定是否有业务权限。'
+    },
+    {
+      type: 'choice',
+      concept: '三种原语：Tool / Resource / Prompt',
+      section: '2-3 三',
+      notesRef: '笔记 2.3 三（行 784–798）',
+      question: '咖啡订单案例里，Tool、Resource、Prompt 三种原语分别放什么？',
+      options: [
+        '同一份能力应复制成三种原语全部发布，才算完整用上 MCP 的全部功能',
+        '真实订单状态应放进 Resource，Tool 只负责把任务提示词模板参数化组装',
+        '三种原语都能执行副作用动作，按性能预算选择实现最轻量的那一种即可',
+        '真实订单状态必须来自 Tool；状态说明可为 Resource；任务提示可为 Prompt'
+      ],
+      answer: 3,
+      explanation: '三原语表：Tool 用于需要参数并执行查询或副作用动作（get_order、create_ticket）；Resource 是有稳定 URI、可重复读取的只读上下文（policy://order-status）；Prompt 是由用户显式选择的参数化任务模板。笔记明确不建议为了「完整使用 MCP」把同一能力复制成三种原语。'
+    },
+    {
+      type: 'choice',
+      concept: '权限红线：不能只写在 Prompt',
+      section: '2-3 三',
+      notesRef: '笔记 2.3 三（行 798）',
+      question: '业务权限为什么不能只写在 Prompt 里？',
+      options: [
+        'Prompt 是行为提示，不是确定性安全边界，权限必须落在治理链路上',
+        'Prompt 文本体积过大时，模型会在长上下文里逐渐忽略其中的权限描述',
+        'Prompt 属于 Server 端原语，Host 侧的 Runtime 根本读不到也无法校验',
+        '写在 Prompt 里的权限会与系统提示词冲突，模型将转而优先执行用户指令'
+      ],
+      answer: 0,
+      explanation: '笔记原文：业务权限不能只写在 Prompt 中（甚至不推荐放在 Prompt 中），因为 Prompt 是行为提示，不是确定性安全边界。这是 0006「Tool Call 是不可信数据」的姊妹红线：提示词影响模型行为，治理链决定能不能执行，两者不能互相替代。'
+    },
+    {
+      type: 'choice',
+      concept: '四层失败',
+      section: '2-3 三',
+      notesRef: '笔记 2.3 三（行 800–809）+ 2-3/loop_v1.py',
+      question: 'MCP 调用失败分 Transport、Protocol、Tool、Business 四层，为什么要分层？',
+      options: [
+        '分层只为日志字段统一美观，处理时统一抛出 Exception("tool failed") 即可收口',
+        '四种失败对应不同处理位置：该重连的重连、修参的修参、归一化交 Loop、重新规划',
+        '每一层都应自动重试三次，由最外层统一汇总所有失败结果后再集中发出告警',
+        'Business 层失败由 MCP Client 负责修复，业务预检查因此属于多余可以省去不做'
+      ],
+      answer: 1,
+      explanation: '四层失败表：Transport（子进程退出、HTTP 断连）由 Client/Connection Manager 处理；Protocol（方法不存在、版本不兼容）由 SDK/MCP Adapter 处理；Tool（ORDER_NOT_FOUND、is_error=true）由 Runtime 归一化后交给 Loop；Business（订单存在但状态不允许退款）由业务预检查与 Loop 重新规划处理。分层的 why：全变成 Exception("tool failed") 后，系统无法判断该重连、修参数、换计划还是停止。'
+    },
+    {
+      type: 'choice',
+      concept: 'MCP Server 的发布边界',
+      section: '2-3 四',
+      notesRef: '笔记 2.3 四（行 811–850）+ 2-3/mcp_server_v1.py',
+      question: 'mcp_server_v1.py 的发布代码里，类型注解、structured_output、ToolError 分别解决什么？',
+      options: [
+        '类型注解只起文档作用；返回格式由 Host 端从返回文本里用正则提取解析得到',
+        'ToolError 主要用于传输层断连重连场景，结构化输出会绕开 Runtime 的参数校验',
+        '注解生成输入 Schema；结构化输出避免从自然语言解析结果；ToolError 提供稳定错误码',
+        '类型注解会暴露内部实现细节，Server 端应改为手工维护 JSON Schema 字符串再发布'
+      ],
+      answer: 2,
+      explanation: '笔记三点：类型注解生成输入 Schema；结构化输出避免 Host 从自然语言解析业务结果；稳定错误码让 Loop 能够采取下一步行动。对应代码：get_order(order_id: str) 由注解生成 Schema；structured_output=True 返回结构化字典；raise ToolError("ORDER_NOT_FOUND") 成为 Loop 可决策的错误协议——与 0006 的 Error Schema 同一纪律。'
+    },
+    {
+      type: 'choice',
+      concept: '权限事实的来源',
+      section: '2-3 四',
+      notesRef: '笔记 2.3 四（行 846–850）',
+      question: 'tenant_id、用户身份、授权凭证这些权限事实，在 MCP 架构下应该从哪里来？',
+      options: [
+        '由模型在 Tool Call 参数中填写，Server 侧无条件信任参数里携带的身份字段',
+        '由 Prompt 模板在任务开始前注入对话，模型读取后随调用转交给 Server 验证',
+        '由 Transport 握手阶段 Client 推测生成，Server 校验字段格式正确后直接放行',
+        'Server 从认证上下文获取，或由 Host 使用受控凭证连接，不由模型生成'
+      ],
+      answer: 3,
+      explanation: '笔记 2.3 四：权限相关内容不应由模型生成；Server 可以从认证上下文获取这些事实，也可以由 Host 使用受控凭证连接。这与 0006 prepare 阶段铁律（user_id、tenant_id、role、approved 必须来自服务端可信上下文）同构，而且 MCP 场景更严：模型连连接凭证都碰不到。'
+    },
+    {
+      type: 'choice',
+      concept: 'stdio 与 Streamable HTTP',
+      section: '2-3 五',
+      notesRef: '笔记 2.3 五（行 852–861）',
+      question: 'stdio 与 Streamable HTTP 怎样选？stdio 的主要风险是什么？',
+      options: [
+        '本地子进程用 stdio，共享远程服务用 HTTP；模型能控制启动命令就退化成任意执行',
+        'stdio 天然安全，因为子进程环境封闭，无需再管理参数、工作目录与环境变量',
+        'Streamable HTTP 只适合测试联调使用，生产环境的所有外部工具都应走 stdio 接入',
+        '两种传输的风险完全相同，选择标准只有带宽：低带宽选 stdio，高带宽选 HTTP'
+      ],
+      answer: 0,
+      explanation: '笔记传输表：stdio 的治理对象是可执行文件、参数、工作目录、环境变量、退出与重启；Streamable HTTP 的治理对象是服务身份、鉴权、网络隔离、超时、容量和多租户。stdio 通讯简单原始但不等于天然安全——模型能控制启动命令就可能退化成任意命令执行；Host 把全部环境变量传给子进程就容易泄漏无关密钥。协议版本与握手细节交给固定版本的官方 SDK，业务 Tool 不做版本判断。'
+    },
+    {
+      type: 'choice',
+      concept: '限定名与命名投影',
+      section: '2-3 六',
+      notesRef: '笔记 2.3 六（行 863–917）+ 2-3/mcp_host_v1.py',
+      question: '多个 Server 都发布了同名 search 工具，Host 应该怎么处理命名？',
+      options: [
+        '按注册顺序追加数字后缀得到 search1、search2，让模型自行猜测工具的归属',
+        '用 server_id 限定名注册（如 orders.get_order）；模型协议层可换写法但内部名稳定',
+        '保留原始名称，Runtime 用字符串替换猜测工具来源，发生冲突时随机保留一个',
+        '让模型在调用参数里注明目标 Server 的名称，Runtime 不做任何命名上的处理'
+      ],
+      answer: 1,
+      explanation: '笔记：Host 应使用限定名.工具名（orders.get_order、github.search_code、filesystem.read_file）；如果 Provider 不允许点号（笔记点名 DeepSeek），可以在模型协议层投影为 orders__get_order，但内部名称保持稳定并保存双向映射，绝不能依赖字符串替换猜测来源。mcp_host_v1.py 里 discover_tools 用 f"{server_id}_{remote.name}" 生成 orders_get_order 就是这层投影的实物。'
+    },
+    {
+      type: 'recall',
+      concept: '启动链与治理不分叉',
+      section: '2-3 六',
+      notesRef: '笔记 2.3 六（行 863–917）',
+      question: '从连接 Server 到模型看到工具，正确的启动链是什么？为什么不能把 MCP Client 直接交给模型、也不能让 Loop 按 Server 名称写特殊分支？',
+      hint: '六步链路；三个判断边界都和「治理不分叉」有关。',
+      modelAnswer: '启动链：连接 Server → 发现 Tools/Resources/Prompts → 为工具增加 server_id 限定名 → 转换为内部 ToolDefinition → 进入 Registry 并创建 Run 级 Snapshot → 向模型投影 Function Calling Schema。<br>不能直接交给模型、不能写 Server 分支的 why：<strong>统一治理链路</strong>——MCP 协议对象只停留在 Adapter 内部；远端 Tool 被包装成与本地工具相同的内部定义；handler 返回前完成结果归一化并保留原始 Tool Call 关联。外部工具从发现起就被翻译成内部工具，之后走的 Registry → Snapshot → invoke() 与本地函数没有区别——这是「唯一执行入口」在跨进程场景的延续；治理链一旦分叉，权限、校验、审计就对一半工具失效。'
+    },
+    {
+      type: 'choice',
+      concept: 'discover_tools 的三个判断边界',
+      section: '2-3 六',
+      notesRef: '笔记 2.3 六（行 886–917）',
+      question: 'discover_tools() 这段适配代码体现的三个判断边界是？',
+      options: [
+        '协议对象直接暴露给 Agent Loop；远端工具按 Server 写分支处理；结果原样回灌',
+        'Adapter 只负责改名字这一件事，参数校验和结果归一化都推迟到模型下一轮再补',
+        '协议对象留在 Adapter 内部；远端工具包装成内部 ToolDefinition；返回前完成归一化',
+        '远端工具注册两份定义，一份投影给模型一份留给 Server，两边各自独立演进'
+      ],
+      answer: 2,
+      explanation: '笔记三个判断边界：MCP 协议对象只停留在 Adapter 内部；远端 Tool 被包装成与本地工具相同的内部定义；handler 返回前完成结果归一化，并保留原始 Tool Call 关联。对应 mcp_host_v1.py：client 只在 discover_tools 的闭包里出现，handler 内部调 client.call_tool 之后必须先经 result_payload 归一化才返回。'
+    },
+    {
+      type: 'recall',
+      concept: 'MCP 结果归一化',
+      section: '2-3 七',
+      notesRef: '笔记 2.3 七（行 919–961）+ 2-3/mcp_client_v1.py',
+      question: 'MCP Server 返回的结果为什么属于外部输入？进入模型 Context 前至少要做哪些动作？normalize_mcp_result / result_payload 是怎么做的？',
+      hint: '想想它可能「过长、包含敏感数据、带内部异常、诱导模型」；归一化函数有三个返回分支。',
+      modelAnswer: '因为它和 Tool Call 一样属于不可信数据：可能过长、包含敏感数据、带有内部异常，甚至包含诱导模型执行其他动作的文本。<br>进入 Context 前至少：区分协议失败、Tool Error 和业务失败；优先使用结构化内容；限制长度和类型；脱敏凭证、个人信息和内部字段；明确标记来源；保留 tool_call_id；把外部文本当数据，而不是更高优先级指令。<br>归一化三分支：is_error → {"ok": false, "code": "MCP_TOOL_ERROR"}；编码超过 max_chars → RESULT_TOO_LARGE；都通过才返回 {"ok": true, "content": value} 并带上 tool_call_id。'
+    },
+    {
+      type: 'choice',
+      concept: '调用成功不等于目标完成',
+      section: '2-3 七',
+      notesRef: '笔记 2.3 七（行 959–961）',
+      question: '一次 MCP 调用返回成功（协议与 Server 均正常），这代表什么？',
+      options: [
+        '业务动作全部完成，Loop 可以直接结束任务并向用户汇报操作成功',
+        '用户已经获得授权，Runtime 无需再做任何权限或审批方面的复查工作',
+        '结果已经完成脱敏且体积合规，可以原样写回模型上下文继续推进对话',
+        '只表示协议与 Server 返回正常，不代表用户目标完成，Loop 仍要读结果定下一步'
+      ],
+      answer: 3,
+      explanation: '笔记原话：MCP 调用成功，只表示协议和 Server 返回正常，不代表用户目标已经完成。Agent Loop 仍要读取 Tool Result，决定继续调用、修改计划、询问用户或结束。这是「Tool Call 是建议不是执行」的对称句：协议层的 ok 不携带语义层结论。'
+    },
+    {
+      type: 'choice',
+      concept: '调用方向与连接生命周期',
+      section: '2-3 二',
+      notesRef: '笔记 2.3 二（行 780–782）',
+      question: '使用 MCP 访问外部工具时，调用方向和连接生命周期分别怎么安排？',
+      options: [
+        '方向 Host → Client → Server → Tool；Connection Manager 管连接，业务工具不自启连接',
+        '方向 Server → Client → Host → Tool；每个业务工具各自启动并持有独立的连接',
+        '方向 Client → Host → Tool → Server；SDK 对象直接穿透进 Agent Loop 里直接使用',
+        '方向 Host → Server → Tool → Client；连接由模型发起 Tool Call 的时候临时建立'
+      ],
+      answer: 0,
+      explanation: '笔记 2.3 二：调用方向是 Host → Client → Server → Tool；Client 管理协议通信，Connection Manager 管理连接生命周期；业务 Tool 不应该自己启动连接，也不应该把 SDK 对象穿透到 Agent Loop。SDK 对象一穿透，协议细节就漏进治理链，「MCP 协议对象只停留在 Adapter 内部」这条边界就破了。'
+    },
+    {
+      type: 'choice',
+      concept: '面试综合：MCP 会替代谁',
+      section: '2-3 一 + 六',
+      notesRef: '笔记 2.3 一（行 734）+ 六（行 863–917）',
+      question: '面试官问：「有了 MCP，Function Calling 和 Tool Runtime 会不会被替代？」你的回答是？',
+      options: [
+        '会。MCP 统一了全链路，Function Calling 与 Runtime 是过渡方案将被逐步淘汰',
+        '不会。三者分工不同：选工具靠 Function Calling，发布发现靠 MCP，校验执行靠 Runtime',
+        'Function Calling 只面向进程内的函数调用，MCP 与 Runtime 只用于 HTTP 的远程服务',
+        'Runtime 属于模型供应商的能力，接入 MCP 后由 Server 端统一完成校验与审计'
+      ],
+      answer: 1,
+      explanation: '标准答案结构：MCP 是 Agent Host 与外部能力之间的标准接入协议，负责发布、发现和调用能力，但不替代 Function Calling（模型怎样生成结构化调用）、Tool Runtime（当前调用怎样校验授权执行收口）和 Agent Loop（结果怎样进入下一轮决策）。再主动补一句深度：接入 MCP 后治理链不变——远端工具仍要先适配成内部 ToolDefinition，走同一条 invoke()。'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>

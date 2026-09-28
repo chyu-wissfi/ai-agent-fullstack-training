@@ -110,3 +110,31 @@ sequenceDiagram
     G->>S: 写入脱敏审计记录
     G-->>H: ToolResult（安全内容）
 ```
+
+## 治理的编排与事实：谁在哪里
+
+治理链跑在 `ToolRuntime.invoke()` 里（唯一入口），但治理的「事实」分布在外部对象上，
+被注入、被调用。Runtime 依赖它们，而不是包含它们：
+
+```text
+服务端 / Harness                    ToolDefinition ×N
+  │ 创建（登录态/服务间身份）         │ ToolPolicy、precheck 挂在身上
+  ↓                                 ↓ 注册
+ExecutionContext ──────────→ Registry（demo 里简化为 self._tools）
+                              │ 发现期白名单 + 投影 Schema（第一次检查）
+                              ↓
+                    ToolRuntime.invoke(call, ctx)   ← 唯一入口
+                      prepare：Pydantic → 门禁梯子
+                        ├─ 调 PermissionEngine.decide()   ← 协作者①：决策
+                        ├─ 调 tool.precheck()             ← 来自 Definition
+                        └─ 调 ApprovalStore.consume()     ← 协作者②：持久状态
+                      execute：handler + 锁/超时/重试
+                      finalize：redact() → AuditSink.write() ← 协作者③：审计出口
+```
+
+拆分的 why（一个对象管一种变化）：
+
+- 规则（ToolPolicy）挂在 ToolDefinition 上——改某个工具的审批要求不等于改 Runtime 代码；
+- 身份（ExecutionContext）由服务端创建、每次调用传入——身份每次不同，不能固化为全局状态；
+- 决策（PermissionEngine）、状态（ApprovalStore / AuditSink）是注入的协作者——换决策逻辑、换审计存储都不动执行链。
+
