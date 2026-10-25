@@ -6,3 +6,4 @@ dist/
 .env
 .qoder
 CLAUDE.md
+__pycache__/
