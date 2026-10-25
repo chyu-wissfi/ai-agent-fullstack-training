@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week03 主题课 1/7 · 从 Runtime 到 Agent Loop</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 03 · 主题课 1 / 7 · 覆盖课程小节 3-1 · 新版式：先讲后测，精讲与测验五五开</p>
+<h1>从 Runtime 到 Agent Loop</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：Week03 第一课。第二章让 Agent 获得了<strong>受控的单次工具调用</strong>能力；这一课把 Tool Runtime 接进 pi 的 <code>runAgentLoop</code>，让 Tool Result 写回 Context、驱动模型多轮循环——Agent 从「会调一次工具」升级为「能持续推进一个任务直到完成或停止」。本课开始改用<strong>先讲后测</strong>版式：第一部分精讲建地图，第二部分测验检验，两者各占一半。<br>
+  <strong>材料定位</strong>：<code>course_code/week03/第三章-学习笔记.md</code> 3.1 节（学生版学习笔记，<strong>本课术语以此为准</strong>）+ <code>course_materials/week03/3-1.pdf</code>（42 页教师 PDF）<br>
+  <strong>代码定位</strong>：<code>course_code/week03/3-1/codebasedemo/</code>（最终版，TypeScript + pi 0.84.4 + vitest）；核心新文件 <code>src/loop-guard.ts</code>（Run 级停止决策中心）、<code>src/agent-runner.ts</code>（装配层）<br>
+  <strong>预计用时</strong>：精讲 30 分钟 + 测验 25 分钟 + 第二层动手练习 30 分钟<br>
+  <strong>本课验收标准</strong>（PDF 第 6、41 页）：能解释——pi Loop 如何从 Tool Call 进入下一轮；找到模型调用、工具执行、结果回写、停止判断四个位置；将 Tool Runtime 包装成 pi AgentTool；为任务定义完成条件；实现最大轮数与重复动作保护；证明第三次重复调用不进 Handler；说明中断与恢复的区别。
+</div>
+
+<h2>怎么用这一课</h2>
+<p><strong>先讲后测，五五开</strong>（2026-10-11 起的新版式）：第一部分精讲先把地图建好——五个对象、pi 最小循环、LoopGuard 四项控制、钩子装配时序，读的时候每节自问「这解决了什么事故」；第二部分 18 题测验检验留存，前 2 题是 Week02 治理内容的<strong>间隔重测</strong>（Loop 时代治理不变量是否还记得），做完页面底部自动生成诊断报告。</p>
+<p><strong>这一课在三层学法里的位置</strong>：<strong>第一层建地图</strong>——精讲第 2 节的五个对象表和第 7 节的钩子时序图是本课两张「必须能默画」的图；<strong>第二层跑代码</strong>——第三部分实验①–④全部<strong>离线可跑、不需要任何 API key</strong>（测试用脚本化模型响应）；<strong>第三层工程师级</strong>——精讲贯穿两个问法：「停止判定如果删掉/换序，哪类事故会发生」「这条结论怎么落成测试断言」。</p>
+<p class="sidenote">就业面试视角：Agent 岗位面试的必考题就在本课——「Agent Loop 的停止条件怎么设计」（协议停止 vs 业务完成的分层）、「模型说做完了你能信吗」（Completion Contract + FINAL_REJECTED）、「怎么防死循环」（指纹去重 + 最大轮数）。这三题答得出「为什么分层」，就把 90% 只背过 ReAct 名词的候选人甩在身后。</p>
+
+<hr>
+
+<h2>第一部分：精讲（先读，测验在后）</h2>
+
+<h3>0. 开篇地图：第三章在解决什么问题</h3>
+<p>第三章的核心问题（笔记开篇）：一个需要搜索、阅读、修改、验证和纠错的长任务，Agent <strong>怎样持续推进，并在中断、审批和异常之后仍然知道自己做到了哪里</strong>。整章沿一条连续主线展开，七个小节各管一段（这张表建议记在脑子里，后面每课都会在其中推进一格）：</p>
+<pre>3.1 Agent Loop       Tool Result 回来以后怎样继续？什么时候停止？   ← 本课，重点展开
+3.2 Planning         复杂目标怎样拆步骤，计划怎样修订？
+3.3 State/Checkpoint 任务状态怎样持久化，中断以后怎样恢复？
+3.4 Sandbox          文件、Shell、网络和凭证能力怎样划定执行边界？
+3.5 Agent Harness    模型、工具、状态、上下文、环境、审批怎样连成完整系统？
+3.6 LangGraph        分支、并行、人工中断、循环、可视化怎样显式编排？
+3.7 Codebase Agent v2 仓库工具与真实任务怎样组成完整项目闭环？</pre>
+<p>七节不是七个独立知识点：Loop 解决「怎样继续」，但没有计划就容易忘记目标；计划和证据需要保存（State/Checkpoint）；Agent 能真正操作文件和进程后需要 Sandbox；组件分别正确不等于接起来正确（Harness）；流程出现复杂分支、长时间等待人工和循环时需要显式编排（LangGraph）；最终所有能力汇到 Codebase Agent，由两类真实仓库任务验收。本课先让 Agent <strong>真正循环起来</strong>；后面每课在这条线上推进一格。3.1 自己只预留接口（Snapshot、prepareNextTurn），不实现。</p>
+
+<h3>1. 为什么需要 Loop：不是步骤多，是新事实</h3>
+<p>Chatbot 问一次答一次；Agent 可能连续执行几十步——但「步骤多」不是需要 Loop 的理由。真正的理由（PDF p6）：代码理解任务开始时，Agent 不知道代码是什么语言、路由文件在哪、登录函数叫什么、有没有中间件、用的 ORM 还是裸 SQL。它<strong>不能一开始就制定完全可靠的固定计划</strong>，只能通过观察逐步获取事实，而下<strong>一步依赖上一步产生的新事实</strong>。</p>
+<p>一句话锚点：<strong>复杂任务需要 Loop，不是因为步骤多，而是因为下一步依赖上一步产生的新事实。</strong></p>
+<p>控制权从用户移交给了模型，人的工作方式也变了——PDF p1 引用 Peter Steinberger 的「You shouldn't be prompting coding agents anymore. You should be designing loops that prompt your agents」：不是不再写提示词，而是人的关注点从「逐轮提示」上移到「设计触发、反馈和验收系统」。同时注意边界：<strong>Loop 不替代 Prompt、Context 和 Harness，而是在它们之上增加控制层</strong>。</p>
+<p>什么样的任务适合自主 Loop（PDF p3）？三个条件：目标清晰、结果可验证、过程能持续产生新证据并逐步收敛。「把 CLI 迁移到另一种语言并用功能清单+编译+测试验收」适合；「把 UI 做得更好看」没有客观完成标准，不适合。另外区分两层含义：<strong>任务内循环</strong>（一次 Run 内部观察→决策→调用→读结果→再决策）和<strong>任务外循环</strong>（什么事件触发 Run、结束后何时再启动、谁判断目标真正完成）——分清两层，就不会把定时任务、Sub-agent、Memory、Workflow 全混进 Agent Loop 里。</p>
+
+<h3>2. 五个对象：面试的第一张必答题</h3>
+<p>教师 PDF p6 给的是四层区分（Function Calling / Tool Runtime / Agent Loop / LoopGuard）；学习笔记把它扩成<strong>五个对象</strong>，补上 Harness——因为 3.5 整节都在讲 Harness，从第一课就把它放进地图，后面每课都在给这一行添内容。这张表是本课最核心的地图，也是面试官区分「调过 SDK」和「理解架构」的第一题：</p>
+<pre>对象              负责回答的问题                    示例
+─────────────────────────────────────────────────────────────────────
+Function Calling  模型怎样表达下一步动作？           「调用 search_code，搜索 auth」
+Tool Runtime      这一次动作能否执行，怎样执行？     校验路径、权限、超时并运行搜索
+Agent Loop        Tool Result 回来以后怎么办？      把命中结果交给模型，继续读文件
+LoopGuard         整个 Run 还能不能继续？           最大轮数、重复动作、总时间
+Harness           这些组件怎样围绕同一任务协同？     装配模型、工具、状态、上下文和执行环境
+─────────────────────────────────────────────────────────────────────
+一次工具调用的边界：Tool Call → 校验 → 授权 → 执行 → Tool Result
+一次任务的执行边界：Run 开始 → 多轮模型与工具交互 → 完成/停止 → Run 结束</pre>
+<p><strong>Why（怎么记）</strong>：Function Calling 管「表达」，Runtime 管「执行」，Loop 管「衔接」，Guard 管「刹车」，Harness 管「装配」。Loop 增加的是<strong>连续执行能力</strong>，但每一步仍然走第二章建好的 Runtime——<strong>循环不能绕过参数校验、权限、超时、审计和结果治理</strong>。这是第二章不变量 I3（唯一执行入口）在 Loop 时代的延续。</p>
+<p>笔记还给了这张表的另一个视角——<strong>LoopEngine 管什么</strong>：它<strong>不替模型思考</strong>，负责让模型的连续思考和行动能够启动、反馈、收敛并安全停止，至少管理五件事：① 组装本轮 Context；② 调用模型；③ 分发 Tool Call；④ 回写 Tool Result；⑤ 决定继续还是结束。本课的主角 LoopGuard（最大轮数、重复动作检测、取消信号、完成契约）全部属于第⑤件事下的控制机制——面试里这句「不替模型思考」是加分点：宿主控制循环的安全，模型决定循环的内容。</p>
+
+<h3>3. pi 的最小循环：两种判断 + 工程保护</h3>
+<p>不需要从头写 Loop（PDF p6）：复用 pi、Codex 等成熟框架，只有适配特定基础设施时才自己实现。pi 的核心判断只有两种（PDF p7）：</p>
+<pre>async function runAgentLoop(context, config) {
+  while (true) {
+    const assistant = await streamAssistantResponse(context, config);
+    context.messages.push(assistant);
+
+    if (["error", "aborted"].includes(assistant.stopReason)) return;   // 判断②异常停止
+
+    const calls = assistant.content.filter(x => x.type === "toolCall");
+    if (calls.length === 0) return;                                    // 判断①协议停止
+
+    const results = await executeToolCalls(calls, config);
+    context.messages.push(...results);                                 // 写回 Context
+
+    if (await config.shouldStopAfterTurn?.({ assistant, results })) return;
+  }
+}</pre>
+<p>即：Assistant Message <strong>有</strong> Tool Call → 执行工具并进入下一轮；<strong>没有</strong> → 当前工具循环结束。真正有价值的不是这个 <code>while</code>，而是循环中的<strong>工程保护</strong>——长循环最容易错的地方（PDF p8）：内外两层循环混淆、流式占位消息顺序、执行前准备缺失、执行后收尾缺失、事件与取消缺失。后面 LoopGuard 和钩子装配就是在补这些保护。</p>
+
+<h3>4. Turn 与 Run：事件让循环可观测</h3>
+<p>一轮 Turn（PDF p8）：<code>turn_start → Assistant 流式生成 → 零或多个 Tool Call → Tool 执行 → Tool Result Message → turn_end</code>。一次 Run 包含多个 Turn，事件序列是：</p>
+<pre>agent_start
+ ├─ turn_start
+ ├─ message_start / update / end
+ ├─ tool_execution_start
+ ├─ tool_execution_end
+ ├─ Tool Result message_start / end
+ ├─ turn_end
+ ├─ turn_start ……（下一轮）
+ └─ agent_end</pre>
+<p><strong>Why（事件有什么用）</strong>：Loop 决定循环<strong>能否运行</strong>，事件决定运行过程<strong>是否清晰、可观测、可干预</strong>。统计轮数、记录工具动作、观察模型和工具是否卡住、支持 Trace/UI/Checkpoint/人工接管，全都挂在事件上。对应代码：装配层 <code>observeEvent()</code>（<code>src/agent-runner.ts:126</code>）只记录不改推进——观察者不干预，是 Loop 和事件系统的分工。</p>
+
+<h3>5. 协议停止 ≠ 业务完成：本课最重要的分层</h3>
+<p>模型不再调用工具，只说明<strong>协议层准备停止</strong>，不等于<strong>业务层任务完成</strong>（PDF p9）。它可能是：已经完成 / 没找到目标 / 忘记写交付物 / 只读了部分代码 / 调用出错后提前结束。所以业务完成要由上层判断，分三层（PDF p14–16）：</p>
+<pre>第一层：协议停止信号    Assistant Message 无 Tool Call（pi 原生，只代表"模型不打算再调工具"）
+第二层：最大轮数        max_turns——安全边界，不是完成条件；到上限必须明确报告
+                        stopped / MAX_TURNS_EXCEEDED / completed:false，不能伪装成成功
+第三层：业务完成条件    Completion Contract——由可验证的工程事实组成，写成可测试的代码
+第四层：不可继续的运行  aborted / 用户取消 / 超轮数超时 / 不可恢复权限拒绝 /
+                        重复动作 / 需人工确认但拿不到确认 → 不应继续调模型</pre>
+<p>完成契约的真实实现（<code>src/loop-guard.ts:161</code> <code>verifyCompletion()</code>）：读取源码 ≥ 3 个 + 目标产物已写入，<strong>返回缺失项列表而不是布尔值</strong>——为什么？缺失项会被 Follow-up 消息逐条带回给模型，模型知道具体补什么；布尔值只能拒绝，模型会盲试。证据规则也在这层：<strong>证据只能来自成功的工具结果</strong>（<code>observeToolResult</code>，`loop-guard.ts:103`），模型在文本里声称「已读取」「已写入」不构成证据——和 Week02「调用成功 ≠ 目标完成」是同一句话。</p>
+<p>当模型提前 Final 但证据不足：Host 拒绝 Final，注入一条用户角色的 Follow-up（稳定标识 <code>FINAL_REJECTED</code> + 缺失项清单），让 Agent 继续补证据。关键：Follow-up 属于<strong>同一个 Run，不重置轮次与动作计数</strong>——否则模型可以用「提前结束再重来」刷掉计数，保护全部失效。</p>
+<p>停止的最后一级是<strong>把原因讲清楚</strong>（笔记 6.3）：至少区分三类结果——<strong>完成</strong>（契约通过、交付物存在且证据有效）、<strong>等待用户</strong>（需要补充信息、审批或决策）、<strong>主动停止</strong>（预算耗尽、取消、权限阻断或不可恢复错误）。锚点：<strong>停止自动执行不等于失败，更不等于成功</strong>——界面和日志都要说清具体是哪一种，调用方才能决定重跑、等待还是放弃。注意「等待用户」是一类：3.3 的人工接管和 3.5 的审批门禁都会落在这一格。</p>
+
+<h3>6. LoopGuard 走读：Run 级停止决策中心</h3>
+<p><code>src/loop-guard.ts</code> 只做四件事（PDF p27）：①第三次相同动作不执行；②达到最大轮数停止；③从成功工具结果收集证据；④证据不足时拒绝 Final 并 Follow-up。边界：不调模型、不执行工具、不碰文件系统、不实现 Planner/状态机/Checkpoint/Sandbox。</p>
+<p><strong>停止判定顺序，不可调换</strong>（<code>loop-guard.ts:123</code> <code>afterTurn()</code>）：</p>
+<pre>1) 已存在停止原因      → 立即停止
+2) 达到最大轮数        → 以最大轮数原因停止
+3) 本轮无工具结果      → 模型准备自然结束 → 执行完成校验
+   ├─ 契约满足         → COMPLETED 结束
+   └─ 契约不满足       → 生成 FINAL_REJECTED Follow-up，继续
+4) 本轮有工具结果      → 允许继续</pre>
+<p><strong>Why（顺序为什么不能换）</strong>：①放最前——一旦发生过 REPEATED_ACTION，后续任何判定都不能把 Run 拉回来，刹车踩了就是踩了；②在③前——轮数是硬预算，完成校验是软判断，硬边界必须先于软判断，否则超限的 Run 会多跑一轮；③只在「无工具结果」时触发——有工具结果说明模型还在干活，此时打断它做完成校验没有意义。<strong>停止原因一旦设置不得被后续覆盖</strong>（<code>stop()</code> 私有方法的 if 守卫，`loop-guard.ts:194`）：先触发停止的事实必须被如实保留，否则事故复盘会看到被覆盖过的假原因。</p>
+<p><strong>动作指纹去重</strong>（`loop-guard.ts:202`）：动作 = 工具名 + <strong>规范化参数</strong>（递归排序对象字段后 sha256）。规范化复用第二章「审批参数摘要」的实现——字段顺序不同但语义相同的参数必须得到同一指纹，否则换序就能绕过检测。第一次与第二次允许执行，第三次在 <strong>Runtime handler 之前</strong>被阻止（<code>beforeToolCall</code> 钩子里先累加计数再判断，`loop-guard.ts:85`），并设置 REPEATED_ACTION 停止原因。<strong>为什么必须在 handler 前</strong>：重复动作的代价不只是浪费 token——如果工具带副作用（写文件、提交代码、触发外部操作），执行了才有「拦住」的意义就晚了。验收证据也由此而来：证明拦截真生效的唯一证据是 <strong>handler 实际只执行了两次</strong>，而不是错误码出现了（错误码可以伪造，执行次数伪造不了）。</p>
+<p><strong>相同动作一定是死循环吗</strong>（PDF p18）？不一定：<code>run_test("pytest tests/test_login.py")</code> 第一次失败、第二次通过——同一动作在不同上下文产生不同结果。所以动作指纹只是<strong>保守的入门保护</strong>，真正判断进展要问六个问题（笔记 7.2）：文件版本有没有变化、测试结果有没有变化、已验证事实有没有增加、计划步骤有没有推进、错误原因有没有变化、是否出现 A、B 两种动作来回切换的<strong>振荡</strong>。确认停滞时的处理也不是立刻杀掉：先给明确反馈，允许有限次调整策略；仍然没有新证据，就结束并报告卡在哪里。3.1 只实现最小去重，为 Plan 和 State Machine 打基础。</p>
+
+<h3>7. 装配与时序：Guard 怎么接进 pi 原生 Loop</h3>
+<p><code>src/agent-runner.ts</code> 是纯装配层：创建运行状态 → 创建 LoopGuard → 创建 Runtime 与执行上下文 → 把 Runtime 适配成 pi 工具 → 构造 Context（System Prompt + 工具列表）→ 构造用户任务 → 接入钩子 → 调用 pi 的 <code>runAgentLoop()</code>。<strong>禁止自建循环</strong>（不变量 I5）：底层循环完全由 pi 提供，全工程只有一条模型循环和一条工具执行路径。钩子接入表：</p>
+<pre>pi 钩子                  接的 Guard 方法            职责
+────────────────────────────────────────────────────────────────
+beforeToolCall           guard.beforeToolCall       重复动作保护（handler 前拦截）
+afterToolCall            guard.observeToolResult    收集成功证据
+shouldStopAfterTurn      guard.afterTurn            停止判定（四步顺序）
+getFollowUpMessages      guard.drainFollowUps       自然停止时注入 FINAL_REJECTED
+prepareNextTurn          （空实现）                 为 3.3 Checkpoint 预留位置
+getSteeringMessages      返回空集合                 运行中转向（本课不用）</pre>
+<p><strong>pi 的实际调用时序</strong>（PDF p30，安装版本 0.84.4，课件按 0.83.0 描述）：</p>
+<pre>turn_end → prepareNextTurn → shouldStopAfterTurn → getSteeringMessages
+         → （若自然停止）getFollowUpMessages</pre>
+<p><strong>Why（这个时序为什么值得记）</strong>：完成校验发生在 <code>shouldStopAfterTurn</code>，而它排在 <code>prepareNextTurn</code> <strong>之后</strong>——所以证据必须在本轮 Tool Result 更新之后完成校验才能读到（本课证据在 afterToolCall 收集，天然满足；将来证据若挪到 prepareNextTurn 更新，这个顺序就是坑）。这也是 PDF 反复要求「核对实际安装版本的钩子顺序，与 readme 描述比对，差异写进报告」的原因：<strong>钩子顺序是框架实现细节，不实测就会踩</strong>。</p>
+<p><strong>steering 与 follow-up 不是一回事</strong>（笔记 4.4）：运行中用户补充一句「这次只看移动端入口」，属于 <strong>steering</strong>——pi 在当前轮次与工具处理结束后的<strong>安全边界</strong>接收它，影响后续决策；用户说「分析完再补一份接口清单」，更适合排进 <strong>followUp</strong>——当前工具循环准备自然停止时再接着处理。本课的 FINAL_REJECTED 走的正是 follow-up 通道（getFollowUpMessages 只在自然停止时被调用，与上面时序图对上）。两者都属于本次执行的消息处理，不等同于定时调度（那是任务外循环的事）。</p>
+<p><strong>工具执行前后 Hook 的准确位置</strong>（笔记 4.5）：执行前 <strong>prepare</strong>——pi 先找工具、兼容参数、校验 Schema，<em>然后才</em>调用 <code>beforeToolCall</code>（所以本课的重复动作拦截发生在 Schema 校验之后、真实 handler 之前）；执行后 <strong>finalize</strong>——调用 <code>afterToolCall</code>，允许截断、脱敏或标记错误。两条容易忽略的规则：① 准备失败会形成<strong>错误 Tool Result</strong>（不会静默丢掉这次调用）；若要提前终止请求，只有当前批次<strong>所有</strong>工具结果都设置 <code>terminate: true</code> 才触发批次终止；② 即使工具并行执行，回写也<strong>按原 Tool Call 顺序</strong>组织——模型看到的结果顺序与它发起调用的顺序一致。另外，模型、Hook 和工具收到<strong>同一个 AbortSignal</strong>——中断才能沿整条执行链传播，而不是只停止界面输出。</p>
+<p>另外注意两个装配细节：<code>convertToLlm</code> 只把用户/助手/工具结果消息转换给模型（System Prompt 与内部消息不混入）；<code>maxRetries: 0</code>——重试由 Gateway 负责（Week01 的分工），Agent 进程不重复实现。</p>
+
+<h3>8. ReAct 与 Plan-and-Execute：Loop 是发动机，Plan 是导航</h3>
+<p>ReAct（PDF p10）是「观察—决策—行动」闭环：观察当前结构和已有工具结果 → 判断还缺什么证据 → 提出 Tool Call → 读 Tool Result → 继续或 Finalize。它的价值不是展示模型完整思维，而是<strong>让每一步行动都有可追溯的观察依据</strong>。分工一句话：<strong>Loop 决定「要不要继续」，ReAct 决定「下一步往哪走」。</strong></p>
+<p>Plan-and-Execute 关注总目标拆成哪些阶段。二者可结合：Plan 管整体路线，ReAct 管执行中的局部决策。「找登录逻辑并写说明」适合 ReAct 起步（文件与调用关系未知）；「给指定函数补测试并修复」适合轻量计划 + ReAct（目标明确但要经历定位→补测试→运行→修正→回归多阶段）。本节不引入完整 Planner，3.2 再把局部决策升级为结构化、可跟踪、可修订的计划。</p>
+<p><strong>工程上保存什么</strong>（PDF p12）：保存可审计的动作记录（工具、参数、Runtime 是否放行、返回、新增事实、为什么继续或停止），即 <code>ToolCall + Runtime 结果 + Tool Result + Observation + 停止依据</code>；<strong>不保存模型完整推理过程</strong>——推理可能含隐私与无关试错、模型自述不如工具结果客观、恢复任务只需要事实和状态。这份记录结构就是第 4 节 TraceEvent 的雏形。</p>
+
+<h3>9. 中断与恢复：不是同一件事</h3>
+<p>中断 = 停止正在运行的模型和工具；恢复 = <strong>从可信状态继续任务</strong>（PDF p19）。AbortSignal 把取消信号从入口传到模型流、工具和 Hook。但中断时系统可能正处于模型生成中/工具执行中/结果写回中/文件已产生部分副作用——所以中断必须配合<strong>保存点</strong>设计。<strong>重新发送原 Prompt 只是重新开始，不是恢复</strong>：重跑会重复写文件、重复提交代码、重复触发外部操作、覆盖已有结果。真正的恢复必须知道已经发生了什么，从可信保存点继续。本课只预留 Snapshot 接口（runId / messages / turn / evidence / stopCode），持久化到 3.3 实现。</p>
+
+<h3>10. 从 SOP 拆 Loop：五问对应表</h3>
+<p>业务 SOP 怎么变成 Agent（PDF p33–35）？依次问五个问题：</p>
+<pre>稳定规则        → System Prompt / Completion Contract   必须生成 Markdown 文档
+动态决策        → LLM + Loop                            下一步搜哪个符号、读哪个文件
+真实动作        → Tool Runtime                          搜索、读取、写入
+硬边界          → LoopGuard                             最大轮数、重复动作
+人机决策        → HITL（3.5 展开）                       修改源码前确认</pre>
+<p><strong>Why（不要把 SOP 写成固定脚本）</strong>：直接把 SOP 翻成顺序执行程序，得到的是 workflow 而不是 Agent——它无法应对未知路径（文件位置不知道、调用链要现查）。Agent 的价值恰恰在「动态决策」那一格。本课只接四个工具（list_files / search_code / read_file / write_file），笔记给了它们的后续增强路线：<code>list_files</code>/<code>write_file</code> 的完整文件边界与 Sandbox 在 3-4、<code>search_code</code> 的搜索策略在 3-7、<code>read_file</code> 的 Context 管理在第四章——工具清单跟着任务走，每个工具的「最小版」和「完全版」在这张路线图上对号入座。</p>
+
+<h3>11. TDD 验收：怎么证明规则不是摆设</h3>
+<p>只看最终生成的 Markdown，只能证明模型会写字；要证明 Loop 按预期运行，需要两层测试（PDF p36）：脚本化测试（稳定复现边界条件）证明<strong>机制存在</strong>，真实集成测试（真实 Gateway + 模型）证明<strong>机制能工作</strong>。六个行为验收场景（<code>tests/loop.test.ts:86</code> 起）：</p>
+<pre>场景一 · Tool Result 回写    第二轮 Context 有 toolResult 消息，toolCallId 与原 Call 对应
+场景二 · 拒绝提前完成        无证据 Final → 注入 FINAL_REJECTED → 补齐后成功结束
+场景三 · 重复动作拦截        三次相同调用，第三次在 handler 前被阻止，handler 恰执行 2 次
+场景四 · 最大轮数            maxTurns=3，模型调用恰 3 次，无第四次
+场景五 · 取消传播            abort 后以取消原因结束，之后不再开始任何工具执行
+场景六 · 完整闭环            搜索→读 3 文件→写产物→引用路径真实存在，轨迹可按
+                             runId/turn/toolCallId 还原</pre>
+<p>注意断言的口味：全部指向<strong>可观测的行为事实</strong>（调用次数、消息内容、handler 执行次数），而不是内部状态或模型自述——这是 Week01「有证明力的断言」在 Loop 层的延续。</p>
+
+<h3>12. 面试视角：这一课怎么被问</h3>
+<ul>
+  <li><strong>「Agent Loop 的停止条件怎么设计？」</strong>——答分层：协议停止（无 Tool Call）只是信号；业务完成靠 Completion Contract 校验，不足则 FINAL_REJECTED Follow-up；最大轮数是安全边界不是完成条件，到限必须如实报告 stopped。追问「为什么不直接信模型」→ 模型可能没找到目标/忘记交付物/出错早退，且 Follow-up 不重置计数，防止刷保护。</li>
+  <li><strong>「怎么防 Agent 死循环？」</strong>——动作指纹（工具名+规范化参数）计数，第三次在 handler 前拦截；追问「相同动作一定是死循环吗」→ run_test 二次通过的反例，生产级要看新事实是否产生。追问「怎么证明拦截生效」→ handler 执行次数=2，不是看错误码。</li>
+  <li><strong>「Agent Loop 和 Function Calling 什么关系？」</strong>——五个对象表：表达/执行/衔接/刹车/装配；强调 Loop 不绕过第二章治理（I3 唯一入口在循环里继续生效）。追问「宿主侧的 Loop 控制层替模型思考吗」→ 不替：LoopEngine 只管启动、反馈、收敛、安全停止（组装 Context、调模型、分发 Tool Call、回写结果、决定继续还是结束），模型决定循环的内容。</li>
+  <li><strong>「中断以后怎么办？」</strong>——中断≠恢复，重发 Prompt 会重复副作用；恢复要从可信保存点（Snapshot）继续，3.3 展开。</li>
+</ul>
+
+<hr>
+
+<h2>第二部分：检索式测验（18 题 · 先读精讲再测 · 前 2 题为 Week02 间隔重测）</h2>
+<div id="quiz"></div>
+
+<hr>
+
+<h2>第三部分：第二层练习——跑起来，再主动改造（精讲与测验之后）</h2>
+<p>实验①–④<strong>离线可跑、不需要任何 API key</strong>（测试用脚本化模型响应）。实验③④是主动改造：<strong>先写下预期，再跑，再对照</strong>；做完把代码改回原样。所有命令从仓库根目录开始执行。</p>
+
+<h3>实验 ①：跑全量测试，找到六个行为验收场景（无需 API key）</h3>
+<ul>
+  <li>进入目录并安装依赖：<pre>cd course_code/week03/3-1/codebasedemo
+npm install</pre></li>
+  <li>跑全量测试：<pre>npm test</pre></li>
+  <li>预期（先写再跑）：全部测试通过；在 <code>tests/loop.test.ts</code> 中找到六个场景的用例名，与精讲第 11 节的表逐一对应；注意「场景三」的断言里 handler 执行次数是几。</li>
+</ul>
+
+<h3>实验 ②：只看拦截证据——handler 到底执行了几次（无需 API key）</h3>
+<ul>
+  <li>只跑 LoopGuard 的测试：<pre>npx vitest run tests/loop-guard.test.ts</pre></li>
+  <li>打开 <code>tests/loop-guard.test.ts</code>，找到「第三次被阻止」的用例，读断言里计数器的来源（Runtime 提供的 handler 执行计数，P1 验收第 7 条）。</li>
+  <li>预期：断言证明的是 handler 执行了 2 次，而不仅仅是返回了 REPEATED_ACTION 错误码——对照精讲第 6 节「唯一验收证据」。</li>
+</ul>
+
+<h3>实验 ③：主动改造——把最大轮数改成 2（无需 API key）</h3>
+<ul>
+  <li>把 <code>src/agent-runner.ts:24</code> 的 <code>DEFAULT_MAX_TURNS = 12</code> 改成 <code>2</code>。</li>
+  <li><strong>先写预期</strong>：哪些测试会红？红的原因是轮数不够还是停止原因不对？「场景四」用例自己传了 maxTurns，会受影响吗？</li>
+  <li>跑 <code>npm test</code>，对照你的预期；理解后把值改回 12，再跑一次确认全绿。</li>
+</ul>
+
+<h3>实验 ④：亲手验证钩子时序（无需 API key）</h3>
+<ul>
+  <li>在 <code>src/agent-runner.ts:106</code> 的 <code>prepareNextTurn</code> 里加一行 <code>console.log("[hook] prepareNextTurn");</code>，在 <code>shouldStopAfterTurn</code> 那行（<code>src/agent-runner.ts:107</code>）加 <code>console.log("[hook] shouldStopAfterTurn");</code>。</li>
+  <li>跑 <pre>npx vitest run tests/loop.test.ts</pre></li>
+  <li>预期：两条日志的相对顺序验证精讲第 7 节的时序（prepareNextTurn 在 shouldStopAfterTurn 之前）；做完删掉两行 log。</li>
+</ul>
+
+<h3>实验 ⑤：真实运行完整任务（可选，需要真实环境）</h3>
+<ul>
+  <li>需要 Week01 的 Gateway（或等价的 OpenAI-compatible 端点）和 API key：<pre>export GATEWAY_BASE_URL="http://127.0.0.1:8000/v1"
+export GATEWAY_API_KEY="<你的 Gateway Key>"
+npm run start</pre></li>
+  <li>运行时重点观察六点（PDF p33）：是否经历多轮模型调用；Tool Result 是否进入下一轮 Context；缺少文档时是否拒绝 Final；第三次重复动作是否被拦截；达到最大轮数后是否停止；tool_call_id 是否贯穿完整事件链。</li>
+  <li>产物 <code>artifacts/login-flow.md</code> 会生成在产物目录；跑完可以用 runId / turn / toolCallId 还原完整轨迹。</li>
+</ul>
+
+<h2>回读与验证指引</h2>
+<ul>
+  <li>primary source：<code>course_code/week03/第三章-学习笔记.md</code> 3.1 节（学生版笔记，行 142–717，本课术语以此为准）——重点回读「先分清五个对象」「LoopEngine 管什么」「steering 与 follow-up」「工具执行前后 Hook」「死循环识别」「中断与恢复」。</li>
+  <li>教师 PDF：<code>course_materials/week03/3-1.pdf</code>——重点回读 p6–p10（分层概念、pi 循环、协议停止）、p16–p18（死循环识别）、p27–p30（LoopGuard 规则与钩子时序）。</li>
+  <li>代码回读顺序：<code>src/loop-guard.ts</code>（先读注释头，再读 <code>afterTurn</code> 四步顺序）→ <code>src/agent-runner.ts</code>（只看装配，不找规则）→ <code>tests/loop.test.ts</code>（六个场景对应六条断言）。</li>
+  <li>源码参考（PDF p42）：pi 的 <code>agent-loop.ts</code>（底层循环、Tool Result 回写、停止 Hook）、<code>agent.ts</code>（事件订阅、取消、steering 与 follow-up）、<code>types.ts</code>（AgentLoopConfig / AgentTool / AgentEvent）。</li>
+  <li>笔记附录「源码与工程阅读路线」：本课对应前两条（agent-loop.ts / agent.ts）；整章的六步阅读顺序——任务从哪里进入 → 模型决策在哪产生 → 调用在哪校验授权 → 结果怎样回写 → 完成/暂停/恢复怎么判断 → 用失败场景验证连接——可以用前三步检验本课是否读通。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<ul>
+  <li><code>course_code/week03/第三章-学习笔记.md</code>（学生版学习笔记，第三章全 7 节，本课术语以此为准）</li>
+  <li><code>course_materials/week03/3-1.pdf</code>（教师 PDF，42 页）</li>
+  <li><code>course_code/week03/3-1/codebasedemo/</code>（最终版代码，pi 0.84.4）</li>
+  <li><code>course_code/week03/3-1/codebase_agent_demo/</code>（第一版，保留一次真实运行的产物 <code>artifacts/login-flow.md</code>，可对照看真实 8 轮循环长什么样）</li>
+</ul>
+
+<div class="ask-reminder">
+  <strong>卡住了就问你的 agent。</strong>任何一处让你觉得「等等，为什么」——比如为什么停止判定顺序不能换、为什么 Follow-up 不重置计数、为什么 handler 执行次数才是拦截证据——直接回到对话里问。本课全部内容都在回答一个问题：<strong>Tool Result 回来以后，怎样让 Agent 既继续推进、又在该停的时候停得住。</strong>
+</div>
+
+<div class="lesson-footer">
+  Week03 主题课序列：<strong>1/7 从 Runtime 到 Agent Loop</strong>（本课，3-1）· 2/7 Planning 与任务拆解（3-2）· 3/7 State Machine 与 Checkpoint（3-3）· 4/7 Sandbox 与执行边界（3-4）· 5/7 Agent Harness（3-5）· 6/7 LangGraph 与 Agent 编排（3-6）· 7/7 项目三：Codebase Agent v2（3-7，结课课）<br>
+  Week02 回顾：<a href="./0006-function-calling-tool-runtime.html">Function Calling 与 Tool Runtime</a> · <a href="./0007-mcp-external-capabilities.html">MCP 外部能力接入</a> · <a href="./0008-tool-governance-and-security.html">工具治理与安全边界</a> · <a href="./0009-phase2-project-agent-tool-infrastructure.html">阶段二项目</a><br>
+  结课条件：① 前 2 题间隔重测全对且正题（第 3 题起）正确率 85% 以上；② 完成实验①–④至少 3 个，改造类实验预期先写后验；③ 不看稿 2 分钟讲清：五个对象表 + 停止判定四步顺序 + 「协议停止 ≠ 业务完成」的分层理由。三者都过，再向你的 agent 要主题课 2/7（Planning，3-2）。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  title: '第二部分：检索式测验（18 题 · 前 2 题为 Week02 间隔重测）',
+  questions: [
+    {
+      type: 'choice',
+      concept: '【重测】治理不因循环而分叉（代码审查形式）',
+      section: 'Week02 间隔重测',
+      notesRef: '0008 · 笔记 2.4 + loop-guard 边界注释',
+      question: '审查这段装配层代码（Loop 内的工具分派）：<pre>for (const call of assistant.toolCalls) {\n  if (call.name === "write_file") {              // 写文件走快速路径\n    await fs.writeFile(artifactRoot + call.args.path, call.args.content);\n    messages.push(toolResult(call.id, "写入成功"));\n    continue;                                    // 直接进入下一轮\n  }\n  const result = await runtime.invoke(call, executionContext);\n  messages.push(result);\n}</pre>审查结论是？',
+      options: [
+        '只违反了路径校验：快速路径少了 resolve 后的越界检查，补上检查即可保留该分支',
+        '只是性能优化写法：写文件本来就简单，绕过 Runtime 不影响其他工具的治理一致性',
+        '违反唯一入口不变量：write_file 分支绕开 Runtime，治理链对这次调用整体失效（I3）',
+        '违反了轮数纪律：continue 跳过了 shouldStopAfterTurn 钩子，导致 Run 无法停止推进'
+      ],
+      answer: 2,
+      explanation: 'I3（所有工具执行只经过唯一的 Runtime 入口）在 Loop 时代继续生效——本章 p7 原文「Loop 增加的是连续执行能力，但不能绕过第二章已经建立的参数校验、权限、超时、审计和结果治理」。write_file 的 if 特殊分支就是 0008 讲过的「治理分叉」：这一次调用的参数校验、路径越界检查、审计记录全部消失。A 只看到路径问题没看到治理整体旁路；D 混淆了钩子位置（shouldStopAfterTurn 在轮末执行，与 continue 无关）。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测】治理链跑在哪里（归属重测）',
+      section: 'Week02 间隔重测',
+      notesRef: '0008 · 笔记 2.4 追加澄清（0009 重测考点）',
+      question: 'Agent Loop 接入之后，权限判断、审批、审计这条治理链实际运行在哪里？',
+      options: [
+        '运行在 pi 的 runAgentLoop 内部：框架原生内置了权限引擎、审批队列与审计接收器',
+        '运行在 Runtime 的 invoke 唯一入口里：Loop 只负责调度衔接，治理不因循环而分叉',
+        '运行在每个工具的 handler 里：谁执行谁治理，各 handler 自行决定权限与审计逻辑',
+        '运行在模型的 System Prompt 里：用提示词约束模型只在获得许可之后才发起工具调用'
+      ],
+      answer: 1,
+      explanation: '0008 测后澄清的归属题：治理链跑在 Runtime 的 invoke()（唯一入口）里，规则（ToolPolicy）挂 ToolDefinition、事实（ExecutionContext）服务端传入、协作者（PermissionEngine/ApprovalStore/AuditSink）注入外部——「一个对象管一种变化」。Agent Loop 只是新的调用方，它通过 pi 工具适配层进入同一个 Runtime。C 是 0008 讲过的反模式（handler 各自为政，治理碎片化）；D 提示词不是安全边界，只是行为引导。'
+    },
+    {
+      type: 'choice',
+      concept: '为什么需要 Loop',
+      section: '3-1 一',
+      notesRef: '3-1.pdf p1–p6',
+      question: '「复杂任务需要 Loop」的真正原因是什么？',
+      options: [
+        '步骤数量太多，单次请求的输出长度放不下，必须拆成多轮才能完成全部动作',
+        '下一步依赖上一步产生的新事实，必须等真实结果回来才能决定后面做什么',
+        '模型的上下文窗口太小，多轮可以把中间结果摊开存储避免超过长度限制',
+        '工具执行有速率限制，多轮循环能把调用次数摊开到更长的时间线上去执行'
+      ],
+      answer: 1,
+      explanation: 'PDF p6 原文锚点：「复杂任务需要 Loop，不是因为步骤多，而是因为下一步依赖上一步产生的新事实」。代码理解任务开始时语言、路由位置、函数名全未知，不能一次定死计划——每一步的 Tool Result 决定下一步的走向。A/C/D 描述的都是「多」的表象，不是「依赖」的本质。'
+    },
+    {
+      type: 'choice',
+      concept: '五个对象的职责区分',
+      section: '3-1 三',
+      notesRef: '笔记 3.1 三 + 3-1.pdf p6–p7',
+      question: '「这些组件怎样围绕同一任务协同（装配模型、工具、状态、上下文和执行环境）」是五个对象中哪个对象负责回答的问题？',
+      options: [
+        'Function Calling：模型表达下一步动作的协议层能力',
+        'Agent Loop：Tool Result 回来以后怎么办的衔接层',
+        'LoopGuard：整个 Run 还能不能继续的停止决策层',
+        'Harness：把各组件装配成完整执行系统的装配层'
+      ],
+      answer: 3,
+      explanation: '笔记把 PDF 的四层表扩成五个对象：Function Calling 管「表达」、Runtime 管「执行」、Agent Loop 管「衔接」、LoopGuard 管「刹车」、Harness 管「装配」——装配模型、工具、状态、上下文和执行环境，3.5 整节展开。锚点：表达 / 执行 / 衔接 / 刹车 / 装配，每个对象只回答自己的问题。'
+    },
+    {
+      type: 'choice',
+      concept: 'LoopEngine 管什么',
+      section: '3-1 一',
+      notesRef: '笔记 3.1 一 · LoopEngine 管什么',
+      question: '关于宿主侧循环控制层（LoopEngine）管什么，下列说法正确的是？',
+      options: [
+        '它替模型规划下一步：分析工具结果并决定接下来调用哪个工具',
+        '它不替模型思考：只管启动、反馈、收敛与安全停止这五件事',
+        '它只负责性能优化：批量化请求与缓存工具结果以降低调用成本',
+        '它负责对话体验：管理界面渲染、流式展示与用户的输入框交互'
+      ],
+      answer: 1,
+      explanation: '笔记 3.1 一：LoopEngine 不替模型思考，它负责让模型的连续思考和行动能够启动、反馈、收敛并安全停止，至少管理五件事——组装本轮 Context、调用模型、分发 Tool Call、回写 Tool Result、决定继续还是结束。最大轮数、重复动作检测、取消信号和完成契约都属于第五件事下的控制机制。A 恰好说反：下一步调什么是模型的决策，宿主只管安全性。'
+    },
+    {
+      type: 'choice',
+      concept: 'steering 与 follow-up 的区别',
+      section: '3-1 四',
+      notesRef: '笔记 3.1 四 · steering 与 follow-up',
+      question: '运行中用户说「这次只看移动端入口」，接着又说「分析完再补一份接口清单」。pi 里两条指令分别怎么处理？',
+      options: [
+        '两条都走 steering：都在当前轮次工具处理结束后立即注入并影响后续决策',
+        '两条都走 followUp：都等当前工具循环自然停止后再依次处理这两条新消息',
+        '前者走 steering（安全边界接收、影响后续决策），后者排进 followUp（自然停止时再处理）',
+        '前者排进 followUp（自然停止时再处理），后者走 steering（安全边界接收、影响后续决策）'
+      ],
+      answer: 2,
+      explanation: '笔记 3.1 四：补充/收窄当前任务的指令（「只看移动端入口」）属于 steering，pi 在当前轮次与工具处理结束后的安全边界接收它，影响后续决策；「分析完再补一份」是追加的新目标，适合排进 followUp，当前工具循环准备自然停止时再接着处理。本课的 FINAL_REJECTED 走的正是 follow-up 通道。两者都属于本次执行的消息处理，不等同于定时调度（那是任务外循环）。'
+    },
+    {
+      type: 'choice',
+      concept: 'pi 最小循环的两种判断',
+      section: '3-1 四',
+      notesRef: '3-1.pdf p7–p8',
+      question: 'pi 原生 Agent Loop 结束当前工具循环的条件是什么？',
+      options: [
+        'Assistant 消息不再包含 Tool Call，或 stopReason 是 error / aborted',
+        '模型输出中出现 Final Answer 关键字，或连续两轮没有读取任何新文件',
+        '完成契约校验通过，或 LoopGuard 判定证据已经足够支撑交付',
+        '达到最大轮数上限，或同一动作指纹累计出现了第三次'
+      ],
+      answer: 0,
+      explanation: 'pi 的核心判断只有两种：有 Tool Call → 执行并下一轮；无 Tool Call → 循环结束；加上 stopReason 异常提前返回。注意 C 和 D 是 LoopGuard 的职责——pi 原生只给「协议层停止信号」，完成校验和最大轮数都是宿主在外面加的保护（这正是「Loop 不能替代工程保护」的分界线）。'
+    },
+    {
+      type: 'choice',
+      concept: 'Turn / Run / 事件序列',
+      section: '3-1 四',
+      notesRef: '3-1.pdf p8–p9',
+      question: '关于 Turn、Run 与事件，下列说法正确的是？',
+      options: [
+        '一个 Run 包含多个 Turn；每个 Turn 从 turn_start 到 turn_end，事件支撑统计与干预',
+        '一个 Turn 包含多个 Run；每次工具执行都是独立 Run，各自发出 agent_start 事件',
+        '事件只在 Run 结束后统一补发；运行过程中无法观察模型或工具是否已经卡住',
+        'turn_start 与 turn_end 之间只有模型生成；工具执行事件属于下一个 Turn 的范围'
+      ],
+      answer: 0,
+      explanation: 'Turn = 一轮（生成→Tool Call→执行→结果回写→turn_end）；Run = 一次任务，包含多个 Turn。事件用于：统计轮数、记录工具动作、观察是否卡住、判断是否允许继续、支撑 Trace/UI/Checkpoint/人工接管。B 层级颠倒；C 否定了事件的可观测价值（Loop 决定能否运行，事件决定运行是否清晰可干预）；D 工具执行事件就在本 Turn 内。'
+    },
+    {
+      type: 'choice',
+      concept: '协议停止 ≠ 业务完成',
+      section: '3-1 七',
+      notesRef: '3-1.pdf p9–p10、p14–p16',
+      question: '模型不再调用工具，返回了一段「任务已完成」的文本。系统接下来应该做什么？',
+      options: [
+        '立即结束 Run：协议层停止信号本身就是业务层完成证据，无需再做额外检查',
+        '执行完成校验：契约不满足则注入 FINAL_REJECTED 的 Follow-up，让同一 Run 继续补证据',
+        '直接把模型输出的文本转成产物文件写入产物目录，然后以成功原因结束本次 Run',
+        '重置轮次与动作计数后重新发送原始任务，让模型从头开始再执行一遍整个任务'
+      ],
+      answer: 1,
+      explanation: '没有 Tool Call 只是协议层的停止信号，不是业务层的完成证据（模型可能没找到目标/忘记写交付物/出错早退）。正确动作：完成校验 → 缺失则生成带 FINAL_REJECTED 稳定标识的 Follow-up，逐条列出缺失证据，让模型继续补齐。关键细节：Follow-up 属于同一个 Run，不重置轮次与动作计数（D 的做法会刷掉保护，让模型用「提前结束再重来」绕开计数）。'
+    },
+    {
+      type: 'recall',
+      concept: '完成契约为什么返回缺失项列表',
+      section: '3-1 七',
+      notesRef: '3-1.pdf p15 + loop-guard.ts:161',
+      question: 'verifyCompletion() 返回的是缺失项列表（string[]）而不是一个布尔值。为什么这样设计？',
+      hint: '想想这份返回值最终会流向哪里、被谁消费。',
+      modelAnswer: '两个理由：① 缺失项列表会被 Follow-up 消息逐条带回给模型（FINAL_REJECTED + 每一项缺失证据），模型据此知道具体要补什么——布尔值只能拒绝，模型不知道缺口在哪，只能盲目重试；② 返回缺失项让契约本身可测试（纯函数，断言能精确到「缺了哪一项」），也便于诊断报告展示。这是「拒绝要带理由」原则在完成校验上的落地，与 0008 审计「记录谁依据什么规则做了什么决定」同一口味。'
+    },
+    {
+      type: 'choice',
+      concept: '最大轮数是安全边界',
+      section: '3-1 七',
+      notesRef: '3-1.pdf p14–p15',
+      question: 'Run 达到 max_turns 上限后，系统的正确行为是什么？',
+      options: [
+        '把状态标记为部分完成：复用已生成的产物，向调用方报告本次任务成功结束',
+        '明确返回 stopped、MAX_TURNS_EXCEEDED、completed=false 与部分产物情况，不伪装成功',
+        '自动把 max_turns 翻倍并继续运行，直到模型自己自然停止调用工具为止',
+        '静默丢弃本次 Run 的全部记录与产物，等待调用方重新发起一个相同的任务'
+      ],
+      answer: 1,
+      explanation: 'PDF p14 原文：最大轮数「不是完成条件，而是安全边界」，作用是防止系统无限运行。到上限必须明确返回：任务未完成、因达到最大轮数而停止、是否存在部分产物、是否需要重试或人工介入。「不能把达到上限伪装成成功」（A）——调用方会基于 completed=false 做完全不同的后续决策。'
+    },
+    {
+      type: 'choice',
+      concept: '停止判定顺序不可调换',
+      section: '3-1 七',
+      notesRef: '3-1.pdf p28 + loop-guard.ts:123',
+      question: '如果把第 2 步「达到最大轮数」挪到判定顺序的最后（允许继续之后才检查），哪类事故会发生？',
+      options: [
+        '超限的 Run 只会多跑一轮模型调用，最终仍以最大轮数原因停止，影响基本可以忽略',
+        '本轮有工具结果时永远走不到轮数检查，模型可以无限运行，预算与时间失去边界',
+        '完成校验被提前执行，把证据不足的 Run 误判为成功并写入成功停止原因字段',
+        'Follow-up 消息会被重复注入两次，同一个任务在下一轮被模型完整执行两遍'
+      ],
+      answer: 1,
+      explanation: 'afterTurn 的判定顺序是：已有停止原因 → 最大轮数 → 无工具结果时完成校验 → 允许继续。若把轮数检查放在「允许继续」之后，它就是死代码：只要本轮有工具结果，判定走到第 4 步就返回 false 继续循环，永远到不了轮数检查——max_turns 形同虚设。这就是「硬边界（预算）必须先于软判断（完成校验）」的原因。'
+    },
+    {
+      type: 'choice',
+      concept: '重复动作拦截的验收证据',
+      section: '3-1 八',
+      notesRef: '3-1.pdf p17 + loop-guard.ts:85',
+      question: '重复动作拦截「真的生效」的唯一验收证据是什么？',
+      options: [
+        '第三次调用返回的错误结果中，包含稳定的 REPEATED_ACTION 错误码字符串',
+        'LoopGuard 的 actions 计数 Map 里，该动作指纹的计数值恰好等于三',
+        '相同动作对应的 Runtime handler 实际只执行了两次，第三次未进入 handler',
+        '模型在收到错误结果之后主动道歉，并改用不同的搜索词重新发起调用'
+      ],
+      answer: 2,
+      explanation: 'PDF p29 验收第 2 条原文：「对应 Runtime handler 实际只执行两次（这是拦截是否真生效的唯一证据）」。错误码可以是打印出来的假信号，计数是内部状态——只有「真实世界里的执行次数」伪造不了。这也是 P1 要求 Runtime 提供 handler 执行计数读取能力的原因。与 Week01「有证明力的断言」一脉相承：断言要指向可观测的行为事实。'
+    },
+    {
+      type: 'choice',
+      concept: '指纹为什么要规范化参数',
+      section: '3-1 八',
+      notesRef: '3-1.pdf p17 + loop-guard.ts:202',
+      question: '动作指纹在哈希前要对参数做递归排序（canonicalJson），为什么要这么做？',
+      options: [
+        '让语义相同的参数（字段顺序不同）得到同一指纹，避免换序绕过重复检测',
+        '减小哈希之前的字符串长度，降低 sha256 计算的 CPU 与内存开销',
+        '保证不同工具的同名参数会落到同一个指纹，方便跨工具做次数统计汇总',
+        '让指纹输出的十六进制字符串保持稳定排序，方便日志按字典序快速检索'
+      ],
+      answer: 0,
+      explanation: '指纹 = 工具名 + 规范化参数。如果直接 JSON.stringify，{query:"login", path:"."} 和 {path:".", query:"login"} 是两个不同字符串、两个不同指纹——模型只要换个字段顺序就绕过了第三次拦截。递归排序让语义相同的参数归一到同一指纹，这是第二章「审批参数摘要」规范化实现的复用。B/C/D 都是把实现细节错当设计目的。'
+    },
+    {
+      type: 'choice',
+      concept: '相同动作不一定是死循环',
+      section: '3-1 八',
+      notesRef: '3-1.pdf p18',
+      question: 'Agent 连续两次执行 run_test("pytest tests/test_login.py")，第一次失败、第二次全部通过。这说明什么？',
+      options: [
+        'LoopGuard 存在漏判：相同指纹的动作本应在第三次出现之前就被全部阻止掉',
+        '同一动作在不同上下文可能产生不同结果，最小去重之外还要看是否产生新事实',
+        '测试类工具应当加入豁免名单，任何测试相关的动作都不计入重复动作计数',
+        '模型违反了使用规范，应该在 System Prompt 里明确禁止重复调用测试工具'
+      ],
+      answer: 1,
+      explanation: 'PDF p18 的经典反例：单独看两次调用完全相同，但第二次的结果从红变绿——产生了新事实（修复生效了），这不是死循环。3.1 只实现最小动作去重；生产级死循环检测还要看文件是否变化、测试结果是否改善、是否新增可验证事实、计划是否推进、错误类型是否变化。C 的豁免名单是硬编码特例（治理分叉的变体）；D 把工程保护降级成提示词约束。'
+    },
+    {
+      type: 'recall',
+      concept: '停止原因为什么不可覆盖',
+      section: '3-1 六',
+      notesRef: '3-1.pdf p28 + loop-guard.ts:194',
+      question: 'StopReason 一旦设置就不得被后续覆盖（stop() 里有 if 守卫）。为什么需要这条规则？',
+      hint: '想象这个窗口：第三次重复动作被拦截设置了 REPEATED_ACTION，随后用户又按了取消。',
+      modelAnswer: '停止原因是事故复盘与调用方决策的依据，「最先触发停止的事实」必须被如实保留。若允许覆盖：REPEATED_ACTION 先发生（说明 Agent 在死循环），随后 markStop(ABORTED) 会把它覆盖成「用户取消」——调用方看到取消会直接重跑，而真实问题是死循环，重跑只会原样复现。先到先得（write-once）保证诊断和恢复决策建立在真实的第一原因上。与 0008「TIMEOUT_UNKNOWN ≠ 失败」同理：不确定/被掩盖的停止原因会导致错误的后续动作。'
+    },
+    {
+      type: 'choice',
+      concept: 'ReAct 与 Plan-and-Execute',
+      section: '3-1 五、六',
+      notesRef: '3-1.pdf p10–p14',
+      question: '「找出项目中的登录逻辑并生成 Markdown 说明」这个任务为什么以 ReAct 为起点？',
+      options: [
+        '目标本身无法拆解：写文档是单步任务，计划层在这里完全没有用武之地',
+        '文件位置与调用关系一开始未知，必须靠观察逐步获得事实后再决定下一步',
+        'ReAct 的输出更加可读：展示完整思维链比交付文档本身更有业务价值',
+        'Plan-and-Execute 已被淘汰，工业界的 Agent 框架现在全部采用纯 ReAct 模式'
+      ],
+      answer: 1,
+      explanation: 'PDF p13 对照表：找登录逻辑——文件与调用关系完全未知，需要靠观察逐步发现，适合 ReAct；给指定函数补测试并修复——目标明确但要经历定位→补测试→运行→修正→回归多阶段，适合轻量计划 + ReAct。ReAct 的价值不是展示思维（C），而是让每一步行动都有可追溯的观察依据。分工锚点：Loop 决定要不要继续，ReAct 决定下一步往哪走，Plan 管整体路线。'
+    },
+    {
+      type: 'choice',
+      concept: '中断与恢复的区别',
+      section: '3-1 九',
+      notesRef: '3-1.pdf p18–p20',
+      question: '用户中断了一个 Run 之后，「重新发送原 Prompt」为什么不算恢复？',
+      options: [
+        '因为原 Prompt 已经消耗过 Token，再次发送会重复计费，造成不必要的成本浪费',
+        '因为中断可能发生在副作用之后，重跑会重复写文件、重复提交、重复触发外部操作',
+        '因为模型没有保存过历史消息，重新发送之后它会完全忘记之前的任务目标',
+        '因为 LoopGuard 的动作计数在不同 Run 之间不共享，重跑时无法继承已有计数'
+      ],
+      answer: 1,
+      explanation: '中断 = 停止正在运行的模型和工具；恢复 = 从可信状态继续任务。中断时系统可能已产生部分副作用（文件写了、代码提交了、外部操作触发了），重发 Prompt 是从头重放——重复副作用、覆盖已有结果。真正的恢复必须知道已经发生了什么，从保存点（Snapshot：runId/messages/turn/evidence/stopCode）继续。D 说的是真话但不是核心理由（计数重置是安全损失，副作用重放是安全事故）。'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>

@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week03 主题课 2/7 · Planning 与任务拆解</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 03 · 主题课 2 / 7 · 覆盖课程小节 3-2 · 版式：先讲后测，精讲与测验五五开</p>
+<h1>Planning 与任务拆解</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：Week03 第二课。0010 让 Agent「循环起来」并停得住；这一课回答循环之上的新问题——<strong>任务由哪些可验收的子目标组成、当前允许开始哪一步、哪一步真的完成了</strong>。Loop 保存的是消息历史，它知道模型读过什么、说过什么，<strong>不知道任务还差哪几步</strong>。本课给 Loop 加一层计划状态：子目标 + 依赖 + 证据 + 完成契约，底层循环一行不改。<br>
+  <strong>材料定位</strong>：<code>course_code/week03/第三章-学习笔记.md</code> 3.2 节（行 719–1192，学生版学习笔记，<strong>本课术语以此为准</strong>）+ <code>course_materials/week03/3-2.pdf</code>（31 页教师 PDF）<br>
+  <strong>代码定位</strong>：<code>course_code/week03/3-2/planning_agent_demo/</code>（实验组：计划层完整版）；对照组 <code>course_code/week03/3-2/codebase_agent_demo/</code>（无计划层，但 Runtime、契约同等加强——两者唯一差别是计划层）。核心新文件 <code>src/plan-store.ts</code>（471 行，计划状态与确定性规则）、<code>src/planning-prompt.ts</code>（运行提示词与计划快照）<br>
+  <strong>预计用时</strong>：精讲 30 分钟 + 测验 25 分钟 + 第二层动手练习 30 分钟<br>
+  <strong>本课验收标准</strong>（笔记「本节重点与验收」）：能判断——一个任务该用 Workflow、Loop 还是显式计划；一份计划为什么不能只写动作；什么情况只是改参数、什么情况必须修订计划；怎么证明计划规则不是提示词里的摆设。
+</div>
+
+<h2>怎么用这一课</h2>
+<p><strong>先讲后测，五五开</strong>：第一部分精讲先把地图建好，读的时候每节自问「这解决了什么事故」；第二部分 19 题测验检验留存，<strong>前 4 题是 0010 四个薄弱点的换形式间隔重测</strong>（判定顺序、缺失项列表、拦截证据、停止原因不可覆盖——0010 测验 78%，这四题是对那次诊断的兜底），做完页面底部自动生成诊断报告。</p>
+<p><strong>这一课在三层学法里的位置</strong>：<strong>第一层建地图</strong>——精讲第 3 节的组件分工表和第 9 节的 Hook 接线表是本课两张「必须能默画」的图；<strong>第二层跑代码</strong>——实验①–④全部<strong>离线可跑、不需要任何 API key</strong>（测试用脚本化模型响应）；<strong>第三层工程师级</strong>——精讲贯穿两个问法：「这条规则如果不由程序守住，模型会怎么绕」「这个错误码出现时，文件系统里到底发生了什么」。</p>
+<p class="sidenote">就业面试视角：Planning 是 Agent 岗位面试的分层题——「Plan-and-Execute 和 ReAct 什么时候用哪个」只是入场券；真正的区分题是「<strong>模型说这一步做完了，你怎么验</strong>」（证据四项检查 + StepVerifier）和「<strong>计划要改，谁能改、怎么改才不失控</strong>」（版本对齐 + 原子修订 + 不能降标准）。答得出「模型提、程序查」的分工，就把「用过 LangChain Planner」的候选人甩在身后。</p>
+
+<hr>
+
+<h2>第一部分：精讲（先读，测验在后）</h2>
+
+<h3>0. 开篇：任务变了，Loop 不够用了</h3>
+<p>0010 的 Codebase Agent 已经能完成代码理解：搜索登录逻辑、读文件、写 <code>artifacts/login-flow.md</code>。这类任务输入明确——找什么、写哪里都说清了。换成一个修复任务，性质就变了（笔记 3.2 开篇）：</p>
+<blockquote>请修复登录模块的会话过期边界问题：先定位登录和会话相关代码，复现失败测试，分析根因，只修改必要源码，然后运行目标测试、边界测试和回归测试，最后把根因、改动和验证结果写入 <code>artifacts/login-fix.md</code>。</blockquote>
+<p>提示词只说了「会话过期边界」，没说错在哪。可能是日期粒度截断、时区语义、边界是否包含到期时刻——哪一条成立，只能靠工具结果证实或推翻。当工具结果<strong>推翻当前判断</strong>时，Loop 无法回答三个问题（PDF p2）：<strong>哪一步的结论作废了？哪些跑过的验证要重做？手上这份改动到底能不能交？</strong></p>
+<p>本章地图推进一格：3.1 解决「怎样继续、何时停止」，3.2 解决「<strong>先完成什么、还缺什么、什么时候改变路径</strong>」——计划层。后续 3.3 的 Checkpoint 会把这份计划状态持久化，3.7 的 Codebase Agent v2 会把它用到真实仓库任务上。</p>
+
+<h3>1. 要不要计划：先判断，再动手</h3>
+<p>计划会增加调用、等待和状态维护成本，不是所有任务都该上 Planner（笔记 1.3）。<strong>判断标准不是「任务听起来复杂」，而是现有工具调用或固定流程能不能把事情管住</strong>。一次查询、固定字段抽取、审批流程由制度定死、特别在意响应速度、高风险操作不允许模型临时增删步骤——这些都不必急。</p>
+<p>四种执行方式按两个问题选（笔记 1.4、PDF p9–p10 的决策树）：</p>
+<pre>拿到一个任务
+ ├─ 一次明确操作就能完成？……………… 直接 Tool Calling（查一个订单状态）
+ ├─ 步骤与异常分支能提前写清？………… 固定 Workflow（固定规则的数据导入）
+ ├─ 下一步取决于执行中获得的信息？…… Agent Loop（调查登录测试为什么失败）
+ └─ 还要持续追踪多子目标、依赖与验收？ 在 Loop 中加入显式计划（跨模块修复+分层验证）</pre>
+<p>两个易混点：① <strong>Workflow 不是只能从头到尾</strong>——它也可以有分支、重试，甚至某一步调用模型；② <strong>有计划能力不等于单独建一个 Planner Agent</strong>。几种方式还能混用：排查故障先用 Loop 调查，需要追踪多子目标时加计划，修复完成准备发布时交给固定 Workflow。</p>
+<p><strong>一次性计划 vs 动态计划</strong>（笔记 1.5）：一次性计划的主要步骤在开始时就能列清（代码理解：搜索入口→读实现→整理调用关系→写文档）；动态计划开始时只能定「先查清、再修复、再验证」，具体怎么改要等证据。一次性计划与 Workflow 的区别在<strong>步骤由谁定</strong>：模型根据本次任务临时列出步骤是一次性计划；每次都做同一套操作、步骤和分支由工程师事先写好是 Workflow。<strong>允许调整不等于每次都要调整</strong>——真实运行可能计划 v1、修订 0 次，模型读到源码就找到了问题，后面步骤继续可用。</p>
+
+<h3>2. 组件与分工：模型提，程序查</h3>
+<p>计划层落在组件上（笔记 1.2、PDF p5–p6）。这张表是本课第一张必默画图：</p>
+<pre>对象            主要职责
+──────────────────────────────────────────────────────────────
+Planner         提出子目标、依赖、下一步和修订建议（模型的活）
+Plan / PlanStore 保存步骤、状态和修订历史；检查依赖与状态转换（程序的活）
+pi Agent Loop   调用模型、处理 Tool Call、回写 Tool Result 并继续（3.1 已有）
+Harness         装配模型、工具和计划组件，在执行接缝上落实约束（3.5 展开）
+Tool Runtime    参数校验、权限检查、超时与工具执行（第二章已有）
+Verifier        检查实际证据是否满足当前验收条件（程序的活）
+──────────────────────────────────────────────────────────────
+一句话锚点：模型负责提下一步，程序负责检查能不能做、做完算不算数。</pre>
+<p>对照代码：<code>plan-store.ts</code> 里的 <code>PlanStore</code>（依赖检查、证据校验、原子修订、修订预算全部收口在这里）+ <code>EvidenceStore</code>（可信证据的唯一来源）+ <code>PlanningSession</code>（一次 Run 的计划容器，Loop、计划工具、完成契约通过它读写同一份计划与证据）就是表中三个程序侧对象的实体。注意 pi 完全不知道计划的存在——<strong>计划层全部是应用代码，pi 继续提供 Loop 与 Hook</strong>（<code>plan-store.ts:2-4</code> 注释原文）。</p>
+<p><strong>Why（为什么这个分工是本课的灵魂）</strong>：0010 已经证明「模型说做完了不能信」（FINAL_REJECTED）；本课把同一原则推到每一步——<strong>模型说「这一步完成了」同样不能信，要证据；模型说「我可以开始这一步了」不能信，程序算 ready；模型要改计划，程序验版本、控预算、守标准</strong>。整个计划层就是给模型的自由裁量权配上程序化的护栏。</p>
+
+<h3>3. 计划写成什么样：从动作改成可验收结果</h3>
+<p>列出「分析、修改、测试」不够——模型要知道每步做到什么程度，程序要有办法检查做没做完。方法是把模糊动作改写成<strong>可验收子目标 + 可接受的证据</strong>（笔记 2.1）：</p>
+<pre>模糊动作      可验收子目标                              可接受的证据
+────────────────────────────────────────────────────────────────────
+复现失败  →   在 scope=target 上拿到退出码 1，         命令、退出码、失败断言
+              并保留失败断言的期望值与实际值            的期望值与实际值
+修一下    →   产生当前代码版本上、允许修改范围内的      受控 Diff、修改理由
+              最小 Diff
+跑测试    →   target、boundary、regression 三个        三个范围各自的
+              范围的退出码都为 0                       退出码与测试范围</pre>
+<p>写一个步骤时多问两句（笔记 2.1 收尾）：<strong>① 做完以后，我应该知道什么、拿到什么？② 拿什么来证明？</strong>答得出来，这一步才有办法验收。课程给了一个完整的六步修复计划示例（笔记 2.4、PDF p15）：s1 确认入口与允许修改范围 → s2 复现失败 → s3 按证据确认根因 → s4 最小修复 → s5 三个测试范围全过 → s6 交付说明。注意「一个步骤不一定只调一次工具」——s5 就可能包含三个测试范围的三份证据。</p>
+
+<h3>4. 计划至少保存什么：PlanStep 字段逐个 why</h3>
+<p>三个对象：<code>Plan</code> 保存整份计划，<code>PlanStep</code> 保存一步，<code>Evidence</code> 保存工具执行留下的证据（<code>plan-store.ts:33-53</code>）。字段为什么这么分（笔记 2.2）：</p>
+<pre>PlanStep {
+  id               步骤标识
+  objective        完成后系统应产生的新事实——不能只写「分析一下」
+  dependsOn[]      前置步骤；决定谁先谁后
+  successCriteria[] 事前定义的完成标准 ──┐ 两个字段必须分开：
+  evidenceIds[]    执行后记录的证据编号 ──┘ 标准不能事后挪，结果不能自封
+  status           六个值，见下
+  attempts         尝试次数
+  lastError?       最近一次失败原因
+}
+Evidence {
+  stepId / toolCallId   归属：属于哪一步、由哪次调用产生
+  artifactVersion       产生该证据时的代码版本（本课关键，第 6 节展开）
+  kind                  "tool" | "test" | "diff" | "inspection"
+  summary / payload     人读的摘要 + 机器查的载荷
+}</pre>
+<p><strong>status 的六个值</strong>（<code>plan-store.ts:11-17</code>）：<code>pending</code> 等依赖、<code>in_progress</code> 执行中、<code>completed</code> 证据已过验收、<code>blocked</code> 权限/预算/外部条件阻塞、<code>skipped</code> 被替换或明确放弃、<code>failed</code> 失败待修订。<strong>Why 不能只有完成/未完成两个值</strong>：阻塞和失败需要不同的处理路径（等外部条件 vs 等修订）；<strong>skipped 不等于 completed</strong>——尤其验证步骤，跳过不等于验证过（第 7 节展开）。另外两个全局字段：<code>constraints</code> 保存任务约束（实际限制仍由执行检查落实），<code>maxRevisions</code> 限制修订次数——避免一直改计划却不结束任务。</p>
+
+<h3>5. 标准在事前，证据在事后：两层验收</h3>
+<p>本课最重要的认识论：<strong>不能看到退出码 0 就把所有步骤算完成，也不能看到非零就全算失败</strong>。同一条证据在不同步骤意义不同（笔记 2.3）：</p>
+<pre>证据                                能证明                    不能证明
+──────────────────────────────────────────────────────────────────────
+scope=target 退出码 1                复现步骤完成，原问题存在   修复完成
+scope=target 退出码 0（版本为当前）  修复验证完成              边界与回归也通过
+三个范围退出码都为 0（版本为当前）   本次修复在约定范围内可交付 仓库其它区域没有回归</pre>
+<p>模型申请完成某一步（<code>complete()</code>，<code>plan-store.ts:223</code>），程序先做<strong>四道结构检查</strong>：① 证据非空；② 引用的证据存在；③ 证据的 <code>stepId</code> 与当前步骤一致；④ <code>test</code>/<code>diff</code> 类证据的 <code>artifactVersion</code> 等于当前代码版本。这四项只回答「证据拿对了没有」——第 ⑤ 道 <code>StepVerifier</code> 才判断证据<strong>够不够</strong>满足完成标准（不够则 <code>PLAN_COMPLETION_REJECTED</code>，步骤留在 in_progress）。</p>
+<p><strong>Why artifactVersion 是灵魂字段</strong>（PDF p12、笔记行 4141 的总纲）：测试通过后又修改了文件，旧证据就失效——「测试记录只对当时受测的代码版本有效……<strong>最新失败不能被更早的成功掩盖</strong>」。引用旧版本通过结果申请完成会得到 <code>PLAN_EVIDENCE_STALE</code>。这是把「代码变了要重验」这条工程常识变成机器可执行的规则。</p>
+<p>最后分清<strong>两层验收</strong>：步骤验收回答「这一步能不能算完成」；任务级 CompletionContract 回答「整个任务能不能交付」。步骤全勾上不等于任务完成——整体还要检查当前版本 Diff、三类测试通过记录和交付说明（对照 0010：完成契约从 LoopGuard 硬编码升级为<strong>可注入</strong>，同一套 Loop 跑理解任务和修复任务只差换一个契约）。证据的铁律贯穿两层：<strong>证据来自真实工具执行，模型只能引用编号</strong>——模型自己写一句「测试通过了」不构成证据。</p>
+
+<h3>6. 依赖决定谁先谁后：ready 由程序计算</h3>
+<p>依赖回答一句话：「这一步要开始，前面必须先拿到什么？」六类依赖（笔记 2.5）：前置（没复现不该动代码）、数据（判断根因要错误栈和检索结果）、权限（写文件前过策略和审批）、验证（改完必须跑目标测试）、汇合（目标和边界都过才能进回归）、互斥（多个候选方案只能一个进写操作）。</p>
+<p><strong>ready 由程序计算，不由模型声明</strong>（<code>plan-store.ts:189</code>）：</p>
+<pre>readySteps(): PlanStep[] {
+  return this.plan.steps.filter((step) =>
+    step.status === "pending"
+    && step.dependsOn.every((id) => this.requireStep(id).status === "completed"));
+}</pre>
+<p>注意 filter 的条件：<strong>skipped 和 failed 都不满足依赖</strong>。所以 <code>skip()</code> 会先查有没有别的步骤在等它（<code>plan-store.ts:277</code>）：有下游依赖就直接 <code>PLAN_SKIP_REQUIRES_REWIRE</code>——必须先说明为什么不需要、下游改成等谁，通过<strong>一次修订</strong>一起处理，不能直接把跳过当完成。最后一条边界：<strong>依赖就绪不等于没有资源冲突</strong>——两步都 ready 但都要改同一个文件，仍然不能并行；依赖检查只回答前置条件齐不齐，不能替代并发资源检查。</p>
+
+<h3>7. 计划怎样变化：先分流，再修订</h3>
+<p>执行后发现的偏差，先记录发生了什么、判断影不影响原安排，再决定处置（笔记 3.1 的分流表、PDF p18）：工具参数拼错→改正参数，不修订；目标文件不存在→先搜索实际位置，路径变了局部修正、模块结构变了才修订；短暂超时→受控重试；测试断言指向到期边界→先补证据再判断假设是否被推翻；用户中途补充约束→检查计划与已有 Diff，让冲突步骤和相关验收失效；权限拒绝或预算耗尽→记录阻塞，<strong>不能靠改计划绕过</strong>。</p>
+<p>测试失败还要先分类（PDF p19）：<code>assertion</code>（到达业务断言但没满足——检查实现、预期或根因假设）、<code>environment</code>（缺依赖，断言根本没执行——先恢复测试条件）、<code>timeout</code>、<code>infrastructure</code>。<strong>非零退出码本身不够</strong>：缺依赖时测试没跑到原断言，不能叫复现成功。</p>
+<p><strong>什么才算一次修订</strong>（笔记 3.2）：不要数「失败了几次」，要问「按现在拿到的信息，原来安排的<strong>步骤、依赖和后续路径</strong>还合不合适」。路径拼错改参数重跑——目标和步骤没变，不占修订预算；证据推翻根因判断，原修改步骤不该继续做，要替换步骤、调整依赖——这才是修订。<strong>重复一次动作不等于修订，补一条当前步骤能用的证据也不等于换了一份计划</strong>。</p>
+
+<h3>8. 原子修订：六项检查与三条程序守住的底线</h3>
+<p>修订申请（<code>RevisionRequest</code>，<code>plan-store.ts:68</code>）至少带 <code>expectedVersion</code>、<code>reason</code>、<code>evidenceIds</code> 和变更内容。程序收到后六步（<code>revise()</code>，<code>plan-store.ts:290</code>，PDF p22 的流程图）：</p>
+<pre>1. 版本对齐    expectedVersion ≠ 当前版本 → PLAN_VERSION_CONFLICT
+2. 预算        revisionCount ≥ maxRevisions → PLAN_MAX_REVISIONS_EXCEEDED
+3. 依据        reason 非空；evidenceIds 非空且都真实存在
+4. 应用变更    在「候选副本」上：旧步骤标 skipped、新步骤插入、下游依赖自动改接
+5. 整体校验    ID 唯一、依赖存在、依赖图无环（有环 → PLAN_DEPENDENCY_CYCLE，
+               整次修订被拒，原计划不变）
+6. 提交        版本 +1、修订计数 +1、追加一条修订记录</pre>
+<p><strong>Why 三件事必须由程序守住</strong>（笔记 3.3 的表格）：版本对齐防「基于旧版本的申请覆盖新计划」；<strong>原子提交</strong>（候选副本四字是关键，PDF p23）防中间状态——旧步骤已跳过而新步骤还没接上时，别处看到的计划是残缺的；预算上限防「失败循环里无限修订，永远不收敛」。旧步骤不会消失——它留下被替换记录，回头看修订历史才知道当时准备做什么、后来为什么换方向。</p>
+<p><strong>修订只能改路径，不能改标准</strong>（笔记 3.4）：回归测试一直不过，模型不能把「回归测试通过」改成「运行过回归测试」然后给自己打勾——用户要的结果没变，验收底线不能由模型自行降低。反过来，用户补充新约束（如「不要修改公共 API」）也不能只把这句话加进提示词：要记下新约束、检查已有 Diff、暂停冲突步骤、修正不合要求的改动并重新验证；已发出通知等不可直接撤销的操作，把事实说清楚交给人处理——<strong>改掉计划里的文字，不等于现实里的操作也撤销了</strong>。全节一句话锚点（值得背下来）：</p>
+<blockquote><strong>子目标给出完成标准，依赖决定执行顺序，观察推动修订，证据决定能否交付。</strong></blockquote>
+
+<h3>9. 接进 pi：加计划层，不写第二套 Loop</h3>
+<p>改动集中在计划状态和 Hook 接线，pi 继续负责模型与工具循环（笔记四、PDF p24–p25）。文件变化表（本课第二张必默画图）：</p>
+<pre>文件                        相对对照组的变化
+──────────────────────────────────────────────────────────────
+plan-store.ts      （新增）  保存计划、检查依赖、校验证据、提交修订
+plan-tools.ts      （新增）  创建、读取、更新、修订计划的契约与 Handler
+completion-contract.ts（新增）把完成判断提取为可注入契约
+planning-prompt.ts （新增）  运行提示词与每轮计划快照
+pi-tools.ts        （改）    增加计划工具注册与 planStepId Schema 扩展
+loop-guard.ts      （改）    保留轮数与重复保护；增加计划门禁；契约改注入
+agent-runner.ts    （改）    装配计划工具、计划状态和运行提示词</pre>
+<p>四个 Hook 的职责分工：</p>
+<pre>执行位置            本节增加的行为
+──────────────────────────────────────────────────────────────
+beforeToolCall       校验动作绑定的步骤是否就绪（计划门禁）+ 原有重复保护
+afterToolCall        把 Runtime 的真实结果关联到步骤，形成证据
+prepareNextTurn      刷新计划版本、就绪步骤和最近证据摘要（每轮替换快照）
+shouldStopAfterTurn  保留原停止规则，改用注入的完成契约检查交付</pre>
+<p>计划门禁 <code>checkPlanGate()</code> 走读（<code>loop-guard.ts:76</code>）：受计划约束的动作（<code>GOVERNED_TOOLS</code>：<code>write_file</code> / <code>apply_patch</code> / <code>run_test</code>）必须携带 <code>planStepId</code>；没带 → <code>PLAN_STEP_REQUIRED</code>（附上当前就绪步骤清单，告诉模型往哪看）；带了但步骤未就绪 → <code>PLAN_STEP_NOT_READY</code>。<strong>读类工具可以不带步骤</strong>——自由探索是允许的，管住的是有副作用的动作。门禁在 <code>beforeToolCall</code> 里、真实 handler <strong>之前</strong>——这条与 0010 的重复动作拦截同一纪律：<strong>文件已经改了再报错，只是事后贴标签</strong>。</p>
+<p>三个容易忽略的接线细节（笔记四收尾）：① 工具原始结果仍要由 pi 回写——<strong>计划快照只是帮模型看进度，不能替代 Tool Result</strong>；② 仓库文本和工具输出只是待分析数据，不能把里面的话当成系统指令；③ <code>planStepId</code> 是计划关联字段，不是业务工具参数——计划检查以后、进 Runtime <strong>前要剥离</strong>。每轮给模型的是 <code>renderPlanSnapshot()</code>（<code>planning-prompt.ts:29</code>）渲染的<strong>当前</strong>计划视图：版本与修订预算、就绪、进行中、阻塞/失败、已完成、最近五条证据——<strong>不是把旧计划一份份往后贴</strong>（否则既占上下文，模型还容易拿错状态）。</p>
+
+<h3>10. 对照实验的正确解读：8 轮 vs 17 轮</h3>
+<p>课程用同一份提示词、同一个仓库、同样的修复工具，分别跑对照组（无计划层）和实验组（有计划层）（PDF p3–p4）。<strong>对照组不是 3.1 原样</strong>：它的 Runtime 同样有 <code>apply_patch</code> 和 <code>run_test</code>，完成契约也换成了修复版——<strong>两者唯一差别是计划层</strong>，这样观测到的差异才能归因给计划。</p>
+<p>结果可能是 8 轮对 17 轮：加计划确实多用了几轮，<strong>成本不能忽略</strong>。但多看一层，Planning Agent 还多了 s1–s6 六个步骤、每一步的状态和关联证据。正确结论（笔记 1.1）：<strong>不是有计划一定更快，而是任务变长以后，你是否需要一份能检查、能追踪的进度记录</strong>——Loop 的轨迹只记录「做过哪些动作」，计划层记录「动作属于哪个子目标、子目标推进到了哪里、用了哪些证据」。这个 trade-off 是面试里「什么时候上 Planner」的满分答案素材。</p>
+
+<h3>11. TDD 验收：计划规则必须真的拦住动作</h3>
+<p>先检查计划层本身（不让真实模型的随机输出干扰判断），再检查 Loop 集成有没有绕过（笔记五、PDF p29–p30）。19 个用例里认住这几条主干（<code>tests/plan-store.test.ts</code> + <code>tests/agent-runner.test.ts</code>）：</p>
+<pre>计划层（14 用例）：
+  依赖未完成时申请开始 ………… PLAN_STEP_NOT_READY
+  skipped 不满足下游依赖 …… PLAN_SKIP_REQUIRES_REWIRE，必须修订改接
+  没有证据 / 证据不存在 / 证据不属于本步骤 / 旧版本证据 ………… 全部拒绝
+  替换步骤 ………………………… 旧步骤 skipped + 下游依赖原子改接（changes 里两条记录）
+  有环的修订 …………………… 整体拒绝，原计划不变（候选副本的意义）
+  缺理由缺证据 / 旧版本发起 / 超预算 ………… 各自的拒绝码
+Loop 集成（5 用例）：
+  完整闭环 ………………………… 计划 v1→v2，源码真实改写，交付说明落盘
+  缺 planStepId …………………… PLAN_STEP_REQUIRED，apply_patch handler 调用次数为 0
+  绑定未就绪步骤 ……………… PLAN_STEP_NOT_READY，run_test handler 调用次数为 0
+  引用不存在证据 ……………… 申请完成被拒，步骤不完成
+  证据不足时 Final …………… 注入 FINAL_REJECTED，直到预算上限 MAX_TURNS_EXCEEDED</pre>
+<p><strong>关键断言并不仅是「返回了错误」，而是 handler 调用次数为 0</strong>（笔记五原文）。这是 0010「有证明力的断言」在计划层的复现：错误码可以打印出来骗人，真实执行次数伪造不了。另外注意最后一个用例的深意：<strong>FINAL_REJECTED 逼模型继续，但预算兜底</strong>——计划层不能让「永远差一点」的 Run 无限跑下去。</p>
+
+<h3>12. 面试视角：这一课怎么被问</h3>
+<ul>
+  <li><strong>「什么时候需要显式计划，什么时候 Loop 就够？」</strong>——两个问题定位：下一步是否取决于执行中的信息（是→Loop 能解决）；是否还要持续追踪多个子目标、依赖和验收（也是→加计划）。追问「计划会不会拖慢」→ 8 vs 17 对照实验，成本真实存在，换来的是可检查可追踪的进度记录。</li>
+  <li><strong>「模型说这一步做完了，你怎么验？」</strong>——四道结构检查（非空/存在/归属/版本）+ StepVerifier（够不够）；证据只来自真实工具执行、模型只能引用 id；同一证据在不同步骤意义不同（退出码 1 在复现步骤=成功、在验证步骤=没修好）。追问「测试通过后又改了代码」→ artifactVersion，PLAN_EVIDENCE_STALE，最新失败不被更早成功掩盖。</li>
+  <li><strong>「计划要改怎么办？」</strong>——先分流（参数错改参数不占预算）；真修订走 revise_plan 六项检查：版本对齐、预算、理由证据、候选副本、整体校验、提交。追问「模型能不能把验收标准改松」→ 修订只能改路径不能改标准。</li>
+  <li><strong>「怎么证明计划层不是摆设？」</strong>——门禁落在 beforeToolCall、handler 之前；断言 apply_patch / run_test 的 handler 调用次数为 0，而不是断言错误码出现。与 0010「handler 恰执行 2 次」同一口味。</li>
+</ul>
+
+<hr>
+
+<h2>第二部分：检索式测验（19 题 · 前 4 题为 0010 薄弱点换形式重测）</h2>
+<div id="quiz"></div>
+
+<hr>
+
+<h2>第三部分：第二层练习——跑起来，再主动改造（精讲与测验之后）</h2>
+<p>实验①–④<strong>离线可跑、不需要任何 API key</strong>（测试用脚本化模型响应）。实验③④是主动改造：<strong>先写下预期，再跑，再对照</strong>；做完把代码改回原样。所有命令从仓库根目录开始执行。</p>
+
+<h3>实验 ①：跑全量测试，数一数两套用例（无需 API key）</h3>
+<ul>
+  <li>进入目录并安装依赖：<pre>cd course_code/week03/3-2/planning_agent_demo
+npm install</pre></li>
+  <li>跑全量测试：<pre>npm test</pre></li>
+  <li>预期（先写再跑）：全部通过；<code>tests/plan-store.test.ts</code> 14 个用例、<code>tests/agent-runner.test.ts</code> 5 个用例，与精讲第 11 节的表逐一对应；找出「替换步骤」用例里断言的 <code>changes</code> 数组有哪两条记录。</li>
+</ul>
+
+<h3>实验 ②：只看一条关键用例——旧版本的通过结果（无需 API key）</h3>
+<ul>
+  <li>只跑计划层测试：<pre>npx vitest run tests/plan-store.test.ts</pre></li>
+  <li>打开 <code>tests/plan-store.test.ts:139</code>「旧版本的通过结果不能用于当前交付」，读测试怎么构造「版本变化」：证据先在一个版本上通过，然后 <code>getRevision</code> 返回新版本，再申请完成。</li>
+  <li>预期：抛出的是 <code>PLAN_EVIDENCE_STALE</code> 而不是 <code>PLAN_COMPLETION_REJECTED</code>——对照精讲第 5 节，四道结构检查（版本在其中）与 StepVerifier 是两道不同的关卡。</li>
+</ul>
+
+<h3>实验 ③：主动改造——把修订预算默认值改成 0（无需 API key）</h3>
+<ul>
+  <li>把 <code>src/agent-runner.ts:88</code> 的 <code>maxRevisions: options.maxRevisions ?? 2</code> 改成 <code>?? 0</code>。</li>
+  <li><strong>先写预期</strong>：哪个 agent-runner 用例会红？红的直接原因是模型申请修订时收到了什么错误码？<code>tests/plan-store.test.ts</code> 的 14 个用例会受影响吗（提示：它们自己构造计划，看看有没有走这个默认值）？</li>
+  <li>跑 <code>npm test</code> 对照预期；理解后改回 <code>?? 2</code>，再跑确认全绿。</li>
+</ul>
+
+<h3>实验 ④：亲手拆掉门禁，看断言怎么抓住它（无需 API key）</h3>
+<ul>
+  <li>在 <code>src/loop-guard.ts:84-93</code>，注释掉 <code>checkPlanGate</code> 里 <code>PLAN_STEP_REQUIRED</code> 那个分支（让不带 <code>planStepId</code> 的调用直接放行）。</li>
+  <li><strong>先写预期</strong>：<code>agent-runner.test.ts:228</code>「受计划约束的动作缺少 planStepId 时被拦截，handler 不执行」会怎么红？断言失败的是错误码，还是 handler 调用次数？</li>
+  <li>跑 <pre>npx vitest run tests/agent-runner.test.ts</pre> 对照预期——重点看失败信息里的 handler 执行次数变成了几；理解后恢复代码，再跑确认全绿。</li>
+</ul>
+
+<h3>实验 ⑤：跑一次真实修复任务（可选，需要真实环境）</h3>
+<ul>
+  <li>需要 Week01 的 Gateway（或等价的 OpenAI-compatible 端点）和 API key：<pre>export GATEWAY_BASE_URL="http://127.0.0.1:8000/v1"
+export GATEWAY_API_KEY="<你的 Gateway Key>"
+npm run start</pre></li>
+  <li>运行时重点观察五点：模型是否先 create_plan；受约束动作是否都带 <code>planStepId</code>；每轮 Tool Result 后计划快照里的就绪步骤是否变化；根因被推翻时是否走 revise_plan；最终交付是否引用真实 evidenceIds。</li>
+  <li>对照组体验：同样环境跑 <code>course_code/week03/3-2/codebase_agent_demo/</code>（无计划层），对比轨迹里多了什么、少了什么——自己复现一次「8 轮 vs 17 轮」的对照。</li>
+</ul>
+
+<h2>回读与验证指引</h2>
+<ul>
+  <li>primary source：<code>course_code/week03/第三章-学习笔记.md</code> 3.2 节（行 719–1192，本课术语以此为准）——重点回读「先判断任务要不要计划」「计划至少保存什么」「完成标准在事前，证据在事后」「依赖决定谁先谁后」「一次修订要留下什么」「修订只能改路径，不能改标准」。</li>
+  <li>教师 PDF：<code>course_materials/week03/3-2.pdf</code>——重点回读 p2（三个问不出来的问题）、p3–p4（对照实验前提与 8 vs 17）、p9–p10（四种方式决策树）、p13–p14（complete 的四道检查流程图）、p19（测试失败分类）、p22–p23（revise 流程与候选副本）、p29–p30（两套验收用例）。</li>
+  <li>代码回读顺序：<code>src/plan-store.ts</code>（先读 1–9 行注释头，再读 <code>readySteps</code> → <code>complete</code> → <code>revise</code> 三个方法）→ <code>src/loop-guard.ts</code>（只看 <code>checkPlanGate</code> 与 <code>observeToolResult</code> 两处新增）→ <code>src/planning-prompt.ts</code>（快照渲染了哪六块）→ <code>tests/plan-store.test.ts</code>（每个错误码找一个用例）。</li>
+  <li>笔记附录「源码与工程阅读路线」：本课对应 planning_agent_demo 条目；用六步阅读顺序自检——尤其是第 5 步「完成/暂停/恢复怎么判断」（本课：步骤级四道检查 + 任务级契约）和第 6 步「用失败场景验证连接」（本课：19 个拒绝路径用例）。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<ul>
+  <li><code>course_code/week03/第三章-学习笔记.md</code> 3.2 节（学生版学习笔记，本课术语以此为准）</li>
+  <li><code>course_materials/week03/3-2.pdf</code>（教师 PDF，31 页）</li>
+  <li><code>course_code/week03/3-2/planning_agent_demo/</code>（实验组：计划层完整版，pi 0.84.4 + vitest）</li>
+  <li><code>course_code/week03/3-2/codebase_agent_demo/</code>（对照组：无计划层，Runtime 与契约同等加强）</li>
+  <li><code>course_code/week03/3-2/planning.md</code> / <code>codebase.md</code> / <code>compare-agents.sh</code>（课程自带的两组说明与对照脚本）</li>
+</ul>
+
+<div class="ask-reminder">
+  <strong>卡住了就问你的 agent。</strong>任何一处让你觉得「等等，为什么」——比如为什么 ready 必须程序算、为什么修订要在候选副本上、为什么 skipped 不等于 completed——直接回到对话里问。本课全部内容都在回答一个问题：<strong>把任务拆成有完成标准、有依赖关系的子目标，再根据真实证据判断下一步和是否可以交付。</strong>
+</div>
+
+<div class="lesson-footer">
+  Week03 主题课序列：<a href="./0010-agent-loop-pi-integration.html">1/7 从 Runtime 到 Agent Loop</a> · <strong>2/7 Planning 与任务拆解</strong>（本课，3-2）· 3/7 State Machine 与 Checkpoint（3-3）· 4/7 Sandbox 与执行边界（3-4）· 5/7 Agent Harness（3-5）· 6/7 LangGraph 与 Agent 编排（3-6）· 7/7 项目三：Codebase Agent v2（3-7，结课课）<br>
+  前课回顾：0010 测验 78%，四个薄弱点已讲解——本课前 4 题是它们的换形式重测；连同 0010 答疑攒下的锚点（Run/Turn/Session、协议层、steering vs follow-up），错题讲评时一并收口。<br>
+  结课条件：① 前 4 题重测全对且正题（第 5 题起）正确率 85% 以上；② 完成实验①–④至少 3 个，改造类实验预期先写后验；③ 不看稿 2 分钟讲清：组件分工表 + 「标准在事前，证据在事后」+ 原子修订六项检查。三者都过，再向你的 agent 要主题课 3/7（State Machine 与 Checkpoint，3-3）。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  title: '第二部分：检索式测验（19 题 · 前 4 题为 0010 薄弱点换形式重测）',
+  questions: [
+    {
+      type: 'choice',
+      concept: '【重测·换形式】两种判断的执行顺序',
+      section: '0010 薄弱点重测',
+      notesRef: '0010 · 3-1.pdf p7–p8 · pi 最小循环',
+      question: 'pi 原生 Loop 里，「stopReason 是 error/aborted」的检查排在「无 Tool Call」检查之前。为什么这个顺序不能反过来？',
+      options: [
+        '异常响应的内容不可信，在报错的响应里数 Tool Call 没有意义，必须先 fail-fast',
+        '异常检查的代码开销更低，先做便宜的检查能让循环在正常路径上跑得更快',
+        '异常停止属于业务层判断，按「业务先于协议」的分层约定必须排在最前面',
+        '异常响应里通常仍然带着 Tool Call，先查协议停止会把这次调用误判为继续执行'
+      ],
+      answer: 0,
+      explanation: '0010 精讲第 3 节：error/aborted 的响应内容不可信或根本没有，在报错响应里数 toolCall 没有意义——异常必须 fail-fast。C 说反了：异常停止和协议停止都是框架内置判断，业务完成判断（shouldStopAfterTurn）根本不在 pi 原生最小循环里；B 把实现细节错当设计目的；D 描述的场景本身不成立。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·换形式】缺失项列表的消费链路',
+      section: '0010 薄弱点重测',
+      notesRef: '0010 · 3-1.pdf p15 + loop-guard.ts:161',
+      question: '假设把 verifyCompletion() 改成只返回一个布尔值。以下哪条链路会最先断掉？',
+      options: [
+        'FINAL_REJECTED Follow-up 只能说「证据不足」，模型不知道缺什么，只能盲目重试',
+        'LoopGuard 从此无法登记 COMPLETED 停止原因，Run 只能以 MAX_TURNS_EXCEEDED 结束',
+        'observeToolResult 钩子失去输入来源，readFiles 与 writtenArtifacts 集合不再更新',
+        'pi 的 runAgentLoop 拿不到停止信号，循环将一直转下去直到用户手动中断'
+      ],
+      answer: 0,
+      explanation: '0010 精讲第 5 节 + 当天讲评：missing.length === 0 随时能从列表派生出布尔（B 不成立，stop(COMPLETED) 判断的就是它）；C 的证据收集在 afterToolCall，与返回值类型无关；D 的停止信号来自 shouldStopAfterTurn 的布尔返回值，本来就不是缺失项列表。真正断掉的是「把具体缺口逐条带回给模型」的 Follow-up 内容链路——布尔只能拒绝，说不出缺什么。次要损失：测试断言和排障日志也拿不到「缺了哪一项」。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·换形式】拦截之后模型看到什么',
+      section: '0010 薄弱点重测',
+      notesRef: '0010 · 笔记 7.1 + loop-guard.ts:88',
+      question: '第三次相同动作被 LoopGuard 拦截后，模型在下一轮看到的是什么？',
+      options: [
+        '一条带 REPEATED_ACTION 错误码的 Tool Result，说明相同动作已出现三次、本次未执行',
+        '一条系统级的崩溃日志，Run 立即终止，模型从此不再收到任何后续消息',
+        '一条正常的工具执行结果，只是结果内容被替换成了上一次执行留下的旧结果',
+        '什么都没有：这次调用被静默丢弃，消息历史里不会出现任何新的记录'
+      ],
+      answer: 0,
+      explanation: '笔记 7.1 原文：「第三次相同动作出现时，请求不能进入真实 handler，同时要形成带错误码的 Tool Result」。拦截不是静默丢弃（D）——模型必须知道此路不通才能换路径；也不是崩溃终止（B）——stopReason 登记后本 Turn 结束时停止。配套的验收证据：真实 handler 恰执行 2 次（执行次数伪造不了），错误码本身可以伪造所以不是验收依据。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·换形式】停止原因不可覆盖（场景题）',
+      section: '0010 薄弱点重测',
+      notesRef: '0010 · 3-1.pdf p28 + loop-guard.ts:194',
+      question: '场景：第三次重复动作被拦截，REPEATED_ACTION 已登记；同一个 Turn 里，恰好另一份证据让完成校验通过了。afterTurn 会怎么走？',
+      options: [
+        '第 1 步看到已存在停止原因立即返回停止；stop() 的守卫也保证原因不会被改成 COMPLETED',
+        '完成校验通过说明任务真的完成了，停止原因被更新为 COMPLETED 并按成功交付处理',
+        '两个原因都保留在状态里，由调用方在重启新 Run 时自行选择相信哪一个',
+        '抛出冲突异常，Run 以未定义状态结束，需要人工清理中间产生的文件'
+      ],
+      answer: 0,
+      explanation: '0010 讲评的第 4 点：afterTurn 判定顺序第 1 步就是「已存在停止原因 → 立即停止」（reader 侧），stop() 的 if 守卫保证 write-once（writer 侧）——两侧合起来，一个因死循环被杀掉的 Run 永远不会被报告成成功交付。B 正是这条规则要防的事故；C 让调用方猜真相；D 把不变量当成异常。这条与 0008「拒绝压过放行」同构：先到的终局结论压过后到的。'
+    },
+    {
+      type: 'choice',
+      concept: '要不要计划的判断标准',
+      section: '3-2 一',
+      notesRef: '笔记 3.2 一 / 1.3 + 3-2.pdf p11',
+      question: '判断一个任务要不要上显式计划层，正确的判断标准是什么？',
+      options: [
+        '现有工具调用或固定流程能不能管住；是否需持续追踪多子目标、依赖与验收情况',
+        '任务描述里的动词数量超过三个，说明复杂度达标，就应该立即创建显式计划',
+        '凡是需要调用写文件类工具的任务都必须有计划，纯只读的任务可以不加计划层',
+        '只要模型的上下文窗口装得下任务描述就不需要计划，装不下才需要拆成步骤'
+      ],
+      answer: 0,
+      explanation: '笔记 1.3 原文：判断标准不是「任务听起来复杂」，而是现有工具调用或固定流程能不能把事情管住；笔记 1.5 收尾给两问：下一步是否要看执行结果才能决定（是→Loop 够）；是否还要持续追踪多个子目标、依赖和验收（也是→再加显式计划）。B 是字数游戏；C 把「读/写」当判据（读类工具确实不强制绑步骤，但任务要不要计划与此无关）；D 把计划混同于上下文管理。'
+    },
+    {
+      type: 'choice',
+      concept: '四种执行方式的边界',
+      section: '3-2 一',
+      notesRef: '笔记 3.2 一 / 1.4 + 3-2.pdf p9–p10',
+      question: '「固定规则的数据导入，步骤与异常分支能提前写清」——按四种执行方式应该选什么？',
+      options: [
+        '固定 Workflow：步骤和分支由工程师事先写好；Workflow 也可以有分支、重试甚至某一步调模型',
+        'Agent Loop：导入随时可能遇到未知情况，必须让模型自主决定每一步具体怎么做',
+        '在 Loop 中加入显式计划：导入涉及多个子目标，需要 Planner 持续追踪依赖与验收',
+        '直接 Tool Calling：一次调用就能拿到全部结果，不需要任何循环或流程控制'
+      ],
+      answer: 0,
+      explanation: '决策树第二问「步骤与异常分支能提前写清？」→ 固定 Workflow。笔记 1.4 的易混点：Workflow 不是只能从头到尾执行——它也可以有分支、重试，甚至在某一步调用模型；有计划能力也不代表必须单独建 Planner Agent。B/C 都是把不需要的自主性塞给系统（徒增调用与不确定性）；D 混淆了第一问「一次明确操作就能完成」。'
+    },
+    {
+      type: 'choice',
+      concept: '一次性计划与固定 Workflow 的区别',
+      section: '3-2 一',
+      notesRef: '笔记 3.2 一 / 1.5',
+      question: '一次性计划与固定 Workflow 的本质区别在哪里？',
+      options: [
+        '步骤由谁定：模型根据本次任务临时列出步骤是一次性计划；每次同一套、由工程师事先写好是 Workflow',
+        '执行次数：只会执行一次的计划叫一次性计划，会被反复执行的流程叫 Workflow',
+        '依赖关系：一次性计划的步骤之间没有依赖，Workflow 的步骤之间有严格先后顺序',
+        '是否用模型：一次性计划完全由模型执行，Workflow 的全程不涉及任何模型调用'
+      ],
+      answer: 0,
+      explanation: '笔记 1.5 原文：「它和 Workflow 的区别在步骤由谁定」。D 的前半句对、后半句错——Workflow 可以在某一步调用模型（上一题的易混点）；C 说反了：一次性计划同样有 dependsOn（六步修复计划就是链式依赖）；B 望文生义——「一次性」说的是步骤为本次任务临时生成，不是只运行一次。'
+    },
+    {
+      type: 'choice',
+      concept: '从动作改成可验收结果',
+      section: '3-2 二',
+      notesRef: '笔记 3.2 二 / 2.1 + 3-2.pdf p13',
+      question: '把「复现失败」这一步写成可验收的子目标，正确的写法是什么？',
+      options: [
+        '在 scope=target 上拿到退出码 1，并保留失败断言的期望值与实际值',
+        '认真运行一次目标测试，把终端输出完整复制进对话供模型逐行阅读',
+        '调用 run_test 工具并确认模型已经理解失败原因，随后可以口头汇报结论',
+        '生成一份失败分析文档，写清楚开发者认为可能的问题原因候选列表'
+      ],
+      answer: 0,
+      explanation: '笔记 2.1 对照表：「复现失败」→「在 scope=target 上拿到退出码 1，并保留失败断言的期望值与实际值」。验收写法的两问：做完后应该知道什么（原问题确实存在）？拿什么证明（退出码 + 断言记录）？B 的「完整输出」没有说判断标准；C 的「口头汇报」恰恰是本课要禁止的（模型自述不构成证据）；D 是猜测列表，不是可证伪的复现。'
+    },
+    {
+      type: 'choice',
+      concept: 'successCriteria 与 evidenceIds 为什么分开',
+      section: '3-2 二',
+      notesRef: '笔记 3.2 二 / 2.2 + 3-2.pdf p12',
+      question: 'PlanStep 里 successCriteria（事前）与 evidenceIds（事后）分成两个字段。为什么不能合成一个「完成情况」字段？',
+      options: [
+        '标准要在动手前定义、结果在执行后记录；混在一起模型就能既当运动员又当裁判',
+        '数据库范式化的硬性要求：一个字段一个职责，合并会产生更新异常和插入异常',
+        '因为 evidenceIds 涉及外部工具输出需要转义，而 successCriteria 是纯文本格式',
+        '因为 successCriteria 需要模型逐字阅读而 evidenceIds 只给程序用，读者不同'
+      ],
+      answer: 0,
+      explanation: '笔记 2.2 原文：「successCriteria 事前定义完成标准，evidenceIds 执行后再记录结果，标准和结果不能混在一起」。这是 0010「模型说做完了不能信」在步骤级的落地：标准如果可以事后顺手改写，模型就能把没达到的标准改到已达到的水平。B 拿数据库理论张冠李戴（这里是内存对象）；D 说反了——两个字段模型都要看（快照里都渲染），分开是为了防自封，不是为了分读者。'
+    },
+    {
+      type: 'choice',
+      concept: 'skipped 不等于 completed',
+      section: '3-2 二',
+      notesRef: '笔记 3.2 二 / 2.5 + plan-store.ts:277',
+      question: '模型想把还有下游依赖的前置步骤 s2 直接标记 skipped，好让下游继续推进。PlanStore 会怎么做？',
+      options: [
+        '发现有步骤依赖 s2，抛出 PLAN_SKIP_REQUIRES_REWIRE：必须先修订，说明原因并改接下游依赖',
+        '允许跳过，并把下游步骤的状态自动改成 completed，保证计划可以继续向前推进',
+        '允许跳过，但下游步骤的验收标准自动放宽为「尽力而为」等级，交付时说明即可',
+        '直接拒绝并作废整个计划，要求模型重新 create_plan 从头开始执行整个任务'
+      ],
+      answer: 0,
+      explanation: 'skip() 先查 dependents（plan-store.ts:279），有下游等待就抛 PLAN_SKIP_REQUIRES_REWIRE。笔记 2.5：「如果前面的步骤不做了，不能直接把跳过当成完成，尤其是验证步骤」——必须先说明为什么不需要、后面的步骤改成等谁，通过一次修订一起处理。B/C 都是「为了推进而放松不变量」（C 还违反「修订不能降标准」）；D 过度反应——计划本来就是为修订而设计的。'
+    },
+    {
+      type: 'choice',
+      concept: '证据能证明什么、不能证明什么',
+      section: '3-2 二',
+      notesRef: '笔记 3.2 二 / 2.3 + 3-2.pdf p13',
+      question: '「scope=target 退出码 1，失败断言有记录」这条证据，能证明什么、不能证明什么？',
+      options: [
+        '能证明复现步骤完成、原问题确实存在；不能证明修复完成',
+        '能证明修复已经完成且目标用例通过；不能证明边界与回归范围也通过',
+        '能证明测试环境配置正确；不能证明业务断言确实被执行到了',
+        '能证明根因已经确认；不能证明修复方案是最小改动'
+      ],
+      answer: 0,
+      explanation: '笔记 2.3 的核心表：同一条证据在不同步骤意义不同——退出码 1 在「复现」步骤是完成证据，在「验证修复」步骤说明还没修好。B 描述的是退出码 0 的证明力；C 恰好说反：environment 类失败（缺依赖）时断言根本没执行，退出码 1 也不能叫复现成功；D 的根因确认需要的是 inspection 类证据（源码读取），不是测试退出码。'
+    },
+    {
+      type: 'choice',
+      concept: 'artifactVersion 的作用',
+      section: '3-2 二',
+      notesRef: '笔记 3.2 二 / 2.2–2.3 + plan-store.ts:26',
+      question: 'Evidence 里的 artifactVersion 字段是干什么用的？',
+      options: [
+        '把证据绑定到产生它的代码版本；改了代码之后，旧的测试与改动证据不再能用于交付',
+        '记录工具调用的耗时数据，用于性能分析和慢工具的自动降级处理',
+        '标记证据的保密等级，决定哪些证据允许出现在给模型的计划快照里',
+        '区分证据由哪位工程师创建，用于多人协作场景下的责任归属审计'
+      ],
+      answer: 0,
+      explanation: 'plan-store.ts:26 注释原文：「产生该证据时的代码版本；换版本后旧的测试/改动证据不再能用于交付」。complete() 的第 4 道结构检查据此拒绝旧版本证据（PLAN_EVIDENCE_STALE）。笔记行 4141 总纲：「测试记录只对当时受测的代码版本有效……最新失败不能被更早的成功掩盖」。B/C/D 都是无中生有的功能——这个字段防的是「拿旧版本的绿灯给新版本背书」。'
+    },
+    {
+      type: 'choice',
+      concept: 'ready 由程序计算，不由模型声明',
+      section: '3-2 二',
+      notesRef: '笔记 3.2 二 / 2.5 + plan-store.ts:189',
+      question: '「哪些步骤现在可以开始」由谁决定？为什么？',
+      options: [
+        '程序计算 readySteps：status 为 pending 且 dependsOn 全部 completed；模型不能自行声明就绪',
+        '模型声明：模型最了解当前进度，它说可以开始就可以开始，程序只负责记录状态',
+        '用户决定：每一步开始前都要人工确认一次，防止模型在错误方向上消耗预算',
+        '工具决定：Runtime 执行时检查参数与权限，能执行通过就自动算作步骤已就绪'
+      ],
+      answer: 0,
+      explanation: 'readySteps() 是纯函数式计算（plan-store.ts:189–194），「模型提、程序查」分工的直接体现——状态转换全部由程序守住，否则「我感觉可以开始了」就绕过了依赖检查（比如没复现就动代码）。配套细节：skipped/failed 都不满足依赖条件；依赖就绪也不代表没有资源冲突——两步都 ready 但都要改同一个文件，仍不能并行，依赖检查不能替代并发资源检查。B 是本课要防的自封；C 是 3.5 审批门禁（按需），不是就绪判断；D 混淆了「能执行」与「该开始」。'
+    },
+    {
+      type: 'recall',
+      concept: '什么算一次修订，什么只是改参数',
+      section: '3-2 三',
+      notesRef: '笔记 3.2 三 / 3.1–3.2 + 3-2.pdf p18–p19',
+      question: '测试命令里的路径拼错了，改正参数重跑——这算一次计划修订吗？那么，什么样的变化才必须走修订？',
+      hint: '修订的对象是参数，还是步骤、依赖与后续路径？「数失败次数」为什么是错的问法？',
+      modelAnswer: '不算。判断标准不是「失败了几次」，而是「按现在拿到的信息，原来安排的步骤、依赖和后续路径还合不合适」。路径拼错：目标、步骤、依赖都没变，改参数重跑即可，不占修订预算。必须走修订的情况：证据推翻了根因判断（如失败指向会话有效期而非密码校验），原修改步骤不该继续做，要替换步骤、调整依赖——这才是一次修订，走 revise_plan，携带 expectedVersion、reason、evidenceIds。两个不算的例子：重复一次动作不等于修订；补一条当前步骤能用的证据也不等于换了一份计划。'
+    },
+    {
+      type: 'choice',
+      concept: '原子修订：为什么在候选副本上改',
+      section: '3-2 三',
+      notesRef: '笔记 3.2 三 / 3.3 + plan-store.ts:290 + 3-2.pdf p22–p23',
+      question: 'revise() 为什么要在「候选副本」上应用全部变更、整体校验通过后才提交？',
+      options: [
+        '避免中间状态：旧步骤已 skipped 而新步骤还没接上、或依赖成环时，原计划保持不变',
+        '提升性能：候选副本可以并行修改，校验放在最后只需要做一次全量扫描',
+        '支持回滚：副本保留了全部历史版本，用户可以随时退回到任意一个旧版本计划',
+        '便于审计：副本可以导出为独立文件归档，让主计划文件保持只读不被污染'
+      ],
+      answer: 0,
+      explanation: '笔记 3.3：「替换、追加、依赖改接在候选副本上一次完成，校验通过才提交」——否则中间状态里旧步骤已跳过、新步骤还没接上，别处读到的计划是残缺的。PDF p23 点题：「关键是候选副本四个字——有环、重复 ID、依赖缺失都会让整次修订被拒绝」。修订历史本来就完整保留（旧步骤留下被替换记录），C 的「退回任意版本」是新功能不是设计目的；B/D 与动机无关。配套不变量：expectedVersion 对齐防旧申请覆盖新计划；maxRevisions 防失败循环里无限修订。'
+    },
+    {
+      type: 'choice',
+      concept: '修订只能改路径，不能改标准',
+      section: '3-2 三',
+      notesRef: '笔记 3.2 三 / 3.4',
+      question: '回归测试一直不通过，模型申请把 s5 的完成标准从「三个范围退出码都为 0」改成「运行过三个范围的测试」。程序应该怎么处理？',
+      options: [
+        '拒绝：修订只能改路径不能改标准，用户要的结果没变，验收底线不能由模型自行降低',
+        '批准：计划本来就是模型的工具，标准跟着现实情况调整是合理的工程做法',
+        '折中：批准修改，但在交付说明里标注「标准曾下调」，由调用方自行判断是否接受',
+        '转人工：暂停整个 Run，等用户逐条审阅新的完成标准后再决定是否继续执行'
+      ],
+      answer: 0,
+      explanation: '笔记 3.4 原文场景一模一样：「模型不能把『回归测试通过』改成『运行过回归测试』，然后给自己打勾」。标准是用户要求的投影，不是模型的作业本。反过来用户补充新约束（如「不要修改公共 API」）也不能只加进提示词——要记下约束、检查已有 Diff、暂停冲突步骤、修正并重新验证。一句话总结全节：子目标给出完成标准，依赖决定执行顺序，观察推动修订，证据决定能否交付。'
+    },
+    {
+      type: 'recall',
+      concept: '怎么证明计划规则不是提示词里的摆设',
+      section: '3-2 五',
+      notesRef: '笔记 3.2 五 + loop-guard.ts:76 + 3-2.pdf p30',
+      question: '以「受计划约束的动作缺少 planStepId」为例：计划门禁落在哪里？验收时断言什么才算真的拦住？',
+      hint: '0010 的老问题换个对象：文件已经改了之后再报错，算拦住吗？',
+      modelAnswer: '门禁落在 beforeToolCall（checkPlanGate）、真实 handler 之前：GOVERNED_TOOLS（write_file / apply_patch / run_test）没带 planStepId → PLAN_STEP_REQUIRED 并附上当前就绪步骤清单；带了但步骤未就绪 → PLAN_STEP_NOT_READY。读类工具可以不带步骤——管住的是有副作用的动作。验收断言不是「返回了 PLAN_STEP_REQUIRED 错误码」，而是 apply_patch 的 handler 调用次数为 0：文件已经改了、资源已经消耗以后再报错，只是事后贴标签。另一个细节：planStepId 是计划关联字段，计划检查之后、进 Runtime 之前要剥离，它不是业务工具的参数。'
+    },
+    {
+      type: 'choice',
+      concept: '计划快照每轮替换，不堆积历史',
+      section: '3-2 四',
+      notesRef: '笔记 3.2 四 + planning-prompt.ts:29',
+      question: '每轮注入给模型的「计划快照」为什么要每轮整体替换，而不是把历史版本一份份往后贴？',
+      options: [
+        '多个版本同时在场既占上下文，模型还容易拿错状态；快照只保留当前视图',
+        '历史版本里包含敏感的计划细节，逐轮累积会持续放大提示词注入的攻击面',
+        '计划版本号是递增整数，累积注入会导致快照的类型系统产生版本冲突',
+        '这是 pi 框架对系统消息的硬性要求，应用层无权自定义消息的注入方式'
+      ],
+      answer: 0,
+      explanation: '笔记 3.2 四原文：「每轮给模型的是当前计划快照，不是把旧计划一份份往后贴。否则模型看到多个版本，既占上下文，也容易拿错状态」。renderPlanSnapshot 每轮渲染：版本与修订预算、就绪、进行中、阻塞/失败、已完成、最近五条证据。配套规则：工具原始结果仍要由 pi 回写——快照只是帮模型看进度，不能替代 Tool Result；仓库文本和工具输出只是待分析数据，不能当成系统指令。B/C/D 都编造了不存在的约束。'
+    },
+    {
+      type: 'choice',
+      concept: '对照实验的正确解读',
+      section: '3-2 一',
+      notesRef: '笔记 3.2 一 / 1.1 + 3-2.pdf p3–p4',
+      question: '对照组 8 轮、实验组（加计划层）17 轮。对这个结果的正确解读是什么？',
+      options: [
+        '不是有计划一定更快，而是任务变长后你是否需要一份能检查、能追踪的进度记录',
+        '证明计划层设计失败：性能是第一指标，多花一倍轮次的方案不应进入生产环境',
+        '证明计划层价值巨大：多出的 9 轮全是计划推理，说明模型思考得更加深入了',
+        '两组结果没有可比性：对照组缺少 apply_patch 和 run_test，工具面根本不同'
+      ],
+      answer: 0,
+      explanation: '笔记 1.1：加计划确实多用了几轮，成本不能忽略；但 Planning Agent 多了 s1–s6 六个步骤、每步状态和关联证据。Loop 轨迹只记录「做过哪些动作」，计划层记录「动作属于哪个子目标、推进到哪、用了哪些证据」。D 恰好说反——对照组同样有 apply_patch/run_test 和修复版契约，唯一差别是计划层（PDF p3 特意强调的前提，否则差异无法归因）；B/C 各执一端，都把 trade-off 说成了单边结论。'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>
