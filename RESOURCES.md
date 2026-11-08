@@ -29,6 +29,20 @@
 - [FastAPI Documentation](https://fastapi.tiangolo.com/)
   依赖注入、StreamingResponse、中间件。用于：1-6/1-7 网关服务。
 
+## Week03 Knowledge（2026-11-02 补充）
+
+- [第三章 学习笔记.md](./course_code/week03/第三章-学习笔记.md)（学生版，4166 行，覆盖 3-1 至 3-7；3.5 节在行 2042–2580）
+  Week03 术语与验收标准的第一材料；本章总结、20 题复习问题、源码阅读路线都在文末。
+- [3.5 教师 PPT 的 md 版](./course_code/week03/3-5/3.5%20PPT%20.md)（3-5 第一材料）
+  Harness 的六个连接、正常/异常路径、pi 工程改造清单、commerce-agents 手写 Loop 解剖。
+- [Week03 README](./course_code/week03/README.md)
+  七个小节的主题与目录说明；3-5 的 `harness_agent/` 与 `commerce-agents/` 职责。
+- [anthropics/commerce-agents](https://github.com/anthropics/commerce-agents)（Anthropic 开源）
+  手写 Messages API Loop 的参考实现：`ToolOutcome`、三道门禁、ChangeLedger 暂存/应用分离。
+- [smolagents Guarded Harness 作业](../smolagents/homework.md)（用户真实实现；[GitHub](https://github.com/chyu-wissfi/smolagents)）
+  不重写 `ToolCallingAgent` 核心的迁移案例：真实切点、write-ahead 审计、完成验收与 76 个离线测试。用于 0014 对照课程不变量；恢复范围、G1 覆盖边界与真实崩溃证明范围须按代码阅读，不只照抄设计文档。
+- 课程代码：`course_code/week03/3-5/harness_agent/`（完成契约、证据指纹、取消与恢复）与 `course_code/week03/3-5/commerce-agents/`（业务核心与三条运行路径）。
+
 ## Wisdom (Communities)
 
 - OpenViking 团队同事与导师

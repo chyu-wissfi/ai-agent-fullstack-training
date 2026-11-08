@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week03 主题课 3/7 · State Machine 与 Checkpoint</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 03 · 主题课 3 / 7 · 覆盖课程小节 3-3 · 版式：先讲后测，精讲与测验五五开</p>
+<h1>State Machine 与 Checkpoint：中断之后，凭什么接着做</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：Week03 第三课。0010 让 Agent 循环起来并停得住，0011 让任务有了可验收的计划；这一课回答更硬的问题——<strong>进程死了、人工暂停了、审批卡住了之后，下一个进程凭什么知道做到哪、哪些动作真的发生了、现在允许做什么</strong>。会话历史只记录「聊过什么」，计划只记录「准备做什么」，两者都不等于「实际发生了什么」。本课补上任务状态机、步骤执行记录、业务 Checkpoint、人工审批与恢复判定。<br>
+  <strong>材料定位</strong>：<code>course_code/week03/第三章-学习笔记.md</code> 3.3 节（行 1193–1625，学生版学习笔记，<strong>本课术语以此为准</strong>）+ <code>course_materials/week03/3-3.pdf</code>（教师 PDF，补充材料）<br>
+  <strong>代码定位</strong>：<code>course_code/week03/3-3/planning_agent_demo/</code>。核心新增文件：<code>src/task-record.ts</code>（状态机与步骤记录）、<code>src/checkpoint.ts</code>（存档信封与原子写）、<code>src/resume.ts</code>（先检查再恢复）、<code>src/approval.ts</code> + <code>src/approval-flow.ts</code>（补丁审批）；验收用例 <code>tests/checkpoint-resume.test.ts</code>（A1–A11）<br>
+  <strong>预计用时</strong>：精讲 35 分钟 + 测验 25 分钟 + 第二层动手练习 30 分钟<br>
+  <strong>本课验收标准</strong>（笔记「本节重点与验收」）：能回答——为什么能继续对话不等于能恢复业务任务；Checkpoint 至少要保存哪些信息；恢复之前为什么要核对工作区；文件已修改但结果未保存时，为什么不能直接重放。
+</div>
+
+<h2>怎么用这一课</h2>
+<p><strong>先讲后测，五五开</strong>：第一部分精讲先把「恢复」这件事的地图建好，每节都自问一句「不这样做，会出什么事故」；第二部分 18 题测验检验留存，<strong>前 3 题是间隔重测</strong>——Q1、Q2 重测 0011 的两条核心不变量（旧版本证据、原子修订），Q3 重测 0010 的停止原因不可覆盖（0010 测验 78%，这是当时四个薄弱点之一）。若你还没做 0011 的测验，把前两题当作 3-2 的热身。做完页面底部自动生成诊断报告。</p>
+<p><strong>这一课在三层学法里的位置</strong>：<strong>第一层建地图</strong>——本课有三张「必须能默画」的图：状态机（图 3）、Checkpoint 信封（图 5）、恢复五道闸门（图 6）；<strong>第二层跑代码</strong>——实验①–⑤全部<strong>离线可跑、不需要任何 API key</strong>（脚本化模型 + 临时工作区）；<strong>第三层工程师级</strong>——贯穿两个问法：「这条规则如果不由程序守住，模型或崩溃会怎么绕过去」「恢复之后，拿什么证明没有重放副作用」。</p>
+<p class="sidenote">就业面试视角：Checkpoint 是 Agent 岗位从「会写 Demo」走向「能上生产」的分水岭。面试官真正想听的不是「我会存 JSON」，而是三层判断：<strong>会话恢复和业务恢复差在哪</strong>（transcript vs transaction）→ <strong>存档和现场对不上怎么办</strong>（摘要核对 + 结果不明 + 不重放写操作）→ <strong>怎么证明恢复是真的</strong>（补丁只落一次、轮数保留、历史累积、证据不重号）。答得出这三层，才像做过长任务系统的人。</p>
+
+<nav class="toc">
+<strong>本课目录</strong>
+<ul>
+  <li><a href="#sec0">0. 开篇：一个「差一点就对了」的事故</a></li>
+  <li><a href="#sec1">1. pi 的会话持久化：它恢复的是「聊过什么」</a></li>
+  <li><a href="#sec2">2. 为什么存档会和现场对不上：两次写之间的空当</a></li>
+  <li><a href="#sec3">3. 中断信号：能停下什么，不能回滚什么</a></li>
+  <li><a href="#sec4">4. 业务层至少要补的四类信息</a></li>
+  <li><a href="#sec5">5. 任务状态机：九个状态，不是九个步骤</a></li>
+  <li><a href="#sec6">6. 步骤执行记录：换一个人接手也能看懂</a></li>
+  <li><a href="#sec7">7. Checkpoint：存档里到底装什么</a></li>
+  <li><a href="#sec8">8. 什么时候保存，怎样避免半份存档</a></li>
+  <li><a href="#sec9">9. 恢复五步：先把模型挡在门外</a></li>
+  <li><a href="#sec10">10. 人工审批：批准的必须是一份具体补丁</a></li>
+  <li><a href="#sec11">11. 接进 pi：四个接缝，不写第二套 Loop</a></li>
+  <li><a href="#sec12">12. TDD 验收：A1–A11 证明「恢复不是演出来的」</a></li>
+  <li><a href="#sec13">13. 面试视角：这一课怎么被问</a></li>
+  <li><a href="#part2">第二部分：检索式测验</a></li>
+  <li><a href="#part3">第三部分：第二层练习</a></li>
+</ul>
+</nav>
+
+<hr>
+
+<h2>第一部分：精讲（先读，测验在后）</h2>
+
+<h3 id="sec0">0. 开篇：一个「差一点就对了」的事故</h3>
+<p>Agent 正在修一个登录模块的会话过期边界问题。它已经读完源码、复现了失败测试、生成了补丁，并且把补丁写进了 <code>session-policy.ts</code>。就在工具返回之后、这一轮的 Checkpoint 还没写下去的时候，进程被杀了。</p>
+<p>重新启动后，恢复程序看到两个互相矛盾的事实：<strong>磁盘上是修改后的代码，存档里却还写着「补丁尚未完成」</strong>（笔记 3.3 二 2.1）。如果相信存档、直接按旧进度继续，Agent 可能重复打补丁；如果相信磁盘、直接把修复步骤标成完成，又拿不出当前代码版本上的测试证据。两种做法都在猜。</p>
+<p>这一课要建立的，就是「不猜」的能力。恢复不是把聊天记录加载回来接着聊，而是从<strong>持久化的事实</strong>和<strong>重新核对过的现场</strong>里，推导出下一个可辩护的动作（图 1）。</p>
+
+<figure class="diagram" id="fig1">
+<svg viewBox="0 0 760 260" role="img" aria-label="可靠恢复需要同时对齐会话层、业务层和现场层">
+  <rect class="dg-zone" x="16" y="12" width="728" height="236" rx="10"/>
+  <text class="dg-title" x="40" y="40">可靠恢复 = 三层同时对齐</text>
+
+  <rect class="dg-node" x="40" y="58" width="680" height="48" rx="7"/>
+  <text class="dg-label" x="56" y="80">① 会话层 Session</text>
+  <text class="dg-soft" x="220" y="80">模型记得聊过什么、做过哪些动作</text>
+  <text class="dg-faint" x="560" y="80">只够「接着说话」</text>
+
+  <rect class="dg-node" x="40" y="118" width="680" height="48" rx="7"/>
+  <text class="dg-label" x="56" y="140">② 业务层 Task</text>
+  <text class="dg-soft" x="220" y="140">计划、步骤、证据、审批与预算</text>
+  <text class="dg-faint" x="560" y="140">知道「做到哪、能不能继续」</text>
+
+  <rect class="dg-node" x="40" y="178" width="680" height="48" rx="7"/>
+  <text class="dg-label" x="56" y="200">③ 现场层 Workspace</text>
+  <text class="dg-soft" x="220" y="200">目录、代码版本、目标文件摘要</text>
+  <text class="dg-faint" x="560" y="200">确认「世界还是不是那个世界」</text>
+
+  <text class="dg-faint" x="40" y="242">缺任意一层，恢复都会退化成猜测：聊得上 ≠ 做得到，做得到 ≠ 世界没变。</text>
+</svg>
+<figcaption>图 1 · 会话层只回答「聊过什么」；业务层回答「任务做到哪」；现场层回答「代码还是不是存档里的那份」。三层都对齐，才谈得上恢复。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么不能只靠会话历史：</strong>大模型的上下文是「对过去对话的压缩重建」，不是数据库事务日志。它可能记得自己说过「我要改文件」，但不能证明文件真的改了；可能记得工具返回「成功」，但不能证明测试通过。把会话历史当恢复依据，等于用「叙述」替代「事实」——叙述会漏、会错、会被压缩掉。恢复必须让程序能独立核对：计划到哪一步、动作有没有闭合、工作区是不是原来那个。</div>
+
+<h3 id="sec1">1. pi 的会话持久化：它恢复的是「聊过什么」</h3>
+<p>pi 自带会话持久化和续接能力（笔记 3.3 一）：启动时指定会话目录，运行结束后目录里会生成 JSONL 文件，一行一条记录，可能包含消息、会话信息和其他会话条目。结束进程后，用同一个工作目录和会话目录，通过 <code>-c</code> / <code>--continue</code> 就能续接；<code>-r</code> / <code>--resume</code> 打开会话选择器，<code>--session-id</code> 精确指定会话，<code>--fork</code> 派生新会话，<code>--session-dir</code> 指定存档目录，<code>--no-session</code> 关闭持久化。</p>
+<p>两个容易被忽略的事实：<strong>① <code>--fork</code> 复制的是会话，不会自动还原代码工作区</strong>；<strong>② 会话发生过压缩时，续接重建的是「压缩摘要 + 保留下来的消息」，不是把全部历史原样塞回去</strong>。也就是说，连「聊过什么」都不保证逐字还原，更不用说业务现场。</p>
+<p>所以笔记给了一句很重的话：<strong>它能找回之前聊过什么，暂时不能证明业务任务恢复到了可靠现场。</strong>会话持久化解决的是「模型别忘了上下文」，业务恢复解决的是「任务别做错、别重做、别漏做」——两个问题，两套记录。</p>
+
+<h3 id="sec2">2. 为什么存档会和现场对不上：两次写之间的空当</h3>
+<p>补丁工具的典型执行顺序是（笔记 3.3 二 2.1）：</p>
+<pre>修改文件
+    ↓
+更新内存版本计数
+    ↓
+工具返回
+    ↓
+轮次边界保存 Checkpoint</pre>
+<p>这四步不是原子的。补丁已经写进 <code>session-policy.ts</code>，新的执行结果和版本信息还没保存，进程就可能退出。恢复时于是看到：磁盘上是修改后的代码，存档里仍记录「补丁尚未完成」。</p>
+<p>由此得到两条必须分开的命题：</p>
+<ul>
+  <li><strong>「存档里没有成功记录」不等于「动作没有发生」</strong>——动作可能已经落盘，只是结果没来得及写进存档。</li>
+  <li><strong>「动作发生了」也不等于「结果已知」</strong>——可能只写了一半文件、只启动了一半子进程，或者写成功但工具结果丢了。</li>
+</ul>
+
+<figure class="diagram" id="fig2">
+<svg viewBox="0 0 760 300" role="img" aria-label="补丁写入与 Checkpoint 保存之间的崩溃窗口">
+  <defs>
+    <marker id="m2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#555"/>
+    </marker>
+    <marker id="m2r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c62828"/>
+    </marker>
+  </defs>
+  <text class="dg-title" x="20" y="24">一次崩溃落在两次写之间</text>
+
+  <text class="dg-soft" x="20" y="78">Agent 进程</text>
+  <line class="dg-line" x1="120" y1="70" x2="740" y2="70"/>
+  <rect class="dg-node" x="130" y="55" width="100" height="30" rx="5"/>
+  <text class="dg-faint" x="180" y="74" text-anchor="middle">apply_patch</text>
+  <rect class="dg-node" x="270" y="55" width="110" height="30" rx="5"/>
+  <text class="dg-faint" x="325" y="74" text-anchor="middle">内存版本 +1</text>
+  <rect class="dg-node" x="420" y="55" width="100" height="30" rx="5"/>
+  <text class="dg-faint" x="470" y="74" text-anchor="middle">工具返回</text>
+  <rect class="dg-node" x="610" y="55" width="110" height="30" rx="5"/>
+  <text class="dg-faint" x="665" y="74" text-anchor="middle">轮次边界写存档</text>
+
+  <text class="dg-soft" x="20" y="148">工作区</text>
+  <line class="dg-line" x1="120" y1="140" x2="740" y2="140"/>
+  <rect class="dg-node-accent" x="130" y="125" width="425" height="30" rx="5"/>
+  <text class="dg-faint" x="342" y="144" text-anchor="middle">文件已经改了：新代码在磁盘上</text>
+
+  <text class="dg-soft" x="20" y="218">Checkpoint</text>
+  <line class="dg-line" x1="120" y1="210" x2="740" y2="210"/>
+  <rect class="dg-node-muted" x="270" y="195" width="210" height="30" rx="5"/>
+  <text class="dg-faint" x="375" y="214" text-anchor="middle">上一份有效存档：补丁未完成</text>
+  <rect class="dg-node-muted" x="610" y="195" width="110" height="30" rx="5"/>
+  <text class="dg-faint" x="665" y="214" text-anchor="middle">这一份没写成</text>
+
+  <line x1="555" y1="40" x2="555" y2="250" stroke="#c62828" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#m2r)"/>
+  <text x="565" y="46" fill="#c62828" font-size="11">进程被杀</text>
+  <text class="dg-faint" x="20" y="280">恢复时看到：磁盘 = 新代码；存档 = 旧进度；两边不是同一时刻的状态。</text>
+</svg>
+<figcaption>图 2 · 文件写入与 Checkpoint 保存是两次操作。崩溃可以精确地落在两者之间，所以「存档」永远不能单独作为真相。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么不能把 Checkpoint 当数据库事务：</strong>文件系统和存档文件是两个独立的存储，没有一个横跨两者的原子提交。即使你「每轮都存」，每轮内部仍有窗口；即使你「每个工具调用都存」，写文件和写存档之间仍有窗口。既然无法消除窗口，正确的设计就不是「假设同步」，而是<strong>让不同步可被发现</strong>：存档里记工作区摘要与代码版本，恢复时重新计算并比对；对不上的动作记为结果不明，禁止自动重放。这样窗口不会消失，但不会变成静默的错误。</div>
+
+<h3 id="sec3">3. 中断信号：能停下什么，不能回滚什么</h3>
+<p><code>AbortSignal</code> 把「本次执行需要停止」的信号传给模型调用、循环和工具，相关组件在能响应的位置检查信号并结束自己的工作（笔记 3.3 二 2.2）。但有三点必须分清：</p>
+<ol>
+  <li><strong>信号是一次性的</strong>：同一个信号一旦中止，不能恢复为未中止；下一次执行要用新信号。</li>
+  <li><strong>停止能否及时生效，取决于执行环节是否支持取消</strong>：信号传给工具，工具内部还要配合处理；一个正在写文件或跑子进程的工具，未必能立刻停下。</li>
+  <li><strong>停止过程需要收尾消息和工具结果</strong>：突然断电或强制杀进程时，不能保证收尾完成。</li>
+</ol>
+<p>所以笔记有一句关键判断：<strong>中断不是回滚。</strong>已经写入的文件不会因为发出中断信号就自动恢复，已经启动的子进程也需要明确的终止或隔离策略。更细一层，要区分三件事（笔记五 5.3）：用户已经请求停止、Agent 不再发起新操作、已经启动的操作确实结束。页面不再输出日志，只能证明第一件或第二件，不能证明第三件。<code>Promise.race</code> 可以提前结束等待，但它不会自动停止另一个 Promise 背后的操作。</p>
+<div class="why-box"><strong>为什么这会影响恢复设计：</strong>如果误把「收到停止信号」当成「世界已经回到停止前」，恢复时就会在一个半修改的工作区上继续。正确做法是把「停止请求」「停止原因」「哪些操作已启动 / 已闭合」都落进业务记录，让恢复程序自己判断现场，而不是相信「停过了，应该没事」。</div>
+
+<h3 id="sec4">4. 业务层至少要补的四类信息</h3>
+<p>除了会话历史，业务层至少还要保存或关联四类信息（笔记 3.3 二 2.3）。这四类正好对应恢复时必须回答的四个问题：</p>
+<ul>
+  <li><strong>计划与步骤进度</strong>——哪些步骤已经完成，下一步准备做什么（我现在在哪？）。</li>
+  <li><strong>工具执行记录与证据</strong>——动作是否成功，测试结果是否完整可信（到底发生了什么？）。</li>
+  <li><strong>工作区标识与代码版本、摘要</strong>——现在的代码是否与保存时一致（世界还是那个世界吗？）。</li>
+  <li><strong>待审批动作与人工决定</strong>——哪些动作仍在等待确认，已有批准是否适用（我现在允许做什么？）。</li>
+</ul>
+<p>注意一个边界：保存工作区标识和摘要，<strong>不等于把整个工作区备份下来</strong>。前者用于核对现场；如果需要回到旧代码，要另外准备 Git 提交、快照或独立工作区。把「摘要」当「备份」，是恢复设计里最常见的概念混淆之一。</p>
+
+<h3 id="sec5">5. 任务状态机：九个状态，不是九个步骤</h3>
+<p>最直接的做法是给任务加一个 <code>status</code> 字段，例如准备修改代码但还没批准时写 <code>status = "waiting_approval"</code>。但只有一个状态字段，还不算状态机；还要规定<strong>发生什么事情之后，状态才能改变</strong>（笔记 3.3 三 3.1）。笔记给出九个状态：</p>
+<pre>created            收到任务，还没开始处理
+planning           正在建立或整理计划
+running            正在分析结果、决定下一步
+waiting_tool       已发起工具调用，正在等待结果
+tool_failed        某次工具调用失败，需要判断如何处理
+waiting_approval   某个动作尚未获批，等待人工决定
+completed          修复和约定验证均已完成
+failed             本次任务无法继续，未完成交付
+cancelled          用户决定结束本次任务</pre>
+<p>这九个状态<strong>不是必须依次走完的九个步骤</strong>。不需要审批的任务不会进入 <code>waiting_approval</code>；一个任务调用多次工具，会多次进入和离开 <code>waiting_tool</code>。两个最容易混淆的问题：</p>
+<p><strong>工具失败，是不是整个任务就失败了？</strong>不一定。读取文件路径写错，可以先记 <code>tool_failed</code>，再搜索正确路径重新读取；只有达到停止条件——重试预算耗尽、缺少权限且无法解决——才把整个任务记为 <code>failed</code>。还要区分「测试工具执行成功」和「测试通过」：测试命令正常运行并拿到失败日志，说明成功获得了测试结果，但代码仍然有问题。</p>
+<p><strong>暂停了，是不是应该记为 <code>cancelled</code>？</strong>不是。暂停表示这次先停、之后还要继续；取消表示这个任务不做了。本例把两件事分开：<strong>任务状态</strong>记录中断前处于什么阶段（例如 <code>running</code>），<strong>停止原因</strong>记录为什么停下来（例如 <code>INTERRUPTED</code>）。「任务状态：running，停止原因：INTERRUPTED」表示任务在执行阶段被打断，目前没有继续运行，但任务还没有结束。</p>
+<p>状态由程序根据实际事件和业务规则修改：工具开始执行、工具返回结果、用户批准、验收通过，都是更新依据。<strong>模型可以提出建议，但不能仅凭一句「我完成了」把任务改成 completed</strong>（笔记 3.3 三 3.1）。</p>
+
+<figure class="diagram" id="fig3">
+<svg viewBox="0 0 800 400" role="img" aria-label="任务运行状态机与终态、非终态">
+  <defs>
+    <marker id="m3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#555"/>
+    </marker>
+    <marker id="m3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#a0522d"/>
+    </marker>
+  </defs>
+  <text class="dg-title" x="20" y="24">运行状态机：哪些状态可以停，哪些停不得</text>
+
+  <rect class="dg-node-ok" x="30" y="40" width="130" height="44" rx="7"/>
+  <text class="dg-label" x="95" y="60" text-anchor="middle">completed</text>
+  <text class="dg-faint" x="95" y="76" text-anchor="middle">终态</text>
+
+  <rect class="dg-node" x="300" y="40" width="150" height="44" rx="7"/>
+  <text class="dg-label" x="375" y="60" text-anchor="middle">waiting_tool</text>
+  <text class="dg-faint" x="375" y="76" text-anchor="middle">等工具结果</text>
+
+  <rect class="dg-node-accent" x="610" y="90" width="160" height="48" rx="7"/>
+  <text class="dg-label" x="690" y="111" text-anchor="middle">waiting_approval</text>
+  <text class="dg-faint" x="690" y="128" text-anchor="middle">非终态：等人工决定</text>
+
+  <rect class="dg-node" x="300" y="170" width="150" height="48" rx="7"/>
+  <text class="dg-label" x="375" y="191" text-anchor="middle">running</text>
+  <text class="dg-faint" x="375" y="208" text-anchor="middle">分析 / 决定下一步</text>
+
+  <rect class="dg-node" x="30" y="170" width="130" height="44" rx="7"/>
+  <text class="dg-label" x="95" y="190" text-anchor="middle">cancelled</text>
+  <text class="dg-faint" x="95" y="206" text-anchor="middle">终态</text>
+
+  <rect class="dg-node-muted" x="610" y="260" width="160" height="48" rx="7"/>
+  <text class="dg-label" x="690" y="281" text-anchor="middle">suspended</text>
+  <text class="dg-faint" x="690" y="298" text-anchor="middle">非终态：核查后续跑</text>
+
+  <rect class="dg-node-warn" x="30" y="300" width="130" height="44" rx="7"/>
+  <text class="dg-label" x="95" y="320" text-anchor="middle">failed</text>
+  <text class="dg-faint" x="95" y="336" text-anchor="middle">终态</text>
+
+  <!-- running <-> waiting_tool -->
+  <line class="dg-arrow" x1="375" y1="170" x2="375" y2="88" marker-end="url(#m3)"/>
+  <text class="dg-faint" x="385" y="120">tool_started</text>
+  <line class="dg-arrow" x1="345" y1="88" x2="345" y2="168" marker-end="url(#m3)"/>
+  <text class="dg-faint" x="355" y="158">tool_succeeded / failed</text>
+
+  <!-- running -> completed / cancelled / failed -->
+  <line class="dg-arrow" x1="300" y1="180" x2="162" y2="74" marker-end="url(#m3)"/>
+  <text class="dg-faint" x="202" y="118">COMPLETED</text>
+  <line class="dg-arrow" x1="300" y1="194" x2="162" y2="192" marker-end="url(#m3)"/>
+  <text class="dg-faint" x="230" y="184" text-anchor="middle">cancel</text>
+  <line class="dg-arrow" x1="300" y1="210" x2="162" y2="312" marker-end="url(#m3)"/>
+  <text class="dg-faint" x="190" y="272">failure</text>
+
+  <!-- running -> waiting_approval -->
+  <line class="dg-arrow-accent" x1="450" y1="180" x2="608" y2="120" marker-end="url(#m3a)"/>
+  <text class="dg-faint" x="508" y="140">approval_requested</text>
+  <line class="dg-arrow" x1="608" y1="142" x2="452" y2="200" marker-end="url(#m3)"/>
+  <text class="dg-faint" x="522" y="196">approval_granted</text>
+
+  <!-- waiting_approval -> suspended -->
+  <line class="dg-arrow-warn" x1="690" y1="138" x2="690" y2="258" marker-end="url(#m3)"/>
+  <text class="dg-faint" x="700" y="202">approval_rejected</text>
+
+  <!-- running -> suspended -->
+  <line class="dg-arrow" x1="450" y1="208" x2="608" y2="272" marker-end="url(#m3)"/>
+  <text class="dg-faint" x="462" y="246" font-size="10">RESULT_UNKNOWN / REPEATED / MAX_TURNS</text>
+
+  <!-- self loop -->
+  <path class="dg-arrow" d="M 340 218 C 330 252, 420 252, 410 218" marker-end="url(#m3)"/>
+  <text class="dg-faint" x="375" y="268" text-anchor="middle">task_interrupted（自环）</text>
+</svg>
+<figcaption>图 3 · 绿色是终态，红色是失败终态，橙色 <code>waiting_approval</code> 与灰色 <code>suspended</code> 都<strong>不是失败</strong>；<code>running -&gt; running</code> 的自环本身就是「任务被暂停」的事实记录。笔记的九态与 demo 的七态映射见下文。</figcaption>
+</figure>
+
+<p><strong>对照代码时要注意一个差异</strong>：笔记给的是九态，本节的 <code>RunStatus</code> 只有七个值（<code>task-record.ts:21-28</code>）：<code>running</code>、<code>waiting_tool</code>、<code>waiting_approval</code>、<code>suspended</code>、<code>completed</code>、<code>failed</code>、<code>cancelled</code>。映射关系是：</p>
+<ul>
+  <li><code>created</code> / <code>planning</code> 在 demo 里不表现为 RunStatus——任务记录创建时就是 <code>running</code>，计划通过 <code>create_plan</code> 工具建立；</li>
+  <li><code>tool_failed</code> 被记在步骤层：<code>StepRecord.failures</code>、<code>ToolCallRecord.ok=false</code>、<code>nextDecision</code>，Run 本身仍可以是 <code>running</code>，是否停由重试/停止规则决定；</li>
+  <li><code>suspended</code> 是 demo 对「不是失败的暂停」的收口：<code>APPROVAL_REJECTED</code>、<code>RESULT_UNKNOWN</code>、<code>REPEATED_ACTION</code>、<code>MAX_TURNS_EXCEEDED</code>、<code>MODEL_ERROR</code> 都落在这里（<code>task-record.ts:171-181</code>）。</li>
+</ul>
+<p>笔记没有逐条解释 demo 为什么合并状态；这是从代码可以读出的实现映射。<strong>考试和面试以笔记九态为准，读代码时要能说出「哪一态被放到了哪一层」</strong>——这本身就是比背状态表更深的考点。</p>
+
+<div class="why-box"><strong>为什么「带显式迁移规则的状态机」比「只有一个 status 字段」更好：</strong>这里比较的是两种任务状态管理方式，不是「类 vs 字符串」。方式 A：只保存一个 <code>status</code> 字段，任何代码都能改、改成什么都行；方式 B：状态集合固定、迁移由事件触发、迁移路径有约束、每次迁移留痕、终态有明确语义、状态可存档恢复。<code>status</code> 字段两种方式都有，而且都可以是字符串——<strong>状态机不是另一种数据结构，而是对字段怎么变化的一组约束</strong>。方式 A 只能回答「现在是什么」，方式 B 还能回答「怎么变成这样的、接下来允许变成什么」：模型一句「完成了」不能把 failed 改成 completed，等待审批、暂停、失败、取消也不会被混成一个状态。</div>
+
+<h3 id="sec6">6. 步骤执行记录：换一个人接手也能看懂</h3>
+<p>任务状态说明当前阶段，步骤执行记录说明具体做过什么、结果怎样、还差什么（笔记 3.3 三 3.2）。一次工具调用至少记录：属于哪个计划步骤、调用哪个工具、传入什么参数、<code>toolCallId</code>、返回结果或错误、失败后的下一步决策、重试次数与预算消耗。代码里的 <code>ToolCallRecord</code>（<code>task-record.ts:63-79</code>）与 <code>StepRecord</code>（<code>task-record.ts:82-95</code>）就是这些字段的实体。</p>
+<p><strong>为什么要保存具体参数？</strong>因为「修改会话判断」只是意图，具体补丁才说明它准备改什么；审批、排障和恢复都要查看具体内容（笔记 3.3 三 3.2）。工具执行后要保存返回结果，包括失败；比如补丁没有应用成功，工具返回「找不到需要替换的原文」。<strong>后面如果再试成功，也不能覆盖前面的失败记录</strong>——这和 0010「再试成功也不能覆盖前面的失败记录」是同一条不变量，只是从停止原因下沉到了步骤记录。</p>
+<p>更重要的是区分两种情况：</p>
+<ul>
+  <li><strong>已知失败</strong>：工具明确返回「补丁未应用」——有闭合结果，记录失败原因，可以按决策重试或换路径。</li>
+  <li><strong>结果不明</strong>：工具发起后进程退出，没有拿到结果——不能直接写成「执行失败，所以可以重试」。文件可能已经改了，只是成功结果没来得及保存。</li>
+</ul>
+
+<figure class="diagram" id="fig4">
+<svg viewBox="0 0 760 250" role="img" aria-label="ToolCall 记录从开始到成功、失败或结果不明的三态">
+  <defs>
+    <marker id="m4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#555"/>
+    </marker>
+    <marker id="m4r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c62828"/>
+    </marker>
+  </defs>
+  <text class="dg-title" x="20" y="24">ToolCall 的三态：有没有闭合记录</text>
+
+  <rect class="dg-node" x="20" y="95" width="170" height="60" rx="7"/>
+  <text class="dg-label" x="105" y="118" text-anchor="middle">beginToolCall()</text>
+  <text class="dg-faint" x="105" y="136" text-anchor="middle">记录已创建 · startedAt</text>
+  <text class="dg-faint" x="105" y="150" text-anchor="middle">endedAt = 空</text>
+
+  <rect class="dg-node" x="230" y="95" width="170" height="60" rx="7"/>
+  <text class="dg-label" x="315" y="118" text-anchor="middle">执行中</text>
+  <text class="dg-faint" x="315" y="136" text-anchor="middle">waiting_tool</text>
+  <text class="dg-faint" x="315" y="150" text-anchor="middle">工具可能已经产生副作用</text>
+
+  <rect class="dg-node-ok" x="460" y="20" width="270" height="55" rx="7"/>
+  <text class="dg-label" x="595" y="42" text-anchor="middle">endToolCall(ok = true)</text>
+  <text class="dg-faint" x="595" y="60" text-anchor="middle">已知成功：output + evidence</text>
+
+  <rect class="dg-node" x="460" y="90" width="270" height="55" rx="7"/>
+  <text class="dg-label" x="595" y="112" text-anchor="middle">endToolCall(ok = false)</text>
+  <text class="dg-faint" x="595" y="130" text-anchor="middle">已知失败：failureReason</text>
+
+  <rect class="dg-node-warn" x="460" y="160" width="270" height="55" rx="7"/>
+  <text class="dg-label" x="595" y="182" text-anchor="middle">进程被杀，没来得及 end</text>
+  <text class="dg-faint" x="595" y="200" text-anchor="middle">结果不明：endedAt 仍为空</text>
+
+  <line class="dg-arrow" x1="190" y1="125" x2="228" y2="125" marker-end="url(#m4)"/>
+  <line class="dg-arrow" x1="400" y1="115" x2="458" y2="55" marker-end="url(#m4)"/>
+  <line class="dg-arrow" x1="400" y1="125" x2="458" y2="118" marker-end="url(#m4)"/>
+  <line class="dg-arrow-warn" x1="400" y1="140" x2="458" y2="182" marker-end="url(#m4r)"/>
+  <text class="dg-faint" x="20" y="238">执行前先落记录：崩溃后才分得清「没开始」与「开始了但没结果」。</text>
+</svg>
+<figcaption>图 4 · <code>beginToolCall()</code> 在执行前创建记录，<code>endToolCall()</code> 才补 <code>endedAt</code>。恢复时「有没有 <code>endedAt</code>」就是程序区分已知失败与结果不明的机器可检查依据。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么记录必须在执行前落：</strong>如果等工具返回后再写记录，进程在返回前死掉就什么都不剩——恢复时无法区分「这个动作从没开始」（可以安全执行）和「动作已经开始了但结果丢了」（绝不能盲目重放）。<code>beginToolCall()</code> 先落一条 <code>startedAt</code>、<code>endedAt</code> 为空的记录，才让「结果不明」成为可判定状态（<code>task-record.ts:367-396</code>）。这是整课最重要的一个实现细节：<strong>可恢复性不是恢复时补出来的，是执行时提前留下的。</strong></div>
+
+<h3 id="sec7">7. Checkpoint：存档里到底装什么</h3>
+<p>Checkpoint 可以理解成任务存档：把当前进度和恢复依据保存下来，让下一个进程知道从哪里接着处理（笔记 3.3 三 3.3）。一份可用存档至少要回答七个问题：原始目标和约束是什么；当前计划、步骤状态和修订历史是什么；哪些工具已经执行、结果如何、有没有结果不明；当前工作区、代码版本或内容摘要是什么；有哪些待审批动作和人工决定；已用轮数、重试次数、Token、费用和时间预算还剩多少；会话记录对应哪个引用。</p>
+<p>代码把它收进一个带元数据的信封（<code>checkpoint.ts:45-71</code>）：</p>
+<pre>CheckpointEnvelope {
+  schemaVersion: 2          // 存档结构版本
+  runId                     // 恢复的是哪次运行
+  createdAt
+  seq                       // 第几份存档，跨进程延续
+  payload: {
+    task: TaskRecord        // 状态、步骤记录、计数、待审批、决定、迁移历史
+    plan?: PlanSnapshot     // 计划与修订历史
+    evidence: Evidence[]    // 工具执行留下的证据
+    session: {
+      messages              // 会话历史（恢复时回灌给 pi）
+      sessionId?            // pi journal 中的会话引用
+      lastOperationId?      // 上次已闭合的操作
+    }
+    workspace: {
+      id / repoRoot / projectRoot
+      codeRevision          // 上次存档时的代码版本
+      repoDigest            // 目标源码 + 相关测试的摘要
+    }
+  }
+  checksum: sha256(stableStringify(payload))
+}</pre>
+
+<figure class="diagram" id="fig5">
+<svg viewBox="0 0 800 430" role="img" aria-label="Checkpoint 信封结构：头部元数据、payload 业务对象与校验和">
+  <text class="dg-title" x="20" y="24">Checkpoint 信封：元数据在外，业务对象在内</text>
+
+  <rect class="dg-node-accent" x="20" y="38" width="760" height="375" rx="10"/>
+  <text class="dg-label" x="40" y="64">CheckpointEnvelope（schemaVersion = 2）</text>
+  <text class="dg-faint" x="40" y="84">runId · createdAt · seq（第几份存档）</text>
+  <rect class="dg-node" x="580" y="48" width="180" height="34" rx="5"/>
+  <text class="dg-faint" x="670" y="69" text-anchor="middle">checksum = SHA256(payload)</text>
+
+  <rect class="dg-zone" x="40" y="100" width="720" height="290" rx="8"/>
+  <text class="dg-soft" x="52" y="120">payload</text>
+
+  <rect class="dg-node" x="55" y="130" width="330" height="105" rx="6"/>
+  <text class="dg-label" x="70" y="152">TaskRecord</text>
+  <text class="dg-faint" x="70" y="172">status / stopCode / steps / counters</text>
+  <text class="dg-faint" x="70" y="190">pendingApproval / decisions</text>
+  <text class="dg-faint" x="70" y="208">transitions（含自环）</text>
+
+  <rect class="dg-node" x="405" y="130" width="340" height="105" rx="6"/>
+  <text class="dg-label" x="420" y="152">PlanSnapshot</text>
+  <text class="dg-faint" x="420" y="172">步骤、依赖、状态、验收标准</text>
+  <text class="dg-faint" x="420" y="190">修订历史与版本</text>
+  <text class="dg-faint" x="420" y="208">与 TaskRecord.steps 对应</text>
+
+  <rect class="dg-node" x="55" y="250" width="330" height="65" rx="6"/>
+  <text class="dg-label" x="70" y="272">Evidence[]</text>
+  <text class="dg-faint" x="70" y="292">kind / summary / payload / artifactVersion</text>
+
+  <rect class="dg-node" x="405" y="250" width="340" height="65" rx="6"/>
+  <text class="dg-label" x="420" y="272">SessionRef</text>
+  <text class="dg-faint" x="420" y="292">messages / sessionId / lastOperationId</text>
+
+  <rect class="dg-node" x="55" y="330" width="690" height="48" rx="6"/>
+  <text class="dg-label" x="70" y="352">WorkspaceReference</text>
+  <text class="dg-faint" x="70" y="368">id / repoRoot / projectRoot / codeRevision / repoDigest（目标源码 + 相关测试的摘要）</text>
+
+  <text class="dg-faint" x="40" y="405">checksum 覆盖整个 payload；任何字段被改写、截断或损坏，读取时都会校验失败。</text>
+</svg>
+<figcaption>图 5 · 外层回答「这份存档能不能读、是哪一次运行的第几份」；<code>payload</code> 回答「恢复需要知道什么」；<code>checksum</code> 让「文件看起来像 JSON」不再等于「内容可信」。</figcaption>
+</figure>
+
+<p>几个字段的 why 值得单独说：</p>
+<ul>
+  <li><strong><code>schemaVersion</code> 与 <code>codeRevision</code> 不是一回事</strong>：前者说明存档用哪种数据结构、当前程序是否支持读取；后者说明工作区代码是哪个版本。格式版本不兼容要拒绝读取，代码版本不一致要核对现场，两个判断不能合并。</li>
+  <li><strong><code>checksum</code> 防的是「看起来合法」的损坏</strong>：JSON 能解析、字段也在，不代表内容没被截断或改写；<code>loadCheckpoint</code> 用稳定序列化重算摘要，不匹配就按损坏处理（<code>checkpoint.ts:225-231</code>）。</li>
+  <li><strong><code>seq</code> 是跨进程的存档序号</strong>：恢复后写出的第一份存档接着旧编号，不重置为 1；读取时还要校验它和 <code>payload.task.counters.checkpoints</code> 一致（<code>checkpoint.ts:219-224</code>），否则说明信封和业务对象不是同一次写的。</li>
+  <li><strong><code>repoDigest</code> 只覆盖目标源码 + 相关测试</strong>，不是全仓摘要。代码注释给了理由：全仓摘要会被 <code>node_modules</code>、临时文件干扰，导致恢复时误判（<code>checkpoint.ts:102-109</code>）。这是一个「摘要范围要跟恢复判断相关」的设计取舍。</li>
+</ul>
+
+<div class="why-box"><strong>为什么存档不能只存「任务状态 + 最后一条消息」：</strong>恢复需要同时回答「我在哪」「发生过什么」「世界变没变」「我允许做什么」。只存状态，你不知道哪些证据可用；只存消息，你不知道动作有没有闭合；只存工作区，你不知道计划与审批。Checkpoint 的价值不在于「存了很多」，而在于<strong>每一类信息都对应一个恢复判断</strong>。这也是为什么信封要分 <code>task</code> / <code>plan</code> / <code>evidence</code> / <code>session</code> / <code>workspace</code> 五块，而不是揉成一个大对象。</div>
+
+<h3 id="sec8">8. 什么时候保存，怎样避免半份存档</h3>
+<p><strong>不能只在程序退出时保存</strong>——进程突然崩溃，就没有机会执行退出前的保存（笔记 3.3 三 3.3）。本例主要在完整轮次结束后保存；准备停下来等待审批时，也要先保存待确认动作和任务状态。保存越频繁，通常进度越新，但写入和一致性处理也更复杂；教学版本采用明确保存边界，不追求任意时刻中断都能原样接上。</p>
+<p>尤其注意：<strong>修改代码和保存 Checkpoint 是两次操作。</strong>补丁可能已经写进文件，但新的存档还没保存，进程就退出了。因此，即使有 Checkpoint，也不能保证存档永远与实际代码同步——这正是第 2 节那条时间线的来源。</p>
+<p>为了避免写出半份存档，代码采用「先写临时文件，再 rename 替换正式文件」（<code>checkpoint.ts:156-164</code>）：<code>rename</code> 是原子的，读者要么看到旧档，要么看到完整新档，不会看到写了一半的 JSON。存档还带两个信息：<strong>格式版本</strong>（说明数据结构，当前程序是否支持读取）和<strong>校验和</strong>（检查内容是否损坏）。保存和校验还要遵守同一套数据表示规则：没有值的可选字段统一省略或统一写成 <code>null</code>，不要两边不同；否则同一份内容会算出不同摘要。</p>
+<p>如果新存档保存失败，应<strong>停止继续推进任务，报告原因，并保留最近一份有效存档</strong>（<code>checkpoint.ts:165-172</code>）。不能一边提示保存失败，一边继续修改代码——那会把「最后一个可恢复点」也毁掉。</p>
+<div class="why-box"><strong>为什么「保存失败」必须升级为停止条件：</strong>很多人会把存档当日志：写失败就打一行 warning，任务继续跑。但日志丢了可以补，<strong>恢复点丢了不能补</strong>。继续修改代码意味着工作区与最后一份有效存档的差异越来越大，之后即使想恢复，也无法判断哪些改动是存档之后发生的。正确策略是「保存失败 → 停止推进 → 保留旧档 → 报告」，把一次可恢复的失败变成一次明确的暂停，而不是一次不可恢复的继续。</div>
+
+<h3 id="sec9">9. 恢复五步：先把模型挡在门外</h3>
+<p>恢复流程固定五步（笔记 3.3 三 3.3、代码 <code>resume.ts:103-119</code>）：</p>
+<ol>
+  <li><strong>检查存档能不能用</strong>：文件可读、格式支持、字段齐全、校验通过。</li>
+  <li><strong>检查工作区对不对</strong>：目录还在吗，相关文件变了吗，上次有没有结果不明的操作。</li>
+  <li><strong>检查任务是否允许继续</strong>：已完成或取消的任务不再续跑，等待审批的任务不能因重启绕过审批。</li>
+  <li><strong>还原业务对象</strong>：计划、步骤记录、执行证据、审批信息和运行计数。</li>
+  <li><strong>再让 pi 继续执行</strong>：准备有效上下文后，调用续跑能力。</li>
+</ol>
+<p>顺序可以压成一句话：<strong>先读存档，再核对现场，确认允许继续，还原业务状态，最后启动模型。</strong>恢复不是把程序搬回上次暂停的那一行代码；启动的是新进程，它根据保存的信息重新判断下一步，上一次测试命令的调用栈或子进程不会自动恢复（笔记 3.3 三 3.3）。</p>
+
+<figure class="diagram" id="fig6">
+<svg viewBox="0 0 820 360" role="img" aria-label="恢复五道闸门：存档、工作区、任务状态、还原、启动模型">
+  <defs>
+    <marker id="m6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#555"/>
+    </marker>
+    <marker id="m6r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c62828"/>
+    </marker>
+    <marker id="m6g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e7d32"/>
+    </marker>
+  </defs>
+  <text class="dg-title" x="20" y="24">恢复五道闸门：模型永远最后启动</text>
+
+  <rect class="dg-node" x="20" y="45" width="140" height="90" rx="7"/>
+  <text class="dg-label" x="90" y="67" text-anchor="middle">① 存档可用</text>
+  <text class="dg-faint" x="90" y="88" text-anchor="middle">可读 / 版本 / 字段</text>
+  <text class="dg-faint" x="90" y="104" text-anchor="middle">校验和通过</text>
+
+  <rect class="dg-node" x="180" y="45" width="140" height="90" rx="7"/>
+  <text class="dg-label" x="250" y="67" text-anchor="middle">② 工作区在</text>
+  <text class="dg-faint" x="250" y="88" text-anchor="middle">目录存在</text>
+  <text class="dg-faint" x="250" y="104" text-anchor="middle">摘要是否一致</text>
+
+  <rect class="dg-node" x="340" y="45" width="140" height="90" rx="7"/>
+  <text class="dg-label" x="410" y="67" text-anchor="middle">③ 任务可续</text>
+  <text class="dg-faint" x="410" y="88" text-anchor="middle">非终态</text>
+  <text class="dg-faint" x="410" y="104" text-anchor="middle">审批不被重启绕过</text>
+
+  <rect class="dg-node" x="500" y="45" width="140" height="90" rx="7"/>
+  <text class="dg-label" x="570" y="67" text-anchor="middle">④ 还原对象</text>
+  <text class="dg-faint" x="570" y="88" text-anchor="middle">计划 / 证据</text>
+  <text class="dg-faint" x="570" y="104" text-anchor="middle">计数 / 审批</text>
+
+  <rect class="dg-node-accent" x="660" y="45" width="140" height="90" rx="7"/>
+  <text class="dg-label" x="730" y="67" text-anchor="middle">⑤ 启动模型</text>
+  <text class="dg-faint" x="730" y="88" text-anchor="middle">runAgentLoop</text>
+  <text class="dg-faint" x="730" y="104" text-anchor="middle">Continue</text>
+
+  <line class="dg-arrow" x1="160" y1="90" x2="178" y2="90" marker-end="url(#m6)"/>
+  <line class="dg-arrow" x1="320" y1="90" x2="338" y2="90" marker-end="url(#m6)"/>
+  <line class="dg-arrow" x1="480" y1="90" x2="498" y2="90" marker-end="url(#m6)"/>
+  <line class="dg-arrow" x1="640" y1="90" x2="658" y2="90" marker-end="url(#m6)"/>
+
+  <line class="dg-arrow-warn" x1="250" y1="135" x2="250" y2="198" marker-end="url(#m6r)"/>
+  <text class="dg-faint" x="260" y="170">摘要不一致 → 结果不明</text>
+  <rect class="dg-node-warn" x="20" y="200" width="470" height="50" rx="7"/>
+  <text class="dg-label" x="255" y="222" text-anchor="middle">任一门失败 → 拒绝恢复 / 人工核查（exit 3）</text>
+  <text class="dg-faint" x="255" y="240" text-anchor="middle">模型不得发出任何写操作</text>
+
+  <line class="dg-arrow" x1="570" y1="135" x2="570" y2="198" marker-end="url(#m6g)"/>
+  <rect class="dg-node-ok" x="510" y="200" width="270" height="50" rx="7"/>
+  <text class="dg-label" x="655" y="222" text-anchor="middle">还原 plan / evidence / counters</text>
+  <text class="dg-faint" x="655" y="240" text-anchor="middle">原样保留，不重置</text>
+
+  <path class="dg-arrow" d="M 730 135 L 730 160 L 795 160 L 795 278" marker-end="url(#m6g)"/>
+  <rect class="dg-node-ok" x="510" y="280" width="290" height="50" rx="7"/>
+  <text class="dg-label" x="655" y="302" text-anchor="middle">⑤ 启动模型 / 续跑</text>
+  <text class="dg-faint" x="655" y="320" text-anchor="middle">只有前四步都通过才允许</text>
+
+  <text class="dg-faint" x="20" y="348">三态：completed → 直接续跑；not_started → 满足原条件可执行；unknown → 保留未决，不自动重放。</text>
+</svg>
+<figcaption>图 6 · 五道闸门从左到右依次收紧；模型在最后。任何一道失败都先停在「拒绝恢复 / 人工核查」，而不是先让模型跑起来再说。</figcaption>
+</figure>
+
+<p><strong>为什么模型必须最后启动？</strong>因为模型一启动就可能发起工具调用。如果存档损坏、工作区不一致、任务已经终结或还有待审批动作没决定，先启动模型意味着它可能在程序发现这些问题之前就写出新的副作用——本来只是「恢复不确定」，变成「又改了一轮」。把模型放在最后，是把「检查」变成「前置条件」，而不是「事后告警」。</p>
+<p>恢复时还要对「上次动作」做三态判定（笔记五 5.4）：</p>
+<ul>
+  <li><strong>completed</strong>：有闭合记录（<code>operation_finished</code> / 步骤已 completed）——恢复真实结果，继续后续验证，不重复修改。</li>
+  <li><strong>not_started</strong>：没有任何该动作的启动记录——满足原有条件后，才可以重新执行。</li>
+  <li><strong>unknown</strong>：有启动记录但没有闭合记录（含「补丁已落盘、存档未写」）——保留未决事项，继续核查或交给人处理。</li>
+</ul>
+<p>代码里的 <code>inspectResumeState</code>（<code>resume.ts:103-252</code>）把这几类检查落成具体判断：存档摘要与工作区不一致 → <code>unknown</code>；journal 里有 <code>tool_started</code> 但没有完成记录 → 写操作 <code>unknown</code>（读操作 <code>replay:"safe"</code> 可重放）；测试已启动但没有完整退出码 → 不得记为通过。最危险的是在第三态里随便补一个「失败」或「成功」状态——不能为了让流程「看起来完整」而伪造结论。</p>
+
+<div class="why-box"><strong>为什么「恢复」不是「回到上次暂停的那一行」：</strong>进程的调用栈、内存对象、子进程都不会随存档复活。新进程能做的是：读事实、核对现场、重新决定下一步。这也是为什么恢复入口要先跑 <code>inspectResumeState</code> 再跑 <code>prepareResume</code>（<code>resume.ts:258-282</code>）：前者只检查、不还原、不执行；后者只有在 <code>canResume</code> 为真时才还原业务对象。把「检查」和「执行」分成两个函数，是为了让「检查不通过时绝不启动模型」成为代码结构上的保证，而不是调用方的自觉。</div>
+
+<h3 id="sec10">10. 人工审批：批准的必须是一份具体补丁</h3>
+<p>审批必须发生在写入之前（笔记五 5.2）。补丁已经写进文件，再弹出「是否同意修改」，就失去了审批作用。本节的接入方式是：<code>beforeToolCall</code> 里拦住需要审批的动作，返回 <code>{ block: true }</code>，工具调用不会执行，模型会收到相应错误结果；业务层保存待确认动作、设置 <code>waiting_approval</code>，并通过运行控制结束本次执行。等待期间，其他需要审批的写操作也必须继续被拦住（笔记 3.3 二 2.4）。</p>
+<p><code>ApprovalGate</code>（<code>approval.ts</code>）守住了几条不变量：</p>
+<ul>
+  <li><strong>同一时刻只允许一个待审批动作</strong>（<code>approval.ts:85-112</code>）：否则第二个写操作可以排在第一个后面，绕过「等待审批」的语义。</li>
+  <li><strong>批准只对对应 <code>actionId</code> 生效</strong>（<code>approval.ts:136-151</code>）：不允许拿一个批准去执行另一个动作。</li>
+  <li><strong><code>patchHash</code> 绑定补丁参数与目标文件内容</strong>（<code>approval.ts:46-79</code>）：<code>path</code>、<code>search</code>、<code>replace</code> 或文件内容任一变化，哈希都会变；执行前重算，不一致就抛 <code>APPROVAL_STALE</code>（<code>approval.ts:172-190</code>）。</li>
+  <li><strong>进程重启不默认获得批准</strong>：<code>approved</code> 只存在于做出决定的进程；<code>TaskRecorder.restore</code> 和 <code>ApprovalGate.restore</code> 都会强制把它清成 <code>false</code>（<code>task-record.ts:225-231</code>、<code>approval.ts:123-130</code>）。</li>
+  <li><strong>模型侧没有批准入口</strong>：批准只能来自人工 <code>--approve</code> 或显式的 <code>--auto-approve</code>；后者仍走暂存、哈希校验与落盘，只在 <code>decisions[].by</code> 里记成 <code>auto</code>（<code>approval-flow.ts:1-9</code>）。</li>
+</ul>
+
+<figure class="diagram" id="fig7">
+<svg viewBox="0 0 800 300" role="img" aria-label="审批哈希绑定补丁参数与目标文件内容，执行前重新校验">
+  <defs>
+    <marker id="m7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#555"/>
+    </marker>
+    <marker id="m7r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c62828"/>
+    </marker>
+    <marker id="m7g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e7d32"/>
+    </marker>
+  </defs>
+  <text class="dg-title" x="20" y="24">审批绑定的是「这份补丁 + 这个世界」</text>
+
+  <rect class="dg-node" x="20" y="45" width="220" height="50" rx="6"/>
+  <text class="dg-label" x="130" y="67" text-anchor="middle">补丁参数</text>
+  <text class="dg-faint" x="130" y="84" text-anchor="middle">path / search / replace</text>
+
+  <rect class="dg-node" x="20" y="120" width="220" height="50" rx="6"/>
+  <text class="dg-label" x="130" y="142" text-anchor="middle">目标文件当前内容</text>
+  <text class="dg-faint" x="130" y="159" text-anchor="middle">审批时读到的全文摘要</text>
+
+  <rect class="dg-node-accent" x="300" y="70" width="190" height="60" rx="6"/>
+  <text class="dg-label" x="395" y="94" text-anchor="middle">SHA256 → patchHash H1</text>
+  <text class="dg-faint" x="395" y="112" text-anchor="middle">参数 + 文件内容一起算</text>
+
+  <rect class="dg-node" x="545" y="70" width="220" height="60" rx="6"/>
+  <text class="dg-label" x="655" y="94" text-anchor="middle">人工审批 actionId</text>
+  <text class="dg-faint" x="655" y="112" text-anchor="middle">批准的是 H1 对应的补丁</text>
+
+  <rect class="dg-node-muted" x="545" y="15" width="220" height="38" rx="6"/>
+  <text class="dg-faint" x="655" y="39" text-anchor="middle">进程重启 → approved 强制 false</text>
+
+  <line class="dg-arrow" x1="130" y1="95" x2="130" y2="118" marker-end="url(#m7)"/>
+  <line class="dg-arrow" x1="240" y1="70" x2="298" y2="90" marker-end="url(#m7)"/>
+  <line class="dg-arrow" x1="240" y1="145" x2="298" y2="115" marker-end="url(#m7)"/>
+  <line class="dg-arrow" x1="490" y1="100" x2="543" y2="100" marker-end="url(#m7)"/>
+  <line class="dg-arrow" x1="655" y1="53" x2="655" y2="68" marker-end="url(#m7)"/>
+
+  <rect class="dg-node" x="545" y="165" width="220" height="55" rx="6"/>
+  <text class="dg-label" x="655" y="187" text-anchor="middle">执行前重算 H2</text>
+  <text class="dg-faint" x="655" y="205" text-anchor="middle">assertExecutable()</text>
+  <line class="dg-arrow" x1="655" y1="130" x2="655" y2="163" marker-end="url(#m7)"/>
+
+  <rect class="dg-node" x="300" y="165" width="190" height="70" rx="6"/>
+  <text class="dg-label" x="395" y="188" text-anchor="middle">H1 == H2？</text>
+  <text class="dg-faint" x="395" y="207" text-anchor="middle">锚点出现次数 == 1？</text>
+  <line class="dg-arrow" x1="543" y1="192" x2="492" y2="195" marker-end="url(#m7)"/>
+
+  <rect class="dg-node-ok" x="90" y="250" width="210" height="40" rx="6"/>
+  <text class="dg-label" x="195" y="275" text-anchor="middle">是：落盘 + 补证据</text>
+  <line class="dg-arrow" x1="330" y1="235" x2="302" y2="255" marker-end="url(#m7g)"/>
+
+  <rect class="dg-node-warn" x="380" y="250" width="330" height="40" rx="6"/>
+  <text class="dg-label" x="545" y="275" text-anchor="middle">否：APPROVAL_STALE / 不改源码</text>
+  <line class="dg-arrow-warn" x1="430" y1="235" x2="470" y2="248" marker-end="url(#m7r)"/>
+</svg>
+<figcaption>图 7 · 审批绑定的是「这份补丁 + 这个文件内容」，不是一个抽象的「同意修改」。文件在批准后变化，旧授权自动作废；进程重启，批准标记强制清零。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么批准必须绑定哈希，而不是绑定一句话：</strong>如果审批只记「用户同意修改 session-policy.ts」，那么批准之后模型可以换一份完全不同的补丁、或者文件被外部改过，仍然拿旧批准去执行——人批准的是 A，落盘的是 B，审批就成了形式。<code>patchHash</code> 把「参数 + 目标文件当时的内容」绑成一个值：参数变了、文件变了，哈希都变；执行前重算，不一致就拒绝。这样「批准」才是一份可核对的具体授权，而不是一张空白支票。再加上进程重启强制 <code>approved=false</code>，才堵住「上次点过同意，这次重启直接继承」的绕过路径。</div>
+
+<h3 id="sec11">11. 接进 pi：四个接缝，不写第二套 Loop</h3>
+<p>3.3 不重写循环，只在 pi 的接缝上补业务记录（笔记 3.3 二 2.4）：</p>
+<ul>
+  <li><strong><code>beforeToolCall</code></strong>：执行前决定是否放行；审批拦截放在这里，返回 <code>{ block: true }</code>，handler 不执行。</li>
+  <li><strong><code>afterToolCall</code></strong>：根据执行结果补充记录、审计信息和步骤证据；它返回的 <code>terminate</code> 要看批次语义——pi 会检查整个工具批次，只有所有最终结果都设置终止提示，才提前结束。</li>
+  <li><strong>事件订阅</strong>：<code>agent_start</code>、<code>turn_start</code>、<code>tool_execution_start</code>、<code>tool_execution_end</code>、<code>agent_end</code> 说明框架运行到了哪里，业务层再把这些事件关联到具体任务和计划步骤。</li>
+  <li><strong>续跑接口</strong>：<code>runAgentLoopContinue</code> 或 <code>agent.continue()</code> 提供继续执行的机制；使用前要先还原计划、证据、审批状态和运行计数，并完成工作区校验。</li>
+</ul>
+<p>代码里有一个非常值得记的坑：<strong>会话历史不能存 <code>context.messages</code></strong>。pi 的 Loop 内部是 <code>{...context, messages: [...]}</code> 的副本，从不回写调用方的这个数组；如果存档直接写 <code>context.messages</code>，恢复时历史可能是空的。本节的实现单独维护 <code>history</code>，存档写它，恢复时再回灌给续跑入口（<code>agent-runner.ts:383-422</code>）。测试 A8 专门断言：暂停存档里的 <code>session.messages</code> 非空、包含 assistant 消息；恢复后历史累积、任务输入只出现一次（<code>checkpoint-resume.test.ts:377-441</code>）。</p>
+<p>续跑入口的选择也有讲究：<code>history.length === 0</code> 时用 <code>prompt</code> 重新发任务；否则用 <code>continue</code> 回灌历史。若最后一条恰好是 assistant，续跑前还要补一条推进提示，否则 pi 的续跑入口会直接抛错（<code>agent-runner.ts:408-422</code>）。这些细节说明：<strong>「恢复」不是调用一个 <code>resume()</code> 就完事，而是把上下文、计数、审批和现场都装配回可继续的状态。</strong></p>
+
+<h3 id="sec12">12. TDD 验收：A1–A11 证明「恢复不是演出来的」</h3>
+<p>本节验收全部通过子进程真实执行 <code>scripts/child-run.ts</code>，断言落在真实产物上：存档、源码文件、交付物、状态迁移与退出码（<code>checkpoint-resume.test.ts:1-11</code>）。重点不是「返回了某个错误码」，而是「文件到底改了几次、轮数有没有保留、历史有没有累积」。几条主干：</p>
+<ul>
+  <li><strong>A1 存档后崩溃</strong>：<code>after-checkpoint:3</code> 杀进程后，恢复保留 <code>read</code> 已完成、证据与轮数；续跑从后续步骤继续，已完成的 <code>read</code> 不被重做（<code>test:47-94</code>）。</li>
+  <li><strong>A2 补丁已落盘、存档未写</strong>：摘要不一致 → <code>RESULT_UNKNOWN</code>，恢复入口 exit 3；源码中修复片段仍然只出现 1 次——没有第二次写入（<code>test:96-143</code>）。</li>
+  <li><strong>A3 测试已启动但没有完整结果</strong>：步骤不得为 <code>completed</code>，恢复必须明确拒绝并给出 <code>run_test</code> 未决信息（<code>test:145-173</code>）。</li>
+  <li><strong>A4 / A5 审批门</strong>：未批准时 <code>APPROVAL_REQUIRED</code>；拒绝后不能执行；文件被外部改动后 <code>APPROVAL_STALE</code>，恢复后人工批准也不落盘，源码保持不变（<code>test:175-244</code>）。</li>
+  <li><strong>A6 存档损坏 / 任务终结</strong>：<code>CHECKPOINT_CORRUPT</code> / <code>RUN_TERMINAL</code>，入口 exit 3（<code>test:246-303</code>）。</li>
+  <li><strong>A7 多次失败后暂停</strong>：暂停不是失败；失败历史、工具计数与预算在恢复后原样保留（<code>test:305-334</code>）。</li>
+  <li><strong>A8 优雅暂停</strong>：<code>--pause-after 6</code> 后 <code>stopCode=INTERRUPTED</code>、状态仍是 <code>running</code>、<code>read</code>/<code>reproduce</code> 完成、<code>fix</code> 仍 pending、补丁 0 次；恢复走 <code>continue</code>，turn 从 6 继续，迁移序号接续，测试退出码序列 <code>[1,1,0,0,0]</code>（<strong>0 = 通过，非 0 = 失败</strong>），证据 ID 唯一且旧证据仍在，历史累积且任务输入只出现一次（<code>test:339-443</code>）。</li>
+  <li><strong>A9 人工审批</strong>：停在 <code>waiting_approval</code>，前面的诊断与证据保留、待确认的是具体补丁、源码未被修改；没有决定时恢复只报告不启动模型；批准后 <code>manual:1</code>、补丁只落一次；拒绝后停在 <code>suspended</code> 而不是 <code>failed</code>（<code>test:448-553</code>）。</li>
+  <li><strong>A10 独立工作区重跑</strong>：新运行有独立工作区与 runId，原存档字节级不变，且不继承旧批准——新运行照样停在等待审批（<code>test:563-609</code>）。</li>
+  <li><strong>A11 同 runId 新运行</strong>：拒绝覆盖未终结存档（exit 3），原存档字节不变；换 runId 或 <code>--resume</code> 不受影响（<code>test:614-665</code>）。</li>
+</ul>
+<div class="why-box"><strong>为什么这些断言比「错误码正确」更有证明力：</strong>错误码是程序打印出来的，可以被错误的实现「碰巧」打印；但<strong>补丁片段出现次数、源码字节、turn 数、历史长度与顺序、证据 ID 是否重号</strong>是副作用的直接痕迹，伪造不了。A2 断言 <code>patchCount === 1</code>，A10 断言原存档字节级不变，A8 断言 <code>resumedFrom.turn === 6</code> 且任务输入只出现一次——这些才是「恢复没有重放、没有重做、没有覆盖」的证据。这也是 0005/0010/0011 一路下来的同一条验收纪律：<strong>断言真实产物，不断言叙述。</strong></div>
+
+<h3 id="sec13">13. 面试视角：这一课怎么被问</h3>
+<ul>
+  <li><strong>「能继续对话，为什么不算恢复了任务？」</strong>——会话是 transcript，不是 transaction：它记录说过什么，不证明工具执行过、文件改过、审批还有效。业务恢复要补四类信息：计划进度、工具记录与证据、工作区版本/摘要、待审批决定；再用摘要核对现场。</li>
+  <li><strong>「Checkpoint 保存什么、什么时候保存？」</strong>——七类内容（目标约束、计划与修订、工具记录与证据、工作区与版本、待审批与决定、预算、会话引用）；不能只在退出时存，崩溃没有退出；完整轮次结束存，进入等待审批前必须存；先写 tmp 再 rename，带 schemaVersion 与 checksum；保存失败就停止推进，保留旧档。</li>
+  <li><strong>「恢复前为什么要核对工作区？」</strong>——存档是快照，不是事务；补丁写入与存档保存有窗口，可能「磁盘已改、存档未写」。重新计算 <code>repoDigest</code> 与 <code>codeRevision</code>，不一致就判 <code>unknown</code>，不能拿旧进度继续，也不能直接重放写操作。</li>
+  <li><strong>「文件已修改但结果未保存，为什么不能直接重放？」</strong>——因为「没有成功记录」不等于「动作没发生」；写操作可能已经落盘，重放会造成重复修改。<code>beginToolCall</code> 在执行前落记录，<code>endedAt</code> 为空就是 unknown；unknown 只保留未决、交人工核查，不自动重放写操作。</li>
+  <li><strong>「暂停、取消、等待审批有什么区别？」</strong>——暂停是「先停，之后继续」，任务状态仍是 <code>running</code>，停止原因是 <code>INTERRUPTED</code>；取消是任务不做了，终态 <code>cancelled</code>；等待审批是任务在等人，<code>waiting_approval</code> 非终态，重启不能绕过。三者混成一个 <code>failed</code>，重试、计费、审计都会错。</li>
+  <li><strong>「审批怎么防止重启绕过或旧授权复用？」</strong>——<code>approved</code> 只在内存，恢复时强制 <code>false</code>；批准绑定 <code>actionId</code> 与 <code>patchHash</code>（参数 + 文件内容）；执行前重算哈希、校验锚点唯一；同一时刻只允许一个待审批；模型侧没有批准入口，<code>auto</code> 与 <code>manual</code> 只在 <code>decisions[].by</code> 上区分。</li>
+  <li><strong>「怎么证明恢复不是演出来的？」</strong>——A2 补丁只落一次；A8 turn 从 6 继续、退出码序列 <code>[1,1,0,0,0]</code>、历史累积且任务输入只出现一次；A10 原存档字节级不变、独立工作区不继承旧批准。断言真实产物，而不是断言错误码。</li>
+</ul>
+
+<hr>
+
+<h2 id="part2">第二部分：检索式测验（18 题 · 前 3 题为间隔重测）</h2>
+<div id="quiz"></div>
+
+<hr>
+
+<h2 id="part3">第三部分：第二层练习——跑起来，再主动改造（精讲与测验之后）</h2>
+<p>实验①–⑤<strong>离线可跑、不需要任何 API key</strong>（脚本化模型 + 临时工作区）。实验③④是主动改造：<strong>先写下预期，再跑，再对照</strong>；做完把代码改回原样。所有命令从仓库根目录开始执行。</p>
+
+<h3>实验 ①：跑全量测试，先看验收面有多大（无需 API key）</h3>
+<ul>
+  <li>进入目录并安装依赖（需要 Node &gt;= 22.19，见 <code>package.json</code> 的 <code>engines</code>）：<pre>cd course_code/week03/3-3/planning_agent_demo
+npm install</pre></li>
+  <li>跑全量测试：<pre>npm test</pre></li>
+  <li>预期（先写再跑）：计划层、Loop 集成与 A1–A11 验收全部通过；打开 <code>tests/checkpoint-resume.test.ts</code>，数一数 A1–A11 各断言了什么真实产物（存档字段、源码字节、补丁次数、退出码、历史长度）。</li>
+</ul>
+
+<h3>实验 ②：跑一次「优雅暂停 → 恢复」，看轮数怎么接上（无需 API key）</h3>
+<ul>
+  <li>建临时工作区并跑到第 6 轮结束：<pre>WS=$(mktemp -d)
+npx tsx scripts/child-run.ts --scenario ac_full \
+  --workspace "$WS" --run-id run-lab \
+  --pause-after 6 --auto-approve</pre></li>
+  <li><strong>先写预期</strong>：暂停后进程退出码是 0 还是 137？任务状态是 <code>running</code> 还是 <code>failed</code>？补丁执行了几次？存档里的 <code>turn</code> 是多少？</li>
+  <li>查看存档关键字段：<pre>node -e '
+const e = require(process.argv[1]);
+console.log({
+  seq: e.seq,
+  status: e.payload.task.status,
+  stop: e.payload.task.stopCode,
+  turn: e.payload.task.counters.turn,
+  fix: e.payload.plan.steps.find((s) => s.id === "fix").status,
+});
+' "$WS/.agent-runs/run-lab.json"</pre></li>
+  <li>从存档恢复：<pre>npx tsx scripts/child-run.ts --scenario ac_full \
+  --workspace "$WS" --resume run-lab --auto-approve</pre></li>
+  <li>对照精讲第 12 节 A8：恢复报告里的「续跑方式」应是 <code>continue</code>，turn 从 6 继续；最终测试退出码序列 <code>[1,1,0,0,0]</code>；任务输入只出现一次。</li>
+</ul>
+
+<h3>实验 ③：制造「补丁已落盘、存档未写」的崩溃（无需 API key）</h3>
+<ul>
+  <li>在新工作区里批准补丁并落盘，但在下一份存档前强制退出：<pre>WS2=$(mktemp -d)
+npx tsx scripts/child-run.ts --scenario ac_full \
+  --workspace "$WS2" --run-id run-a2 --auto-approve \
+  --crash-point after-approval-before-checkpoint</pre></li>
+  <li><strong>先写预期</strong>：补丁在源码里出现几次？存档里的 <code>repoDigest</code> 与当前工作区一致吗？直接 <code>--resume</code> 会成功还是被拒绝？退出码是几？</li>
+  <li>核对补丁次数与存档摘要：<pre>grep -c 'Date.parse(session.expiresAt) &lt;= now.getTime()' \
+  "$WS2/repo/src/auth/session-policy.ts"
+npx tsx scripts/child-run.ts --scenario ac_full \
+  --workspace "$WS2" --resume run-a2 --auto-approve
+echo "exit=$?"</pre></li>
+  <li>预期：补丁只出现 1 次；恢复被拒绝（<code>RESULT_UNKNOWN</code>），退出码 3；补丁次数仍然是 1——程序没有因为「存档说没完成」就重放写操作。</li>
+</ul>
+
+<h3>实验 ④：走一遍人工审批的批准与拒绝（无需 API key）</h3>
+<ul>
+  <li>新建工作区，不加 <code>--auto-approve</code>，让补丁停在等待审批：<pre>WS3=$(mktemp -d)
+npx tsx scripts/child-run.ts --scenario ac4 \
+  --workspace "$WS3" --run-id run-fix \
+  "修复登录模块的会话过期边界问题"</pre></li>
+  <li><strong>先写预期</strong>：此时源码改了吗？<code>stopCode</code> 是什么？<code>pendingApproval</code> 里的 <code>args</code> 是具体补丁还是省略号？直接 <code>--resume</code>（不带决定）会不会启动模型？</li>
+  <li>不带决定恢复，然后批准：<pre>npx tsx scripts/child-run.ts --scenario ac4 \
+  --workspace "$WS3" --resume run-fix
+npx tsx scripts/child-run.ts --scenario ac4 \
+  --workspace "$WS3" --resume run-fix --approve</pre></li>
+  <li>再建一个工作区走拒绝路径：<pre>WS4=$(mktemp -d)
+npx tsx scripts/child-run.ts --scenario ac4 \
+  --workspace "$WS4" --run-id run-rej
+npx tsx scripts/child-run.ts --scenario ac4 \
+  --workspace "$WS4" --resume run-rej --reject</pre></li>
+  <li>对照：批准后补丁落一次、<code>decisionsBy</code> 是 <code>{manual:1,auto:0}</code>；拒绝后源码不变、状态是 <code>suspended</code> 而不是 <code>failed</code>。</li>
+</ul>
+
+<h3>实验 ⑤：主动改造——拆掉恢复检查，看哪条断言抓住它（无需 API key）</h3>
+<ul>
+  <li>打开 <code>src/resume.ts</code>，注释掉 <code>resume.ts:132-142</code> 里「工作区摘要不一致 → <code>unresolved.push(...)</code>」那段（保留外层 <code>if (digestFiles.length &gt; 0)</code> 也可以整段注释）。</li>
+  <li><strong>先写预期</strong>：哪个 A 用例会红？失败信息里最可能先暴露的是错误码、补丁次数，还是恢复后的 <code>canResume</code>？<code>A2</code> 的 <code>patchCount</code> 会变成 2 吗？</li>
+  <li>只跑验收文件：<pre>npx vitest run tests/checkpoint-resume.test.ts</pre></li>
+  <li>对照预期，重点看 A2 的失败信息；理解后恢复代码，再跑 <code>npm test</code> 确认全绿。</li>
+</ul>
+
+<h2>回读与验证指引</h2>
+<ul>
+  <li>primary source：<code>course_code/week03/第三章-学习笔记.md</code> 3.3 节（行 1193–1625，本课术语以此为准）——重点回读「能继续对话，不等于能恢复现场」「业务层要补齐三样东西」「怎样避免写出半份存档」「读到存档后怎样恢复」「换一个框架，哪些判断仍然适用」。</li>
+  <li>教师 PDF：<code>course_materials/week03/3-3.pdf</code>——作为补充材料，重点看状态机、Checkpoint 内容、恢复流程与审批三态（本机未成功抽取文本，PDF 页码不在此处标注，避免编造）。</li>
+  <li>代码回读顺序：<code>src/task-record.ts</code>（先读 1–18 行注释头，再看 <code>RunStatus</code> → <code>restore</code> → <code>beginToolCall</code> → <code>finish</code>）→ <code>src/checkpoint.ts</code>（<code>CheckpointEnvelope</code> → <code>saveCheckpoint</code> → <code>loadCheckpoint</code>）→ <code>src/resume.ts</code>（<code>inspectResumeState</code> 的五段检查 → <code>prepareResume</code>）→ <code>src/approval.ts</code>（<code>planPatch</code> → <code>assertExecutable</code>）→ <code>tests/checkpoint-resume.test.ts</code>（A1–A11 各找一个断言）。</li>
+  <li>笔记附录「源码与工程阅读路线」：本课对应 planning_agent_demo 条目；用六步阅读顺序自检——尤其是第 5 步「完成/暂停/恢复怎么判断」和第 6 步「用失败场景验证连接」（本课：A2/A3/A5 三条失败路径）。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<ul>
+  <li><code>course_code/week03/第三章-学习笔记.md</code> 3.3 节（学生版学习笔记，本课术语以此为准）</li>
+  <li><code>course_materials/week03/3-3.pdf</code>（教师 PDF，补充材料）</li>
+  <li><code>course_code/week03/3-3/planning_agent_demo/</code>（任务状态 / Checkpoint / 人工接管完整实现，pi 0.84.4 + vitest）</li>
+  <li><code>course_code/week03/3-3/planning_agent_demo/tests/checkpoint-resume.test.ts</code>（A1–A11 验收用例）</li>
+  <li><code>course_code/week03/3-3/planning_agent_demo/README.md</code>（3.3 新增文件、运行模式与课堂观察点）</li>
+</ul>
+
+<div class="ask-reminder">
+  <strong>卡住了就问你的 agent。</strong>任何一处让你觉得「等等，为什么」——比如为什么状态机要分九态而代码只有七态、为什么 <code>beginToolCall</code> 要在执行前落记录、为什么保存失败要停止任务、为什么审批要绑 <code>patchHash</code>——直接回到对话里问。本课全部内容都在回答一个问题：<strong>进程死过一次之后，程序凭什么知道做到哪、发生过什么、现在允许做什么。</strong>
+</div>
+
+<div class="lesson-footer">
+  Week03 主题课序列：<a href="./0010-agent-loop-pi-integration.html">1/7 从 Runtime 到 Agent Loop</a> · <a href="./0011-planning-and-task-decomposition.html">2/7 Planning 与任务拆解</a> · <strong>3/7 State Machine 与 Checkpoint</strong>（本课，3-3）· 4/7 Sandbox 与执行边界（3-4）· 5/7 Agent Harness（3-5）· 6/7 LangGraph 与 Agent 编排（3-6）· 7/7 项目三：Codebase Agent v2（3-7，结课课）<br>
+  前课回顾：0011 的验收重点是「模型提、程序查」与「证据决定能否交付」；本课把同一原则推进到进程边界——计划、证据、审批和运行计数都必须能跨进程还原。下一课 3-4 会把「副作用边界」从记录层推进到文件、命令、网络与资源层。<br>
+  结课条件：① 前 3 题重测全对且正题（第 4 题起）正确率 85% 以上；② 完成实验①–④至少 3 个，实验⑤的预期先写后验；③ 不看稿 2 分钟讲清：三层恢复 + 状态机（含九态/七态映射）+ 恢复五步 + 「结果不明不重放」。三者都过，再向你的 agent 要主题课 4/7（Sandbox 与执行边界，3-4）。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  questions: [
+    {
+      type: 'choice',
+      concept: '【重测·0011】旧版本的测试证据',
+      section: '0011 间隔重测',
+      notesRef: '0011 · 笔记 3.2 二 2.3 + plan-store.ts 的四道检查',
+      question: 's5 在代码版本 r2 上跑出三个退出码 0；模型随后又改了源码，版本变成 r3。它拿 r2 的证据申请完成 s5，PlanStore 会怎样？',
+      options: [
+        '拒绝：证据版本过期，抛 PLAN_EVIDENCE_STALE',
+        '接受：三个范围退出码都为 0，已满足步骤事前定下的标准',
+        '接受：先把证据版本号改成 r3，再按同一份结果完成该步骤',
+        '拒绝：必须重新执行整个任务，从 read 步骤开始全部重做'
+      ],
+      answer: 0,
+      explanation: '0011 第 5 节：test / diff 类证据的 artifactVersion 必须等于当前代码版本，否则 PLAN_EVIDENCE_STALE。测试记录只对当时受测的代码版本有效；「最新失败不能被更早的成功掩盖」，反过来旧版本的成功也不能证明新代码。B 忽略版本；C 是篡改证据；D 过度反应——只需在当前版本重跑受影响的验证。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·0011】原子修订与候选副本',
+      section: '0011 间隔重测',
+      notesRef: '0011 · 笔记 3.2 三 3.3 + plan-store.ts:290',
+      question: 'revise_plan 为什么要在候选副本上应用全部变更，整体校验通过后才提交？',
+      options: [
+        '防止中间状态：旧步骤已 skipped、新步骤未接上或依赖成环时，原计划不变',
+        '提升性能：候选副本可以并行修改，最后只做一次全量扫描和一致性校验',
+        '支持回滚：副本保留全部历史版本，用户可以随时退回任意一个旧版本计划',
+        '便于审计：副本可以导出为独立文件归档，让主计划文件保持只读不被污染'
+      ],
+      answer: 0,
+      explanation: '0011 第 8 节：替换、追加、依赖改接在候选副本上一次完成，校验通过才提交；否则中间状态里旧步骤已跳过、新步骤还没接上，别处读到的计划是残缺的。PDF p23 点题「关键是候选副本四个字」——有环、重复 ID、依赖缺失都会让整次修订被拒绝，原计划保持不变。修订历史本来就完整保留（旧步骤留下被替换记录），C 的「退回任意版本」不是设计目的；B/D 与动机无关。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·0010】停止原因不可覆盖',
+      section: '0010 间隔重测',
+      notesRef: '0010 · 笔记 3.1 六 6.3 + loop-guard.ts:194',
+      question: '一个 Run 因 REPEATED_ACTION 被停止后，同一个 Turn 里完成校验恰好通过。停止原因会变成 COMPLETED 吗？',
+      options: [
+        '不会：stop() 是 write-once，先到的终局原因不会被覆盖',
+        '会：完成校验通过说明任务真的完成了，应把停止原因改成 COMPLETED',
+        '会：两个原因都保留，由调用方在下次启动时自行选择相信哪一个',
+        '不会：Run 会直接崩溃，停止原因和完成校验结果都会一起丢失'
+      ],
+      answer: 0,
+      explanation: '0010 第 6 节：afterTurn 判定第 1 步是「已存在停止原因 → 立即停止」，stop() 的 if 守卫保证 write-once（loop-guard.ts:194）。一个因死循环被杀掉的 Run 永远不会被报告成成功交付；否则重试策略、计费、复盘全错。这条与 0008「拒绝压过放行」同构：先到的终局结论压过后到的。B 正是要防的事故；C 让调用方猜真相；D 把不变量当成异常。'
+    },
+    {
+      type: 'choice',
+      concept: '会话持久化能证明什么',
+      section: '3-3 一',
+      notesRef: '笔记 3.3 一 + 3-3.pdf 补充',
+      question: 'pi 用同一个 session 目录和 -c 续接后，模型能找回之前聊过的内容。这能证明什么？',
+      options: [
+        '只证明对话上下文可重建；不证明业务进度、文件状态和审批仍然有效',
+        '证明任务已经恢复到可靠现场；模型可以接着上次的步骤继续写文件',
+        '证明所有工具调用都已完成；没有闭合记录的动作可以视为成功',
+        '证明工作区与存档一致；恢复时不需要再核对代码摘要和文件内容'
+      ],
+      answer: 0,
+      explanation: '笔记 3.3 一：会话持久化能找回之前聊过什么，暂时不能证明业务任务恢复到了可靠现场。JSONL 记录的是消息、会话信息等条目；--fork 复制会话也不还原工作区。B/C/D 都把「上下文可重建」偷换成「业务事实可确认」，正是本课要拆掉的错误前提。'
+    },
+    {
+      type: 'choice',
+      concept: '两次写之间的崩溃窗口',
+      section: '3-3 二',
+      notesRef: '笔记 3.3 二 2.1 + checkpoint.ts 的 repoDigest',
+      question: '补丁已经写进文件，但下一份 Checkpoint 还没保存，进程就被杀了。恢复时最准确的描述是什么？',
+      options: [
+        '磁盘是新代码、存档是旧进度；这是结果不明，不能直接重放写操作',
+        '存档说补丁未完成，所以补丁一定没执行；可以安全地重新执行一次',
+        '磁盘已经是新代码，所以补丁一定完整成功；可以直接把步骤标完成',
+        '存档和磁盘总有一个是对的；按较新的那一个继续执行就可以了'
+      ],
+      answer: 0,
+      explanation: '笔记 3.3 二 2.1：修改文件、更新内存版本、工具返回、保存 Checkpoint 是四步，不是原子操作；崩溃可以落在中间。恢复看到「磁盘已改、存档说未完成」，这是结果不明，不是失败，也不是成功。B 把「没有成功记录」当成「动作没发生」；C 把「文件变了」当成「完整成功」；D 假设两者必有一个可信——正确做法是核对摘要，对不上就停下来。'
+    },
+    {
+      type: 'choice',
+      concept: '已知失败与结果不明',
+      section: '3-3 三',
+      notesRef: '笔记 3.3 三 3.2 + task-record.ts:368',
+      question: '工具启动后进程退出，没有拿到任何结果。步骤记录应该写成什么？',
+      options: [
+        '结果不明：有启动记录、没有闭合记录；保留未决事项，交人工核查',
+        '已知失败：没有收到成功结果，就说明动作没有发生，可以安全重试',
+        '已知成功：工具已经启动，按已执行处理，继续后续的验证步骤',
+        '直接删除这条记录：没有结果就没有证据，留着只会污染存档内容'
+      ],
+      answer: 0,
+      explanation: '笔记 3.3 三 3.2：工具发起后进程退出、没有拿到结果，属于「结果不明」；不能直接写成「执行失败，所以可以重试」，因为文件可能已经改了。代码用 beginToolCall 在执行前落记录（task-record.ts:368），正常结束才补 endedAt；恢复时 endedAt 为空就是 unknown。B/C 把未知当已知；D 删掉了唯一的现场线索。'
+    },
+    {
+      type: 'choice',
+      concept: '中断不是回滚',
+      section: '3-3 二',
+      notesRef: '笔记 3.3 二 2.2 + 五 5.3',
+      question: '用户按下停止，AbortSignal 已经中止。下面哪句话是对的？',
+      options: [
+        '中断不是回滚：已写入的文件不会自动恢复，已启动的子进程也可能还在跑',
+        '中断就是回滚：信号到达后，工作区会自动回到本次运行开始前的状态',
+        '中断等于任务失败：收到停止信号后，任务状态必须立刻改成 failed',
+        '中断等于任务取消：停止信号一旦发出，任务就不能再恢复或续跑'
+      ],
+      answer: 0,
+      explanation: '笔记 3.3 二 2.2：AbortSignal 是一次性的，停止能否及时生效取决于执行环节是否支持取消；中断不是回滚，已写入的文件和已启动的子进程需要明确的终止或隔离策略。五 5.3 进一步区分：用户请求停止、Agent 不再发起新操作、已启动操作确实结束——页面不输出日志只证明前两件。B 是时间机器幻想；C/D 混淆停止原因与任务状态。'
+    },
+    {
+      type: 'choice',
+      concept: '工具成功不等于测试通过',
+      section: '3-3 三',
+      notesRef: '笔记 3.3 三 3.1',
+      question: 'run_test 工具返回 ok:true，但测试退出码是 1。步骤能不能记为完成？',
+      options: [
+        '不能：工具执行成功只说明拿到了测试结果，退出码 1 说明验证未通过',
+        '能：工具返回 ok:true 就代表测试通过，退出码只是附加的调试信息',
+        '能：先把步骤标完成，等后续回归测试通过以后再补上失败记录',
+        '不能：整个任务立即标记 failed，不能再重试或修订计划来继续'
+      ],
+      answer: 0,
+      explanation: '笔记 3.3 三 3.1：要区分「测试工具执行成功」和「测试通过」——测试命令正常运行并拿到失败日志，说明成功获得了测试结果，但代码仍然有问题。完成由证据 + 退出码决定，不由工具 ok 字段决定。C 是本课要禁止的「先标完成再补证据」；D 过度反应，工具失败/测试未通过不一定导致任务失败，可以重试或修订。'
+    },
+    {
+      type: 'choice',
+      concept: '暂停、取消与等待审批',
+      section: '3-3 三',
+      notesRef: '笔记 3.3 三 3.1 + task-record.ts:171-181',
+      question: '任务在执行阶段被人工暂停，停止原因记为 INTERRUPTED。此时任务状态应该是什么？',
+      options: [
+        '仍是 running：暂停只是停下来，任务没有失败、没有取消，也没有终结',
+        '改成 failed：既然本次执行没有跑完，就应该按失败记录并停止续跑',
+        '改成 cancelled：用户让任务停下来，等价于用户决定不再做这个任务',
+        '改成 completed：暂停发生在执行阶段，说明前面的工作已经全部完成'
+      ],
+      answer: 0,
+      explanation: '笔记 3.3 三 3.1：任务状态记录中断前处于什么阶段（running），停止原因记录为什么停下来（INTERRUPTED）。「running + INTERRUPTED」表示任务在执行阶段被打断，目前没有继续运行，但任务还没有结束。代码里 INTERRUPTED 不在 STOP_CODE_STATUS 表中，finish() 不会改变状态（task-record.ts:171-181）；暂停还会留下 running → running 的自环迁移。B/C/D 分别混淆了失败、取消、完成。'
+    },
+    {
+      type: 'choice',
+      concept: '谁有权改任务状态',
+      section: '3-3 三',
+      notesRef: '笔记 3.3 三 3.1',
+      question: '模型在回复里说「我已经完成了修复」。任务状态应该由谁改成 completed？',
+      options: [
+        '程序：事件、证据和验收规则都满足时，程序才允许迁移到 completed',
+        '模型：模型最了解自己做了什么，完成声明可以作为状态迁移依据',
+        '用户：用户看到模型说完成，就可以手动把状态改成 completed',
+        '存档：下次写 Checkpoint 时自动改状态，不需要任何验收判断'
+      ],
+      answer: 0,
+      explanation: '笔记 3.3 三 3.1：状态由程序根据实际事件和业务规则修改；工具开始、工具返回、用户批准、验收通过才是更新依据。模型可以提出建议，但不能仅凭一句「我完成了」把任务改成 completed。B/C 把叙述或点击当证据；D 把持久化当验收。'
+    },
+    {
+      type: 'choice',
+      concept: '步骤记录为什么保存具体参数',
+      section: '3-3 三',
+      notesRef: '笔记 3.3 三 3.2',
+      question: '步骤执行记录为什么要保存工具调用的具体参数，而不只保存「修改会话判断」这样的意图？',
+      options: [
+        '因为审批、排障和恢复都要核对具体改什么；意图无法证明实际动作',
+        '因为参数比意图短，保存参数可以显著减少存档体积和写入时间',
+        '因为模型只会读参数、不会读意图，保存意图对模型没有任何帮助',
+        '因为参数是加密的、意图是明文的，混在一起会破坏存档的校验和'
+      ],
+      answer: 0,
+      explanation: '笔记 3.3 三 3.2：「修改会话判断」只是意图，具体补丁才说明它准备改什么；审批、排障和恢复都要查看具体内容。B/C/D 都是编造的工程理由——参数通常比一句概括更长；快照里意图和参数模型都可能看到；校验和与明文/加密无关。'
+    },
+    {
+      type: 'choice',
+      concept: 'Checkpoint 至少保存什么',
+      section: '3-3 三',
+      notesRef: '笔记 3.3 三 3.3',
+      question: '下面哪一组信息是一份可用 Checkpoint 至少应该保存的？',
+      options: [
+        '目标与约束、计划与步骤状态、工具记录与证据、工作区版本、待审批决定、预算',
+        '模型的系统提示词、全部历史对话、当前屏幕截图、用户的操作系统版本号',
+        '只保存最后一条模型回复和当前任务状态，其余内容恢复时重新问模型',
+        '只保存工作区完整备份和 Git 提交号，业务状态可以从聊天记录里重建'
+      ],
+      answer: 0,
+      explanation: '笔记 3.3 三 3.3 列了七类：原始目标与约束；计划、步骤状态与修订历史；工具执行记录与证据（含结果不明）；工作区标识、代码版本或摘要；待审批动作与人工决定；已用轮数、重试、Token、费用和时间预算；会话记录引用。B 塞了无关项且不能替代业务记录；C/D 都缺关键类——只剩状态或只剩工作区，恢复时无法同时回答「做到哪、发生过什么、允许做什么」。'
+    },
+    {
+      type: 'choice',
+      concept: '存档信封的三道保护',
+      section: '3-3 三',
+      notesRef: '笔记 3.3 三 3.3 + checkpoint.ts:133-234',
+      question: 'Checkpoint 信封里的 schemaVersion、checksum 和「先写 .tmp 再 rename」分别解决什么问题？',
+      options: [
+        '结构兼容、内容损坏检测、避免正式文件只写了一半',
+        '代码版本、文件权限、避免多个进程同时读取同一个文件',
+        '任务优先级、网络重试、避免存档目录被其他进程删除',
+        '模型版本、Token 预算、避免恢复时重复调用同一个工具'
+      ],
+      answer: 0,
+      explanation: '笔记 3.3 三 3.3：格式版本说明存档使用哪种数据结构、当前程序是否支持读取；校验和检查内容是否损坏；先写临时文件再替换正式文件，减少正式文件只写了一半的风险。代码里 saveCheckpoint 先写 .tmp 再 rename（checkpoint.ts:156-164），loadCheckpoint 校验 schemaVersion 与 checksum（204-231）。B/C/D 把三个机制张冠李戴。'
+    },
+    {
+      type: 'choice',
+      concept: '存档保存失败怎么办',
+      section: '3-3 三',
+      notesRef: '笔记 3.3 三 3.3 + checkpoint.ts:165-172',
+      question: '新 Checkpoint 保存失败时，正确的处理方式是什么？',
+      options: [
+        '停止继续推进任务，报告原因，并保留最近一份有效存档',
+        '打印一条警告后继续修改代码，等任务结束时再尝试保存',
+        '删除旧存档，避免新旧两份存档同时存在造成版本冲突',
+        '把任务状态改成 completed，让用户以为这次运行已经成功'
+      ],
+      answer: 0,
+      explanation: '笔记 3.3 三 3.3：如果新存档保存失败，应停止继续推进任务，报告原因，并保留最近一份有效存档；不能一边提示保存失败，一边继续修改代码。继续改会把最后一个可恢复点也毁掉，工作区与旧档的差异越来越大。B 把恢复点当普通日志；C 删掉唯一可回退的依据；D 伪造成功。'
+    },
+    {
+      type: 'recall',
+      concept: '恢复五步与模型最后启动',
+      section: '3-3 三',
+      notesRef: '笔记 3.3 三 3.3 + resume.ts:103-282',
+      question: '恢复一个中断的任务时，固定的五步顺序是什么？为什么模型必须最后启动？',
+      hint: '先看存档，再看现场，再看任务允不允许继续，然后还原业务对象，最后才让 pi 续跑。',
+      modelAnswer: '① 校验存档：文件可读、格式支持、字段齐全、校验和通过；② 校验工作区：目录还在、相关文件是否变化、上次有没有结果不明的操作；③ 校验任务是否允许继续：已完成或取消的任务不再续跑，等待审批的任务不能因重启绕过；④ 还原业务对象：计划、步骤记录、证据、审批信息和运行计数；⑤ 准备有效上下文，调用 pi 的续跑能力。模型最后启动，是因为前四步任何一步失败都意味着现场不可信或不允许继续；如果先启动模型，它可能在程序发现不一致之前就发出写操作，把「恢复不确定」变成「又改了一轮」。'
+    },
+    {
+      type: 'choice',
+      concept: '上次动作的三态判定',
+      section: '3-3 五',
+      notesRef: '笔记 3.3 五 5.4 + resume.ts 的 ActionState',
+      question: '恢复时发现上次的写操作「有启动记录、没有闭合记录」。按三态判定，应该怎么处理？',
+      options: [
+        '判为 unknown：保留未决事项，停止自动推进，人工核查后再决定',
+        '判为 completed：既然已经启动，就按执行成功恢复结果并继续',
+        '判为 not_started：没有闭合记录说明动作没发生，可以立即重试',
+        '判为 failed：没有拿到结果就是失败，直接调用同一工具再执行一次'
+      ],
+      answer: 0,
+      explanation: '笔记 3.3 五 5.4：completed 是有闭合记录；not_started 是没有任何启动记录；unknown 是有启动记录但没有闭合记录（含「补丁已落盘、存档未写」）。unknown 是最危险的一种，不能随便补一个失败或成功状态——保留未决事项，继续核查或交给人处理。B/C/D 都在把未知强行归入已知，其中 D 还会重复写操作。'
+    },
+    {
+      type: 'choice',
+      concept: '审批哈希绑定与旧授权失效',
+      section: '3-3 四',
+      notesRef: '笔记 3.3 二 2.4 / 四 + approval.ts:172-190',
+      question: '人工批准补丁后，目标文件在真正落盘前被外部改动。执行入口会怎么处理？',
+      options: [
+        '重算哈希不一致，抛 APPROVAL_STALE，源码不变',
+        '继续执行已批准补丁：人工已经同意修改，文件变化不影响授权',
+        '把文件恢复到批准时内容，再执行补丁，保证批准的就是执行的',
+        '自动重新发起审批请求，模型等待期间可继续执行其他写操作'
+      ],
+      answer: 0,
+      explanation: 'approval.ts:172-190：assertExecutable 在执行前重新计算 patchHash；补丁参数或目标文件内容变化都会导致不一致，抛 APPROVAL_STALE，源码不变。笔记 3.3 四也要求「批准后，如果补丁或相关文件发生变化，需要重新检查授权」。B 是空白支票；C 会覆盖外部改动、制造新副作用；D 违反「同一时刻只允许一个待审批」且让模型在等待期继续写。'
+    },
+    {
+      type: 'recall',
+      concept: '怎么证明恢复没有重放副作用',
+      section: '3-3 四',
+      notesRef: 'A2 / A8 / A10 + checkpoint-resume.test.ts',
+      question: '怎么用验收测试证明「恢复没有重放副作用」？至少说出三条有证明力的断言。',
+      hint: '不要只断言错误码；看文件被改了几次、轮数是否保留、历史是否累积、证据序号是否接续。',
+      modelAnswer: '① A2：补丁落盘后、存档前崩溃，恢复被拒绝，源码中修复片段仍然只出现 1 次——没有第二次写入；② A8：优雅暂停后恢复，turn 从 6 继续而不是从 0 重来，测试退出码序列是 [1,1,0,0,0]（进程退出码：0 = 通过，非 0 = 失败），旧失败记录保留、新通过接在后面；③ A8 还断言会话历史累积：暂停前的消息原样在前、恢复新增的接在后，任务输入只出现一次，证明走的是 continue 而不是重发任务；④ 证据 ID 不重号、不回退，旧证据仍在；⑤ A10：独立工作区重跑时原存档字节级不变，新运行不继承旧批准。核心是：错误码可以打印，文件字节、执行次数、轮数、历史长度伪造不了。'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>

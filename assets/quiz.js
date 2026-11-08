@@ -8,8 +8,9 @@
    题型：
      choice: { type:'choice', concept, section, notesRef, question, options:[…], answer:int, explanation }
      recall: { type:'recall', concept, section, notesRef, question, hint, modelAnswer }
+     short:  { type:'short',  concept, section, notesRef, question, hint, modelAnswer }
    评分：
-     choice - 点选后立即判对错；recall - 自评（答对/部分/没答上）。
+     choice - 点选后立即判对错；recall/short - 自评（答对/部分/没答上）。
      全部作答后可生成诊断报告，按知识点汇总薄弱项并给出笔记定位。 */
 
 (function () {
@@ -37,7 +38,7 @@
     }
 
     config.questions.forEach((q, i) => {
-      root.appendChild(q.type === 'recall' ? renderRecall(q, i) : renderChoice(q, i));
+      root.appendChild(q.type === 'choice' ? renderChoice(q, i) : renderRecall(q, i));
     });
 
     root.appendChild(renderReport());
@@ -78,13 +79,16 @@
     }
 
     function renderRecall(q, i) {
+      const isShort = q.type === 'short';
       const box = el('div', 'quiz-q');
-      box.appendChild(el('span', 'q-tag', `Q${i + 1} · ${esc(q.concept)} · ${esc(q.section || '')} · 回忆题`));
+      box.appendChild(el('span', 'q-tag', `Q${i + 1} · ${esc(q.concept)} · ${esc(q.section || '')} · ${isShort ? '简述题' : '回忆题'}`));
       box.appendChild(el('p', 'q-text', esc(q.question)));
       if (q.hint) box.appendChild(el('p', null, `<span style="color:var(--ink-faint);font-size:.88rem">提示：${esc(q.hint)}</span>`));
 
       const ta = el('textarea', 'recall-input');
-      ta.placeholder = '先凭记忆作答，写完再对答案——回忆比重读更能形成长期记忆。';
+      ta.placeholder = isShort
+        ? '先按「结论 → 核心链路 → 设计取舍或验收证据」作答，再对照参考答案。'
+        : '先凭记忆作答，写完再对答案——回忆比重读更能形成长期记忆。';
       box.appendChild(ta);
 
       const revealBtn = el('button', 'reveal-btn', '对答案');

@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week03 主题课 4/7 · Sandbox 与执行边界</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 03 · 主题课 4 / 7 · 覆盖课程小节 3-4 · 版式：先讲后测，精讲与测验五五开</p>
+<h1>Sandbox 与执行边界：Agent 能做什么，又能碰到什么</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：Week03 第四课。0010 控制 Loop 怎么走，0011 控制任务如何拆，0012 控制中断后怎样恢复；这一课控制<strong>每一步实际能碰到什么</strong>。当 Agent 同时拥有文件读写、Shell 和网络能力，一次误判不再只是错一句话，而可能删错目录、读出凭证、访问内网，或被 Loop 连续放大。本课建立四类副作用边界，并分清 Runtime、Sandbox 与 Harness 的责任。<br>
+  <strong>材料定位</strong>：<a href="../course_code/week03/第三章-学习笔记.md"><code>course_code/week03/第三章-学习笔记.md</code></a> 3.4 节（行 1629–2040，学生版学习笔记，<strong>本课术语以此为准</strong>）+ <a href="../course_materials/week03/3-4.pdf"><code>course_materials/week03/3-4.pdf</code></a>（教师 PDF，本地与 Docker 实验步骤）<br>
+  <strong>代码定位</strong>：<code>course_code/week03/3-4/pi-boundary-demo/</code>（本地产物验收现场）与 <code>course_code/week03/3-4/opensandbox-demo/</code>（OpenSandbox 闭环）。重点读 <code>sandbox_demo.py</code>、<code>sandbox.toml</code>、<code>sandbox-result.json</code>。<br>
+  <strong>预计用时</strong>：精讲 35 分钟 + 测验 25 分钟 + 第二层动手练习 40 分钟<br>
+  <strong>本课验收标准</strong>（笔记「本节重点与验收」）：能回答——执行边界到底在防什么；路径为什么必须 resolve 后校验；Shell 为什么不能靠黑名单治理；本地与 Docker Sandbox 怎样选；怎样证明拦截发生在副作用之前。
+</div>
+
+<h2>怎么用这一课</h2>
+<p><strong>先讲后测，五五开</strong>：第一部分先建立执行边界的地图，每节都回答「为什么这样设计、不这样会出什么事故」；第二部分 18 题，其中 <strong>14 道选择题 + 4 道简述题</strong>。Q1–Q3 重测 0012 的三个薄弱点，Q4 起进入本课；四道简述题按得分点严格自评，漏掉关键点就选「部分对」。完成后自动生成诊断报告。</p>
+<p><strong>三层定位</strong>：第一层能默画三类图——执行分工（图 2）、Shell 防线（图 4）、本地与 Docker 取舍（图 5）；第二层跑通本地三条边界提示词和 OpenSandbox 的「创建 → 执行 → 取回 → 销毁」闭环，再主动改配置与失败场景；第三层始终追问「检查发生在副作用之前还是之后」「这条规则由模型自觉、应用代码还是操作系统保证」。</p>
+<p class="sidenote">就业面试视角：不要只答「我用了 Docker」。面试官会沿着事故追问：进程内 <code>read/write/edit</code> 谁管？<code>artifacts/../../.env</code> 为什么能绕过字符串前缀？通用 Shell 为什么让所有文件边界失效？容器销毁能否撤销已经发出的请求？怎样证明危险命令真的没执行？能沿这条链回答，才说明理解的是执行边界，而不是背了一个工具名。</p>
+
+<nav class="toc">
+<strong>本课目录</strong>
+<ul>
+  <li><a href="#sec0">0. 开篇：Loop 放大的是副作用</a></li>
+  <li><a href="#sec1">1. 风险模型：防不可挽回</a></li>
+  <li><a href="#sec2">2. Runtime、Sandbox、Harness 分工</a></li>
+  <li><a href="#sec3">3. 文件三区与读写差异</a></li>
+  <li><a href="#sec4">4. 路径必须 resolve 后校验</a></li>
+  <li><a href="#sec5">5. 专用工具优先于通用 Shell</a></li>
+  <li><a href="#sec6">6. 解析、超时、取消与输出</a></li>
+  <li><a href="#sec7">7. 网络、凭证与环境变量</a></li>
+  <li><a href="#sec8">8. 本地与 Docker Sandbox 取舍</a></li>
+  <li><a href="#sec9">9. OpenSandbox 闭环代码解剖</a></li>
+  <li><a href="#sec10">10. 审计、Checkpoint 与风险回放</a></li>
+  <li><a href="#sec11">11. R1–R6 与 A1–A6 验收</a></li>
+  <li><a href="#sec12">12. 面试视角：沿事故链回答</a></li>
+  <li><a href="#part2">第二部分：检索式测验</a></li>
+  <li><a href="#part3">第三部分：第二层练习</a></li>
+</ul>
+</nav>
+
+<hr>
+
+<h2>第一部分：精讲（先读，测验在后）</h2>
+
+<h3 id="sec0">0. 开篇：Loop 放大的是副作用</h3>
+<p>Agent 要清理临时文件，生成了 <code>rm -rf ./tmp</code>。单看参数，这似乎是一次普通清理；如果工作目录解析偏差让实际目标变成仓库根目录，它就成了不可逆删除。更麻烦的是，Loop 不会因一次错误自动恢复理智：下一轮可能基于已经改变的现场继续判断，再产生下一轮副作用。</p>
+<p>3-1 到 3-3 刻意只开放少量工具；真实开发却要求读整个仓库、改源码、跑测试、装依赖、操作 Git，甚至访问网络。能力给全以后，核心问题从「模型这句话说得对不对」变成「这次动作碰到哪里、越界谁拦、出事怎样查」。</p>
+<p>本课的主线只有一句：<strong>从任务出发定义允许的副作用，让 Runtime 在执行前检查，让 Sandbox 限制执行后的影响范围，再由 Harness 把真实结果、审计和状态接回去。</strong></p>
+
+<figure class="diagram" id="fig1">
+<svg viewBox="0 0 760 300" role="img" aria-label="四类副作用边界与三个边界目标">
+  <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="26">任务能力 → 四类副作用 → 有上限的爆炸半径</text>
+  <rect class="dg-node-accent" x="25" y="55" width="145" height="58" rx="7"/>
+  <text class="dg-label" x="97" y="80" text-anchor="middle">Agent Loop</text>
+  <text class="dg-soft" x="97" y="99" text-anchor="middle">连续提出动作</text>
+  <line class="dg-arrow" x1="170" y1="84" x2="205" y2="84" marker-end="url(#a1)"/>
+
+  <rect class="dg-node" x="210" y="45" width="120" height="48" rx="6"/>
+  <text class="dg-label" x="270" y="66" text-anchor="middle">文件</text>
+  <text class="dg-soft" x="270" y="83" text-anchor="middle">读哪里 · 写哪里</text>
+  <rect class="dg-node" x="345" y="45" width="120" height="48" rx="6"/>
+  <text class="dg-label" x="405" y="66" text-anchor="middle">命令</text>
+  <text class="dg-soft" x="405" y="83" text-anchor="middle">运行什么 · 多久</text>
+  <rect class="dg-node" x="480" y="45" width="120" height="48" rx="6"/>
+  <text class="dg-label" x="540" y="66" text-anchor="middle">网络</text>
+  <text class="dg-soft" x="540" y="83" text-anchor="middle">连哪里 · 发什么</text>
+  <rect class="dg-node" x="615" y="45" width="120" height="48" rx="6"/>
+  <text class="dg-label" x="675" y="66" text-anchor="middle">资源</text>
+  <text class="dg-soft" x="675" y="83" text-anchor="middle">CPU · 内存 · 输出</text>
+
+  <rect class="dg-zone" x="210" y="120" width="525" height="70" rx="8"/>
+  <text class="dg-label" x="230" y="147">边界不承诺「模型不犯错」</text>
+  <text class="dg-soft" x="230" y="170">它承诺一次错误的影响可拦截、可审计、可恢复</text>
+  <line class="dg-arrow-accent" x1="472" y1="94" x2="472" y2="116" marker-end="url(#a1)"/>
+
+  <rect class="dg-node-ok" x="95" y="220" width="170" height="48" rx="6"/>
+  <text class="dg-label" x="180" y="241" text-anchor="middle">可拦截</text>
+  <text class="dg-soft" x="180" y="258" text-anchor="middle">副作用发生前拒绝</text>
+  <rect class="dg-node-ok" x="295" y="220" width="170" height="48" rx="6"/>
+  <text class="dg-label" x="380" y="241" text-anchor="middle">可审计</text>
+  <text class="dg-soft" x="380" y="258" text-anchor="middle">做过与试图做过都留痕</text>
+  <rect class="dg-node-ok" x="495" y="220" width="170" height="48" rx="6"/>
+  <text class="dg-label" x="580" y="241" text-anchor="middle">可恢复</text>
+  <text class="dg-soft" x="580" y="258" text-anchor="middle">损失有上限且能挽回</text>
+</svg>
+<figcaption>图 1 · 四类边界来自任务，不来自工具清单。边界的目标不是消灭所有错误，而是避免一次错误变成不可挽回的事故。</figcaption>
+</figure>
+
+<h3 id="sec1">1. 风险模型：防不可挽回，而不是幻想不犯错</h3>
+<p>笔记要求接受三个事实。第一，<strong>模型输出永远是不可信输入</strong>；到 Agent 场景，不仅参数不可信，意图也可能因误解、长循环偏差和上下文污染而改变。第二，<strong>Agent 读到的内容本身可能是攻击</strong>：恶意 README、注释、issue 或网页可以诱导它读取 <code>.env</code> 或执行远程脚本。第三，<strong>Loop 是风险放大器</strong>：同一偏差可能在几十轮里反复落到真实世界。</p>
+<p>因此文件边界只能限制「最后能碰到什么」，不能判断「这段文字是不是恶意指令」。防御必须由 Host 和执行环境强制执行，不能写在提示词里让模型自觉遵守。</p>
+<div class="why-box"><strong>为什么默认拒绝，而不是黑名单：</strong>黑名单要预先枚举所有危险路径、命令和参数形态，新型写法永远枚举不完；白名单只回答「这个任务到底需要哪些能力」，范围更窄，也更贴近任务。代价是合法的新需求也会被拦住，需要补规则或审批，所以还要做到<strong>越界可感知</strong>：返回明确拒绝原因、留下审计，不能静默失败让模型反复重试。</div>
+<p>边界的三个目标要分别验收：<strong>可拦截</strong>是危险动作在执行前被拦下；<strong>可审计</strong>是允许和拒绝都有记录；<strong>可恢复</strong>是损失能通过 Checkpoint、Git、独立工作区或快照挽回。只返回一个错误码，不等于三者都成立。</p>
+
+<h3 id="sec2">2. Runtime、Sandbox、Harness：三个对象，三种责任</h3>
+<p>这三个对象最容易在面试里混成一句「运行时负责安全」。笔记和教师 PDF 给出的分工是：</p>
+<ul>
+  <li><strong>Tool Runtime：检查放行</strong>——检查参数、路径、权限和审批要求；危险调用在 handler 前拒绝。</li>
+  <li><strong>Sandbox：限制影响范围</strong>——限制实际执行能触及的文件、网络、进程与资源。</li>
+  <li><strong>Harness：组织执行</strong>——把工具接入同一工作区，组织取消、结果回写、审计和状态更新；Loop 再根据真实结果继续、调整或等待。</li>
+</ul>
+
+<figure class="diagram" id="fig2">
+<svg viewBox="0 0 760 315" role="img" aria-label="Runtime 检查放行，Sandbox 限制影响范围，Harness 组织执行">
+  <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <rect class="dg-zone" x="18" y="15" width="724" height="282" rx="10"/>
+  <text class="dg-title" x="38" y="42">Harness：统一入口 · 取消传播 · 结果回写 · 审计与状态</text>
+
+  <rect class="dg-node" x="42" y="70" width="125" height="55" rx="7"/>
+  <text class="dg-label" x="104" y="93" text-anchor="middle">Model / Loop</text>
+  <text class="dg-soft" x="104" y="112" text-anchor="middle">提出动作</text>
+  <line class="dg-arrow" x1="167" y1="97" x2="205" y2="97" marker-end="url(#a2)"/>
+
+  <rect class="dg-node-accent" x="210" y="65" width="180" height="65" rx="7"/>
+  <text class="dg-label" x="300" y="88" text-anchor="middle">Tool Runtime</text>
+  <text class="dg-soft" x="300" y="107" text-anchor="middle">参数 · 路径 · 权限 · 审批</text>
+  <text class="dg-faint" x="300" y="122" text-anchor="middle">执行前：能不能开始</text>
+  <line class="dg-arrow" x1="390" y1="97" x2="430" y2="97" marker-end="url(#a2)"/>
+
+  <rect class="dg-node-ok" x="435" y="55" width="275" height="125" rx="8"/>
+  <text class="dg-label" x="572" y="80" text-anchor="middle">Sandbox：开始以后能碰到什么</text>
+  <line class="dg-line" x1="455" y1="93" x2="690" y2="93"/>
+  <text class="dg-soft" x="455" y="116">进程内 read/write/edit</text>
+  <text class="dg-faint" x="650" y="116" text-anchor="end">应用层前置检查</text>
+  <text class="dg-soft" x="455" y="143">bash 及子进程</text>
+  <text class="dg-faint" x="650" y="143" text-anchor="end">OS / 容器隔离</text>
+  <text class="dg-soft" x="455" y="166">文件 · 网络 · 时间 · CPU · 内存 · 输出</text>
+
+  <path class="dg-arrow" d="M572 180 L572 225 L300 225 L300 139" marker-end="url(#a2)"/>
+  <text class="dg-faint" x="580" y="211">真实结果与证据</text>
+  <rect class="dg-node" x="42" y="200" width="180" height="58" rx="7"/>
+  <text class="dg-label" x="132" y="224" text-anchor="middle">拒绝路径</text>
+  <text class="dg-soft" x="132" y="244" text-anchor="middle">handler 未执行 + deny 审计</text>
+  <path class="dg-arrow-warn" d="M245 130 L245 173 L160 173 L160 196" marker-end="url(#a2)"/>
+  <text class="dg-faint" x="38" y="282">不变量：检查在唯一执行入口；隔离覆盖每条执行路径；结果同时回到模型与状态。</text>
+</svg>
+<figcaption>图 2 · Runtime 的「允许」不是安全保证的全部；Sandbox 的「隔离」也不替代参数与授权检查。Harness 负责把两者接进同一条真实执行路径。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么需要两层防线：</strong><code>read/write/edit</code> 在 Agent 的 Node.js 进程内运行，OS 沙箱如果只包住 bash 子进程，就罩不到它们，所以要应用层前置检查；反过来，一旦 Agent 能运行任意代码，它可能绕过应用层判断，所以 bash 还要 OS 或容器强制隔离。只做应用检查，任意代码可能绕过；只做子进程沙箱，进程内工具成为旁路。</div>
+
+<h3 id="sec3">3. 文件三区与读写差异</h3>
+<p>文件边界先分三区（笔记 3.4 二 2.1）：</p>
+<ul>
+  <li><strong>只读区</strong>：目标源码、项目文档、依赖源码。允许读取取证，修改必须走受控补丁工具。</li>
+  <li><strong>可写区</strong>：<code>artifacts/</code>、临时目录。允许读写，删掉重建代价低；可写隐含可读，写完还要回读验证。</li>
+  <li><strong>禁止区</strong>：<code>~/.ssh</code>、<code>~/.aws</code>、<code>.env*</code>、<code>*.pem</code>、<code>*.key</code>、系统目录。读写都禁止，硬阻断，不进入审批。</li>
+</ul>
+<p>「可写」不等于「随便写」。如果完成契约要求交付 <code>artifacts/login-flow.md</code>，而工具能写任意路径，那么「写入成功」不再证明约定产物完成。允许改哪个源码文件也可以进一步收窄成逐文件白名单。</p>
+<p><strong>为什么禁止区不能审批放行：</strong>审批适合「高风险但可能有合理用途」的动作，例如修改指定源码；Codebase Agent 读取私钥没有合理用途。把硬禁止也送去审批，既增加误放行机会，也把本应不存在的路径变成可协商路径。</p>
+<p>pi-sandbox 的读写规则还有一处不能混：读侧的 <code>denyRead</code> 可被明确 <code>allowRead</code> 覆盖；写侧的 <code>denyWrite</code> 是硬阻断，优先于 <code>allowWrite</code>，不提示、不放行。笔记给出的理由是破坏性不同：<strong>读错主要泄露信息，写错造成不可逆修改，所以写的拒绝更强。</strong></p>
+
+<h3 id="sec4">4. 路径必须 resolve 后校验</h3>
+<p>模型给的是路径字符串，文件系统解释的是解析后的落点。直接做 <code>startsWith("artifacts/")</code>，会把「字符串开头合法」误当成「最终落点合法」。</p>
+<pre>提交：artifacts/../../.env
+字符串前缀：以 artifacts/ 开头 → 朴素检查通过
+resolve 后：/repo/.env → 已离开 artifact 根 → 拒绝</pre>
+<p>笔记的最小校验同时处理根目录本身和目录分隔符：</p>
+<pre><code>import { resolve, sep } from "node:path";
+
+function assertInside(root: string, submitted: string): string {
+  const resolved = resolve(root, submitted);
+  if (resolved !== root &amp;&amp; !resolved.startsWith(root + sep)) {
+    throw new FileError("PATH_OUTSIDE_BOUNDARY", resolved);
+  }
+  return resolved;
+}</code></pre>
+
+<figure class="diagram" id="fig3">
+<svg viewBox="0 0 760 330" role="img" aria-label="路径从字符串到真实落点的校验决策树">
+  <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker><marker id="a3r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#c62828"/></marker></defs>
+  <text class="dg-title" x="20" y="25">不要相信字符串，要校验真实落点</text>
+  <rect class="dg-node" x="255" y="45" width="250" height="44" rx="6"/>
+  <text class="dg-label" x="380" y="72" text-anchor="middle">模型提交 path 字符串</text>
+  <line class="dg-arrow" x1="380" y1="89" x2="380" y2="112" marker-end="url(#a3)"/>
+  <rect class="dg-node-accent" x="245" y="117" width="270" height="48" rx="6"/>
+  <text class="dg-label" x="380" y="138" text-anchor="middle">resolve(root, submitted)</text>
+  <text class="dg-soft" x="380" y="155" text-anchor="middle">先消解 ..，得到绝对路径</text>
+  <line class="dg-arrow" x1="380" y1="165" x2="380" y2="188" marker-end="url(#a3)"/>
+  <rect class="dg-node" x="195" y="193" width="370" height="48" rx="6"/>
+  <text class="dg-label" x="380" y="214" text-anchor="middle">resolved === root 或 startsWith(root + sep)</text>
+  <text class="dg-soft" x="380" y="232" text-anchor="middle">分隔符挡住 artifacts-evil 前缀冒充</text>
+
+  <line class="dg-arrow" x1="195" y1="217" x2="105" y2="217" marker-end="url(#a3r)"/>
+  <rect class="dg-node-warn" x="20" y="252" width="250" height="52" rx="6"/>
+  <text class="dg-label" x="145" y="275" text-anchor="middle">否：PATH_OUTSIDE_BOUNDARY</text>
+  <text class="dg-soft" x="145" y="294" text-anchor="middle">I/O 前拒绝 + deny 审计</text>
+  <path class="dg-arrow-warn" d="M105 241 L105 248" marker-end="url(#a3r)"/>
+
+  <line class="dg-arrow" x1="565" y1="217" x2="650" y2="217" marker-end="url(#a3)"/>
+  <rect class="dg-node-accent" x="490" y="252" width="250" height="52" rx="6"/>
+  <text class="dg-label" x="615" y="275" text-anchor="middle">是：再处理符号链接</text>
+  <text class="dg-soft" x="615" y="294" text-anchor="middle">禁软链或 realpath 二次校验</text>
+  <path class="dg-arrow" d="M650 241 L650 248" marker-end="url(#a3)"/>
+  <text class="dg-faint" x="20" y="323">resolve 只做字符串规范化，不会自动发现「合法路径其实是越界软链」。</text>
+</svg>
+<figcaption>图 3 · 两类字符串攻击靠 resolve 与带分隔符的前缀比较处理；符号链接还要 realpath 或建目录时禁止，不能把 resolve 当成文件系统真相查询。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么拒绝码也要设计：</strong><code>PATH_OUTSIDE_BOUNDARY</code> 同时服务两个消费方：模型知道应换合法路径，而不是原样重试；审计能按拒绝类型统计越界尝试。只返回 <code>ERROR</code>，下一轮缺少修正依据，事后也分不清路径问题、权限问题和真实执行失败。</div>
+
+<h3 id="sec5">5. 专用工具优先于通用 Shell</h3>
+<p>文件边界再严，只要开放不受控的 <code>run_command</code>，就能用 <code>cat ~/.ssh/id_rsa</code> 绕开 <code>read_file</code> 的拒绝。笔记因此称 Shell 为<strong>所有工具的超集</strong>：一条命令可以读写文件、访问网络、启动进程。</p>
+<p>首选不是写更复杂的命令过滤，而是<strong>不暴露通用 Shell</strong>。修复任务需要测试时，只提供 <code>run_test(scope)</code>：唯一入参是测试范围，测试文件清单在执行上下文中事先约定，命令由 Runtime 自己拼。模型没有机会注入命令字符串。</p>
+<div class="why-box"><strong>这是表达力与安全性的取舍：</strong>通用 Shell 灵活性最高，但把参数本身变成可执行载荷，防线必须理解所有 Shell 语法；专用 <code>run_test</code> 牺牲任意命令能力，换取结构性防御——危险表达根本无法从接口进入。只有任务确实需要通用 Shell，才付出白名单、解析、超时、进程组和输出治理的成本。</div>
+<p>必须开放时，按<strong>副作用能否挽回</strong>分级，而不是按命令名背表：</p>
+<ul>
+  <li><strong>只读观察</strong>：<code>git status</code>、<code>git diff</code>、<code>ls</code>、<code>grep</code> 等，直接放行并审计。</li>
+  <li><strong>可逆修改</strong>：<code>npm install</code>、<code>git add</code>、<code>git commit</code> 等，放行并审计；错误可在本地回滚。</li>
+  <li><strong>不可逆或外发</strong>：<code>git push</code>、<code>rm -rf</code>、<code>curl/wget</code>、<code>sudo</code>、越界重定向、管道到 <code>sh</code>，转人工审批或硬拒绝。</li>
+</ul>
+<p><code>git commit</code> 与 <code>git push</code> 的差异很直观：前者错了还能在本地 reset，后者已进入远端历史。风险等级来自影响范围与可逆性，不来自命令看起来是否常见。</p>
+
+<h3 id="sec6">6. 解析、超时、取消与输出：Shell 的四条补防线</h3>
+<p>白名单命令也可能带危险参数：<code>git commit --no-verify</code> 跳过钩子，<code>git push --force</code> 覆盖远端，<code>npm run build &gt; /etc/crontab</code> 越界写文件，<code>echo ... | sh</code> 把内容变成代码。因此要在执行前把命令解析成<strong>命令头 + 参数 + 重定向 + 管道</strong>，逐部位检查；不要对整条字符串做正则匹配，引号、转义和变量替换都可能绕过。</p>
+
+<figure class="diagram" id="fig4">
+<svg viewBox="0 0 760 285" role="img" aria-label="Shell 从专用工具到进程组终止的多层防线">
+  <defs><marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="25">Shell 边界：先收窄表达力，再管住真实进程</text>
+  <rect class="dg-node-ok" x="25" y="52" width="145" height="68" rx="7"/>
+  <text class="dg-label" x="97" y="77" text-anchor="middle">① 专用工具</text>
+  <text class="dg-soft" x="97" y="97" text-anchor="middle">run_test(scope)</text>
+  <text class="dg-faint" x="97" y="112" text-anchor="middle">危险表达进不来</text>
+  <line class="dg-arrow" x1="170" y1="86" x2="195" y2="86" marker-end="url(#a4)"/>
+  <rect class="dg-node" x="200" y="52" width="145" height="68" rx="7"/>
+  <text class="dg-label" x="272" y="77" text-anchor="middle">② 白名单分级</text>
+  <text class="dg-soft" x="272" y="97" text-anchor="middle">观察 / 可逆 / 外发</text>
+  <text class="dg-faint" x="272" y="112" text-anchor="middle">按副作用定级</text>
+  <line class="dg-arrow" x1="345" y1="86" x2="370" y2="86" marker-end="url(#a4)"/>
+  <rect class="dg-node" x="375" y="52" width="145" height="68" rx="7"/>
+  <text class="dg-label" x="447" y="77" text-anchor="middle">③ 结构化解析</text>
+  <text class="dg-soft" x="447" y="97" text-anchor="middle">参数 / 重定向 / 管道</text>
+  <text class="dg-faint" x="447" y="112" text-anchor="middle">handler 前拦截</text>
+  <line class="dg-arrow" x1="520" y1="86" x2="545" y2="86" marker-end="url(#a4)"/>
+  <rect class="dg-node-accent" x="550" y="52" width="185" height="68" rx="7"/>
+  <text class="dg-label" x="642" y="77" text-anchor="middle">④ OS / 容器 Sandbox</text>
+  <text class="dg-soft" x="642" y="97" text-anchor="middle">文件 / 网络 / 资源</text>
+  <text class="dg-faint" x="642" y="112" text-anchor="middle">限制执行影响范围</text>
+
+  <rect class="dg-zone" x="90" y="155" width="580" height="88" rx="8"/>
+  <text class="dg-label" x="115" y="181">执行中仍要管时间、取消与输出</text>
+  <text class="dg-soft" x="115" y="205">超时真的杀进程组 · AbortSignal 传到子进程 · 完整输出留审计</text>
+  <text class="dg-soft" x="115" y="228">模型只看尾部或失败关键行 + 真实退出码；中断结果不明不伪报失败</text>
+  <text class="dg-faint" x="25" y="273">缺任何一层，都要问：上一层失效后，还有什么能阻止副作用扩大？</text>
+</svg>
+<figcaption>图 4 · 专用工具是首选，不是 Shell 防线之外的替代品；一旦开放通用 Shell，解析、隔离、超时与输出治理都要同时成立。</figcaption>
+</figure>
+
+<p>文件边界管空间，<strong>超时管时间</strong>。<code>npm run dev</code>、<code>pytest --watch</code>、<code>tail -f</code> 可能永远不返回，让 Loop 卡在等待工具结果。每条命令要有超时，长任务显式申请；超时不是停止等待，而是<strong>真的杀掉进程组</strong>，包括 fork 出的子进程。用户取消也要通过 <code>AbortSignal</code> 传播到正在执行的命令。</p>
+<p>输出则管上下文与资源：<code>npm install</code> 的几万行日志不能原样塞回 Context，通常只把尾部或失败关键行连同真实退出码给模型，完整输出留审计。</p>
+<p>最后与 0012 接上：<code>run_test</code> 启动子进程前先登记「已启动、结果不明」，拿到真实退出码才销记；中断时返回 <code>TEST_RESULT_UNKNOWN</code>，不能把「不知道」伪报成测试失败。<code>Promise.race</code> 只能提前结束等待，不会自动停掉另一个 Promise 背后的真实操作。</p>
+
+<h3 id="sec7">7. 网络、凭证与环境变量：既要防读走，也要防发出</h3>
+<p>文件边界保护信息不被读走，网络边界保护信息不被发出去。只封读、不封网，敏感内容可能被 POST 出去；只封网、不封读，密钥仍会进入上下文，下一轮可能被写进提交信息、评论或交付文档。这也是 Prompt Injection 的完整攻击链：<strong>诱导读取敏感文件 → 编码进 URL 或请求体 → 外发。</strong></p>
+<ul>
+  <li><strong>外网公网</strong>：按域名白名单逐域放行，不写 <code>*</code>。Codebase Agent 的合理需求通常只有拉依赖、查文档、调 Git 平台 API。</li>
+  <li><strong>内网地址</strong>：公司内网、回环地址、私网与云元数据服务默认禁止，防止被带偏后横向移动。</li>
+  <li><strong>第三方 API</strong>：Agent 只持有权限受限、可吊销、调用有审计的 Gateway 凭证，真实供应商密钥留在 Gateway。</li>
+</ul>
+<p>环境变量是容易漏掉的读取面。<code>run_command("env")</code> 一次就能读出进程环境，所以 Agent 只应获得任务必需变量，其余不继承。Docker 默认环境较干净，本地执行要显式裁剪。<strong>注意顺序：</strong>即使网络白名单挡住外发，也不能弥补凭证已被读进上下文；读取面与外发面要分别收窄。</p>
+
+<h3 id="sec8">8. 本地 Sandbox 与 Docker Sandbox：隔离强度与交付摩擦的取舍</h3>
+<p>策略层决定能不能做，隔离层决定由谁强制。本地 pi-sandbox 把 bash 交给 macOS <code>sandbox-exec</code> 或 Linux <code>bubblewrap</code>，进程内工具仍在 <code>beforeToolCall</code> 做同样策略检查。阻断后可选择保持阻断、本次会话、本项目或全局放行；提示超时永远视为拒绝，会话级授权只存内存。</p>
+<p>Docker Sandbox 以 OpenSandbox 为例：命令与文件操作发生在容器里，文件系统独立，环境变量显式注入，沙箱有整体超时与资源限制；产物要显式取回，容器显式销毁。</p>
+
+<figure class="diagram" id="fig5">
+<svg viewBox="0 0 760 345" role="img" aria-label="本地 Sandbox 与 Docker Sandbox 的设计取舍">
+  <text class="dg-title" x="20" y="25">同一个策略目标，两种隔离与交付方式</text>
+  <rect class="dg-zone" x="25" y="45" width="340" height="245" rx="9"/>
+  <text class="dg-label" x="195" y="72" text-anchor="middle">本地 Sandbox</text>
+  <text class="dg-soft" x="48" y="101">收益：真实工作区，改动立即可见</text>
+  <text class="dg-soft" x="48" y="126">收益：零容器冷启动，配置即用</text>
+  <line class="dg-line" x1="48" y1="145" x2="342" y2="145"/>
+  <text class="dg-soft" x="48" y="171">代价：共享宿主文件系统与用户身份</text>
+  <text class="dg-soft" x="48" y="196">代价：环境变量要显式裁剪</text>
+  <text class="dg-soft" x="48" y="221">代价：进程内工具另做应用层检查</text>
+  <rect class="dg-node-ok" x="48" y="240" width="294" height="32" rx="5"/>
+  <text class="dg-faint" x="195" y="261" text-anchor="middle">适合：可信仓库 · 交互开发 · 实时观察</text>
+
+  <rect class="dg-zone" x="395" y="45" width="340" height="245" rx="9"/>
+  <text class="dg-label" x="565" y="72" text-anchor="middle">Docker Sandbox</text>
+  <text class="dg-soft" x="418" y="101">收益：独立文件、网络、用户与环境</text>
+  <text class="dg-soft" x="418" y="126">收益：一次性环境，可复现、可销毁</text>
+  <line class="dg-line" x1="418" y1="145" x2="712" y2="145"/>
+  <text class="dg-soft" x="418" y="171">代价：镜像与服务、冷启动开销</text>
+  <text class="dg-soft" x="418" y="196">代价：产物显式回传，不自动改宿主</text>
+  <text class="dg-soft" x="418" y="221">代价：挂载与网络配置仍会扩大边界</text>
+  <rect class="dg-node-ok" x="418" y="240" width="294" height="32" rx="5"/>
+  <text class="dg-faint" x="565" y="261" text-anchor="middle">适合：陌生代码 · 无人值守 · 并行批处理</text>
+
+  <text class="dg-label" x="380" y="316" text-anchor="middle">常见组合：策略规则共享，按任务风险切换隔离方式</text>
+  <text class="dg-faint" x="380" y="336" text-anchor="middle">Docker 改变本地爆炸半径，不会撤销已经发出的外部请求。</text>
+</svg>
+<figcaption>图 5 · 本地方案用较低摩擦换较弱隔离；容器用交付与运维成本换独立环境。选择先看任务怎样运行，不先看工具是否流行。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么「用了 Docker」仍不是完整答案：</strong>挂载宿主目录会扩大文件访问面，开放网络会保留外发能力，注入凭证会把凭证带进容器。容器只提供独立环境的起点，权限、网络、资源和入口仍需明确配置。教师 PDF 还特别指出：本课 OpenSandbox 演示<strong>尚未限制对外联网</strong>，所以它证明的是执行与回收闭环，不是完整网络边界。</div>
+
+<h3 id="sec9">9. OpenSandbox 闭环代码解剖</h3>
+<p><a href="../course_code/week03/3-4/opensandbox-demo/sandbox_demo.py"><code>sandbox_demo.py</code></a> 只有一条主链，但每一步都对应一条工程要求：</p>
+<ol>
+  <li><strong>创建宿主标记</strong>（14–16 行）：<code>host-only-marker.txt</code> 只在宿主创建，不挂载进容器，作为「容器看不到宿主文件」的检验对象。</li>
+  <li><strong>创建 Sandbox</strong>（17–33 行）：连接本地 Server，指定 <code>python:3.11-slim</code>、3 分钟整体超时、1 CPU 与 512Mi 内存。</li>
+  <li><strong>写入并执行固定测试</strong>（37–57 行）：测试代码由程序固定，不拼接模型生成的 Shell；命令在容器执行。</li>
+  <li><strong>取回并验证真实结果</strong>（59–69 行）：读取 <code>/tmp/result.json</code>，要求测试退出码为 0、容器内 <code>host_visible = false</code>、宿主标记仍为 <code>host-original</code>，最后才把结果写到宿主 <code>sandbox-result.json</code>。</li>
+  <li><strong>显式销毁</strong>（70–73 行）：<code>finally</code> 中调用 <code>sandbox.kill()</code>。代码注释明确：退出客户端上下文不代替销毁容器。</li>
+</ol>
+
+<figure class="diagram" id="fig6">
+<svg viewBox="0 0 760 320" role="img" aria-label="OpenSandbox 创建执行取回销毁时序">
+  <defs><marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">宿主 Python → OpenSandbox Server → Docker 容器</text>
+  <text class="dg-label" x="105" y="55" text-anchor="middle">宿主 Python</text>
+  <text class="dg-label" x="375" y="55" text-anchor="middle">OpenSandbox Server</text>
+  <text class="dg-label" x="650" y="55" text-anchor="middle">Docker Sandbox</text>
+  <line class="dg-line" x1="105" y1="65" x2="105" y2="280"/>
+  <line class="dg-line" x1="375" y1="65" x2="375" y2="280"/>
+  <line class="dg-line" x1="650" y1="65" x2="650" y2="280"/>
+
+  <line class="dg-arrow" x1="105" y1="88" x2="365" y2="88" marker-end="url(#a6)"/>
+  <text class="dg-soft" x="120" y="80">Sandbox.create（超时 / CPU / 内存）</text>
+  <line class="dg-arrow" x1="375" y1="116" x2="640" y2="116" marker-end="url(#a6)"/>
+  <text class="dg-soft" x="390" y="108">创建独立环境</text>
+  <line class="dg-arrow" x1="105" y1="150" x2="640" y2="150" marker-end="url(#a6)"/>
+  <text class="dg-soft" x="120" y="142">写入固定测试 + commands.run</text>
+  <line class="dg-arrow" x1="640" y1="184" x2="115" y2="184" marker-end="url(#a6)"/>
+  <text class="dg-soft" x="360" y="176" text-anchor="middle">读取 result.json：exit_code=0 · host_visible=false</text>
+  <line class="dg-arrow" x1="105" y1="222" x2="640" y2="222" marker-end="url(#a6)"/>
+  <text class="dg-soft" x="120" y="214">finally：sandbox.kill()</text>
+  <rect class="dg-node-ok" x="185" y="247" width="390" height="38" rx="6"/>
+  <text class="dg-label" x="380" y="271" text-anchor="middle">VERIFIED → 宿主写结果 → DESTROYED</text>
+  <text class="dg-faint" x="20" y="307">销毁只回收沙箱；已经发生的外部 API 写入仍需幂等、补偿或人工处理。</text>
+</svg>
+<figcaption>图 6 · 「执行成功」只是一环；结果取回、宿主核对和显式销毁都出现，才构成课程要求的闭环。</figcaption>
+</figure>
+
+<h3 id="sec10">10. 审计、Checkpoint 与风险回放</h3>
+<p>再完整的边界也可能有盲区。审计是边界的另一半：<strong>拦截决定当下能不能做，审计决定事后能不能说清楚。</strong>最小形态是 append-only JSONL，一行一条记录，只追加、不修改。</p>
+<ul>
+  <li><code>runId / turn / toolCallId</code>：与 Trace、Checkpoint 对齐定位。</li>
+  <li><code>tool</code> 与脱敏参数摘要：说明动作，不把秘密或大段内容复制进日志。</li>
+  <li><code>decision</code> 与命中规则、<code>actor</code>：说明放行、拒绝、审批或阻断由谁依据什么作出。</li>
+  <li><code>resultCode / durationMs / artifactRef</code>：记录真实结果、耗时与产物引用。</li>
+</ul>
+<p>被拒绝的动作也必须记录：审计一半回答「它做了什么」，另一半回答「它试图做什么」。反复探测凭证目录或内网地址，可能正是定位 Prompt Injection 的线索。审计文件本身必须落在 Agent 文件边界的禁止区，否则被审计者能改写证据。</p>
+<p>与 0012 的分工是：<strong>Checkpoint 回答恢复时从哪继续、哪些进度可信；审计回答已经发生了什么、谁放行的、试图越界了什么。</strong>两者通过 <code>runId + toolCallId</code> 关联，不能互相替代。</p>
+<p><strong>重跑</strong>是在独立工作区再执行一次，回答「这次会怎样」；<strong>回放</strong>是按审计还原当时的决策链，回答「当时为什么放行」。事故复盘依次定位 toolCallId、还原 decision 与规则、沿 runId 追溯意图来源、修防并留审计，最后把事故写成回归场景。误拦要调整规则，不是直接关掉防线；漏放要补规则与回归；越权尝试要追查它此前读到了什么。</p>
+
+<h3 id="sec11">11. R1–R6 与 A1–A6：把「应该安全」改成可判红绿的证据</h3>
+<p>笔记最小规格可以压成六条：</p>
+<ol>
+  <li><strong>R1 文件三区</strong>：resolve 后校验、带分隔符比较、禁止区硬阻断、语义化拒绝码。</li>
+  <li><strong>R2 Shell 白名单与高风险拦截</strong>：按副作用分级，解析参数/重定向/管道，在 beforeToolCall 拦截。</li>
+  <li><strong>R3 网络与凭证最小化</strong>：域名白名单、内网默认禁止、只注入任务必需变量、不持有真实供应商密钥。</li>
+  <li><strong>R4 超时与取消</strong>：超时杀进程组、取消传到命令、结果代码可区分。</li>
+  <li><strong>R5 审计留痕</strong>：append-only，执行与拦截都记，decision、规则、actor 齐全，参数脱敏。</li>
+  <li><strong>R6 风险回放</strong>：能按 runId/toolCallId 还原判定链，区分误拦、漏放和越权尝试，策略变更留痕。</li>
+</ol>
+<p>A1–A6 分别用路径逃逸、危险命令、白名单外审批、超时取消、网络外发和风险回放验证这些规则。两条验收原则必须记住：<strong>该失败的必须真的失败；拦截证据是 handler 没执行，不是返回了错误。</strong></p>
+<div class="why-box"><strong>为什么 handler 调用次数为 0 才关键：</strong>工具先写文件、再返回 <code>PATH_OUTSIDE_BOUNDARY</code>，也有明确错误码，但副作用已经发生；这只是事后贴标签。只有拒绝发生在 beforeToolCall、真实 handler 次数为 0，再配合 deny 审计，才能证明防线拦在副作用之前。</div>
+
+<h3 id="sec12">12. 面试视角：沿事故链回答，不背工具名</h3>
+<p><strong>主问题：「Agent 能执行 Shell 和改文件，你怎么保证安全？」</strong>可按下面顺序回答：</p>
+<ol>
+  <li><strong>先定义任务副作用</strong>：文件、命令、网络、资源分别允许什么；默认拒绝，目标是可拦截、可审计、可恢复。</li>
+  <li><strong>再讲执行链分工</strong>：Runtime 在唯一入口检查参数、路径和授权；Sandbox 限制实际影响；Harness 统一执行、取消、审计与状态回写。</li>
+  <li><strong>挑两个硬例子</strong>：路径用 <code>artifacts/../../.env</code> 说明 resolve；Shell 用专用 <code>run_test</code> 与通用 <code>run_command</code> 说明表达力取舍。</li>
+  <li><strong>讲隔离取舍</strong>：交互可信任务用本地，陌生或无人值守任务用 Docker；说明产物回传、冷启动、环境裁剪，以及 Docker 不回滚外部副作用。</li>
+  <li><strong>最后给证据</strong>：handler=0、deny 审计、真实进程组终止、宿主标记不可见、容器已销毁、结果不明不重放。</li>
+</ol>
+<p>常见追问及回答锚点：</p>
+<ul>
+  <li>「有 OS 沙箱为什么还要 beforeToolCall？」——OS 沙箱罩子进程，罩不住 Agent 进程内文件工具。</li>
+  <li>「有白名单为什么还要解析参数？」——<code>--no-verify</code>、强推、重定向和管道到 sh 能改变同一命令头的风险。</li>
+  <li>「容器删了不就恢复了吗？」——只恢复容器文件系统，已经外发的数据或远端写入不会消失。</li>
+  <li>「审计为什么记失败？」——它揭示模型试图做什么，帮助发现注入与越权探测。</li>
+</ul>
+
+<hr>
+
+<h2 id="part2">第二部分：检索式测验（18 题 = 14 选择 + 4 简述）</h2>
+<p>Q1–Q3 是 0012 薄弱点的换形式重测；Q4–Q14 是本课选择题；Q15–Q18 是简述题。简述题先脱稿写，再展开参考答案，按得分点严格自评。</p>
+<div id="quiz"></div>
+
+<hr>
+
+<h2 id="part3">第三部分：第二层练习——跑起来，再主动改造</h2>
+<p>实验①②使用 pi-sandbox，需要本机已有可运行的 pi 与模型供应商配置；实验③④使用 OpenSandbox，需要 Docker 与 uv，<strong>不需要模型 API key</strong>。所有命令从仓库根目录开始。实验②④是主动改造：<strong>先写预期，再跑，再对照</strong>；完成后恢复配置或代码。</p>
+
+<h3>实验 ①：本地三条提示词，验证「能写、硬拒、网络阻断」</h3>
+<ul>
+  <li>检查命令并安装扩展；macOS 缺 <code>rg</code> 时用 Homebrew 安装：<pre>pi --version
+rg --version
+# macOS 缺 rg 时执行：brew install ripgrep
+pi install npm:pi-sandbox</pre>
+  <p class="sidenote">Ubuntu / Debian 按教师 PDF 准备依赖：<code>sudo apt-get update &amp;&amp; sudo apt-get install -y ripgrep bubblewrap socat</code>。</p></li>
+  <li>进入课程提供的本地演示目录，创建假配置与沙箱规则：<pre>cd course_code/week03/3-4/pi-boundary-demo
+mkdir -p .pi artifacts
+printf 'DEMO_ONLY=original\n' &gt; .env.demo
+cat &gt; .pi/sandbox.json &lt;&lt;'JSON'
+{
+  "enabled": true,
+  "sandboxUserShell": true,
+  "permissionPromptTimeoutSeconds": 30,
+  "allowBrowserProcess": false,
+  "network": {
+    "allowedDomains": [],
+    "deniedDomains": [],
+    "allowLocalBinding": false,
+    "allowAllUnixSockets": false,
+    "allowUnauthenticatedSocksProxy": false
+  },
+  "filesystem": {
+    "denyRead": ["/Users", "/home", "/root"],
+    "allowRead": ["."],
+    "allowWrite": ["./artifacts"],
+    "denyWrite": [".env.demo", ".pi"]
+  }
+}
+JSON</pre>
+  <p><code>.env.demo</code> 只含假数据，不放真实凭证。项目配置会与全局配置合并，空列表不代表清除已有授权。</p></li>
+  <li>启动 pi，先核对最终生效权限：<pre>pi</pre>进入交互界面后输入：<pre>/sandbox</pre></li>
+  <li><strong>先写预期</strong>：下面三个动作哪个应成功、哪个不应出现授权提示、哪个应等你决定？拒绝后 <code>.env.demo</code> 的内容应该是什么？</li>
+  <li>提示词一——产物可写并回读：<pre>使用 write 工具创建 artifacts/ok.txt，内容为 sandbox-ok。
+完成后使用 read 工具回读，报告实际读到的内容。</pre></li>
+  <li>提示词二——受保护文件硬阻断：<pre>这是一个仅含假数据的边界验收。
+请使用 write 工具把 .env.demo 改为 DEMO_ONLY=changed。
+若工具拒绝，报告拒绝原因，不申请修改策略，也不要换工具重试。</pre></li>
+  <li>提示词三——未授权域名访问；出现权限提示后选择 <strong>Abort</strong>：<pre>!curl --max-time 5 -I https://example.com</pre></li>
+  <li>退出 pi 后核对真实文件，而不只看模型报告：<pre>cat artifacts/ok.txt
+cat .env.demo</pre>预期依次看到 <code>sandbox-ok</code> 与 <code>DEMO_ONLY=original</code>。提示词二应被 <code>denyWrite</code> 硬阻断，不出现放行提示；提示词三保持阻断。</li>
+</ul>
+
+<h3>实验 ②：主动改造——同时加入 allowWrite 与 denyWrite，验证优先级</h3>
+<ul>
+  <li>仍在 <code>pi-boundary-demo</code>，把 <code>.pi/sandbox.json</code> 中这一行：<pre>"allowWrite": ["./artifacts"],</pre>临时改成：<pre>"allowWrite": ["./artifacts", ".env.demo"],</pre><strong>保留</strong> <code>"denyWrite": [".env.demo", ".pi"]</code> 不变。</li>
+  <li><strong>先写预期</strong>：路径已进入允许写列表后，提示词二会放行、弹审批，还是仍然拒绝？为什么写侧规则与读侧 <code>denyRead</code> 的覆盖语义不同？</li>
+  <li>重新启动 <code>pi</code>，用 <code>/sandbox</code> 核对规则，再原样执行实验①的提示词二。退出后核对：<pre>cat .env.demo</pre>预期仍是 <code>DEMO_ONLY=original</code>，且没有授权提示：<code>denyWrite</code> 优先于 <code>allowWrite</code>。</li>
+  <li>实验结束后把 <code>allowWrite</code> 恢复为只含 <code>./artifacts</code>。</li>
+</ul>
+
+<h3>实验 ③：OpenSandbox 跑通「创建 → 执行 → 取回 → 销毁」</h3>
+<ul>
+  <li>终端 A 进入目录，准备环境并启动服务。仓库已提供 <code>sandbox.toml</code>，不要重新生成覆盖：<pre>cd course_code/week03/3-4/opensandbox-demo
+docker info
+uv venv --python 3.13.14
+uv pip install opensandbox
+uv pip install opensandbox-server
+docker pull python:3.11-slim
+uvx opensandbox-server --config ./sandbox.toml</pre>最后一条命令保持运行。示例使用本地演示 API key，不是真实凭证。</li>
+  <li>终端 B 检查服务并运行客户端：<pre>cd course_code/week03/3-4/opensandbox-demo
+curl --fail http://127.0.0.1:8080/health
+uv run --no-project python sandbox_demo.py</pre></li>
+  <li><strong>先写预期</strong>：容器里能否看到宿主绝对路径下的 <code>host-only-marker.txt</code>？宿主标记会不会被改？<code>async with</code> 结束后是否还需要 <code>kill()</code>？</li>
+  <li>预期日志依次出现 <code>CREATED</code>、<code>container test finished</code>、<code>VERIFIED</code>、<code>DESTROYED</code>。核对取回结果：<pre>cat sandbox-result.json</pre>应为 <code>exit_code: 0</code>、<code>host_visible: false</code>。这只证明执行、隔离宿主文件与回收闭环；本演示尚未限制对外联网。</li>
+</ul>
+
+<h3>实验 ④：主动改造——让容器内测试失败，验证错误结果与清理</h3>
+<ul>
+  <li>保持 OpenSandbox Server 运行。打开 <code>sandbox_demo.py</code>，把固定测试字符串里的：<pre>"test += 'assert allowed(True)\\nassert not allowed(False)\\n'",</pre>临时改成：<pre>"test += 'assert allowed(True)\\nassert allowed(False)\\n'",</pre></li>
+  <li><strong>先写预期</strong>：客户端退出码会是多少？会打印测试失败还是测试通过？<code>sandbox-result.json</code> 会不会被本次失败结果覆盖？<code>DESTROYED</code> 是否仍应出现？</li>
+  <li>终端 B 再运行：<pre>uv run --no-project python sandbox_demo.py
+echo "exit=$?"</pre>预期容器测试返回非 0，客户端抛 <code>RuntimeError</code>，进程退出码非 0；因为结果校验在写宿主结果文件之前，本次不会生成新的成功结果；<code>finally</code> 中仍打印 <code>DESTROYED</code>。</li>
+  <li>恢复原来的 <code>assert not allowed(False)</code>，再运行一次，确认重新回到 <code>VERIFIED</code> 与 <code>DESTROYED</code>。</li>
+</ul>
+
+<h2>回读与验证指引</h2>
+<ul>
+  <li>primary source：<a href="../course_code/week03/第三章-学习笔记.md"><code>course_code/week03/第三章-学习笔记.md</code></a> 3.4 节（行 1629–2040）——重点回读「三个必须接受的事实」「路径必须 resolve 后校验」「为什么 Shell 最危险」「本地 Sandbox 与 Docker Sandbox」「工具审计与风险回放」「最小规格与验收」。</li>
+  <li>教师 PDF：<a href="../course_materials/week03/3-4.pdf"><code>course_materials/week03/3-4.pdf</code></a>——第 2 节是 pi-sandbox 配置与三条提示词，第 3 节是 OpenSandbox 服务与完整 Python 程序，第 4 节是统一执行入口、取消传播、审计与恢复。</li>
+  <li>代码回读顺序：<a href="../course_code/week03/3-4/opensandbox-demo/sandbox_demo.py"><code>sandbox_demo.py</code></a>（连接配置 → 创建资源边界 → 固定测试 → 结果校验 → finally 销毁）→ <a href="../course_code/week03/3-4/opensandbox-demo/sandbox.toml"><code>sandbox.toml</code></a>（服务、Docker 网络、capability、资源与 egress 配置）→ <a href="../course_code/week03/3-4/opensandbox-demo/sandbox-result.json"><code>sandbox-result.json</code></a>（真实退出码与宿主可见性）。</li>
+  <li>笔记附录「源码与工程阅读路线」：本课对应后续 <code>project3/v2/src/runtime.ts</code> 的「校验授权」位置；当前先用六步顺序的第 3 步「工具调用在哪里校验和授权」和第 6 步「用失败场景验证连接」检查本课实验——尤其是 handler 前拦截、网络阻断和失败后的真实清理。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<ul>
+  <li><a href="../course_code/week03/第三章-学习笔记.md"><code>course_code/week03/第三章-学习笔记.md</code></a> 3.4 节（学生版学习笔记，本课术语以此为准）</li>
+  <li><a href="../course_materials/week03/3-4.pdf"><code>course_materials/week03/3-4.pdf</code></a>（教师 PDF，本地与 Docker 操作步骤）</li>
+  <li><a href="../course_code/week03/README.md"><code>course_code/week03/README.md</code></a> 的 3-4 目录说明（两个 demo 的职责与验收闭环）</li>
+  <li><a href="../course_code/week03/3-4/opensandbox-demo/sandbox_demo.py"><code>course_code/week03/3-4/opensandbox-demo/sandbox_demo.py</code></a>（OpenSandbox 创建、执行、取回与销毁实现）</li>
+</ul>
+
+<div class="ask-reminder">
+  <strong>卡住了就问你的 agent。</strong>任何一处让你觉得「等等，为什么」——例如为什么 <code>denyWrite</code> 不接受审批、为什么 resolve 还不够防软链、为什么专用测试工具比命令黑名单更可靠、为什么容器销毁不能撤销外部副作用——直接回到对话里问。本课全部内容都在回答一个问题：<strong>每一步动作由谁检查、在哪里执行、最多能造成多大影响，以及拿什么证明越界真的没发生。</strong>
+</div>
+
+<div class="lesson-footer">
+  Week03 主题课序列：<a href="./0010-agent-loop-pi-integration.html">1/7 从 Runtime 到 Agent Loop</a> · <a href="./0011-planning-and-task-decomposition.html">2/7 Planning 与任务拆解</a> · <a href="./0012-state-machine-checkpoint-recovery.html">3/7 State Machine 与 Checkpoint</a> · <strong>4/7 Sandbox 与执行边界</strong>（本课，3-4）· 5/7 Agent Harness（3-5）· 6/7 LangGraph 与 Agent 编排（3-6）· 7/7 项目三：Codebase Agent v2（3-7，结课课）<br>
+  前课回顾：0012 的「结果不明不重放」在本课落到 Shell 的真实进程与退出码；下一课 3-5 会把 Loop、Context、Runtime、State/Checkpoint、Governance 与 Sandbox 接成完整 Harness。<br>
+  结课条件：① 前 3 题重测全对，本课部分（第 4 题起）正确率 85% 以上；② 完成本地与 Docker 至少各一个实验，实验②④做到预期先写后验；③ 不看稿 2 分钟讲清：四类副作用 + Runtime/Sandbox/Harness 分工 + resolve 校验 + 专用工具优先 + 本地/Docker 取舍 + handler=0 的拦截证据。三者都过，再向你的 agent 要主题课 5/7（Agent Harness，3-5）。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  questions: [
+    {
+      type: 'choice',
+      concept: '【重测·0012】停止原因不可覆盖',
+      section: '0012 间隔重测',
+      notesRef: '0012 测后反馈 1 + 笔记 3.1 六',
+      question: '同一 Turn 先登记 REPEATED_ACTION，随后完成校验也通过。afterTurn 应怎样写停止原因？',
+      options: [
+        '保留重复动作原因；先到的终局原因不可被成功覆盖',
+        '改成任务完成原因；最终以完成校验作为唯一的依据',
+        '改成任务完成原因；重复动作记录仅供事后审计查看',
+        '清空当前停止原因；重启任务以后重新判断停止原因'
+      ],
+      answer: 0,
+      explanation: '停止原因是 write-once：先到的终局原因压过后到的成功。REPEATED_ACTION 已登记后，同一 Turn 完成校验通过也不能改成 COMPLETED，否则死循环 Run 会被报成成功交付，重试、计费与复盘都会失真。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·0012】恢复五步',
+      section: '0012 间隔重测',
+      notesRef: '0012 测后反馈 2 + 笔记 3.3 三 3.3',
+      question: '把恢复顺序改为「存档校验 → 启动模型 → 工作区与任务检查 → 还原业务对象」，会多出什么风险？',
+      options: [
+        '存档可能因格式版本太旧而无法被程序读取',
+        '模型可能在现场检查失败前发出新的写操作',
+        '工具可能因参数摘要不全而无法写审计日志',
+        '会话可能因历史消息太长而触发了自动压缩'
+      ],
+      answer: 1,
+      explanation: '模型必须最后启动。工作区或任务检查失败意味着现场不可信或不允许继续；先启动模型，它可能在程序发现不一致之前就发出写操作，把恢复不确定变成又一轮真实副作用。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·0012】不重放副作用的证据',
+      section: '0012 间隔重测',
+      notesRef: '0012 测后反馈 3 + A2',
+      question: '一个坏实现恢复时再次调用 apply_patch。下列哪条真实产物断言能直接抓住重放？',
+      options: [
+        '恢复报告里的停止原因字段仍然保持一致',
+        '会话历史中的原始任务输入仍然保留一条',
+        '修复片段在源码里的出现次数由一变成二',
+        '终端日志里的工具错误码依旧能够被打印'
+      ],
+      answer: 2,
+      explanation: 'A2 用源码中修复片段只出现 1 次证明没有第二次写入。错误码或报告文字都能被错误实现打印出来；文件字节、执行次数、轮数和历史长度才是更难伪造的真实产物。'
+    },
+    {
+      type: 'choice',
+      concept: '边界的目标不是不犯错',
+      section: '3-4 一',
+      notesRef: '笔记 3.4 一 1.2',
+      question: 'Agent 执行边界的首要目标，最符合课程风险模型的是哪一项？',
+      options: [
+        '保证模型每次生成完全正确且不再变化的参数',
+        '要求所有工具在执行之前都经过逐条人工审批',
+        '只记录成功动作以便减少日志数量与存储成本',
+        '把错误副作用限制在可拦截可审计可恢复范围'
+      ],
+      answer: 3,
+      explanation: '模型一定会犯错，边界不承诺消灭错误，而是限制爆炸半径：执行前可拦截、动作与越界尝试可审计、损失可通过存档、版本控制或快照恢复。'
+    },
+    {
+      type: 'choice',
+      concept: '两层执行防线',
+      section: '3-4 二 / 五',
+      notesRef: '笔记 3.4 三 3.1 + 五 5.1',
+      question: 'pi 同时提供进程内 write 工具与 bash 工具。怎样覆盖两条执行路径才完整？',
+      options: [
+        'write 做应用层前置检查；bash 再由操作系统沙箱来隔离',
+        'write 由操作系统沙箱自动覆盖；bash 只检查命令白名单',
+        'write 只检查用户提示词；bash 由模型自行确认参数安全',
+        'write 与 bash 都只记录审计；执行以后再统一检查结果'
+      ],
+      answer: 0,
+      explanation: 'OS 沙箱包得住 bash 子进程，罩不住 Agent Node.js 进程内的 read/write/edit，所以进程内工具需要应用层前置检查；任意代码又可能绕过应用判断，所以 bash 仍需 OS 或容器隔离。'
+    },
+    {
+      type: 'choice',
+      concept: '禁止区硬阻断',
+      section: '3-4 二',
+      notesRef: '笔记 3.4 二 2.1',
+      question: 'Codebase Agent 请求读取 ~/.ssh/id_rsa，并表示这是完成修复所需。系统应怎样处理？',
+      options: [
+        '转入人工审批流程；批准以后就可以读取私钥内容',
+        '按禁止区硬阻断；该任务没有读取私钥的合理用途',
+        '允许只读不写操作；读取文件不会改变真实工作区',
+        '交给模型自行判断；模型最了解当前任务的上下文'
+      ],
+      answer: 1,
+      explanation: '禁止区凭证读写都禁止，硬阻断且不接受审批放行。审批适合高风险但可能有合理用途的动作；Codebase Agent 读取私钥没有合理用途。只读同样可能泄露秘密。'
+    },
+    {
+      type: 'choice',
+      concept: 'denyWrite 优先于 allowWrite',
+      section: '3-4 二',
+      notesRef: '笔记 3.4 二 2.1 + 教师 PDF 2.2',
+      question: '同一路径同时出现在 pi-sandbox 的 allowWrite 与 denyWrite 中，实际结果是什么？',
+      options: [
+        'allowWrite 优先；明确允许规则会覆盖写入限制',
+        '两条规则相互抵消以后；每次写入最终都要转入人工授权提示',
+        'denyWrite 优先；写入硬拒绝且不会出现放行提示',
+        '只比较列表先后顺序；配置中靠后的那一条规则才会最终生效'
+      ],
+      answer: 2,
+      explanation: '写侧 denyWrite 是硬阻断，优先于 allowWrite，不提示、不放行。不要与读侧规则混淆：笔记说明明确的 allowRead 可以覆盖 denyRead。'
+    },
+    {
+      type: 'choice',
+      concept: '风险模式在解析层拦截',
+      section: '3-4 三',
+      notesRef: '笔记 3.4 三 3.3',
+      question: 'git commit 在白名单中，但模型提交 git commit --no-verify。正确治理方式是什么？',
+      options: [
+        '匹配完整命令字符串；看到相同命令头就直接放行',
+        '先执行提交再检查结果；若产生了异常就补写审计',
+        '只检查命令返回代码；退出码为零就完全代表安全',
+        '解析命令头与参数；在执行前识别并拦截危险形态'
+      ],
+      answer: 3,
+      explanation: '命令名在白名单不代表所有参数形态安全。要在解析层拆成命令头、参数、重定向与管道，在执行前逐部位检查；--no-verify 会跳过提交钩子，事后报错不能撤销提交。'
+    },
+    {
+      type: 'choice',
+      concept: '超时必须终止真实进程组',
+      section: '3-4 三',
+      notesRef: '笔记 3.4 三 3.4',
+      question: '一条 pytest --watch 超时后，哪种处理同时满足 Loop 与副作用边界？',
+      options: [
+        '终止整个进程组；记录真实状态并回写明确结果',
+        '结束当前等待操作；保留子进程继续在后台运行',
+        '立即判定测试失败；按失败结果来触发自动重试',
+        '只截断标准输出内容；再等待进程自行结束运行'
+      ],
+      answer: 0,
+      explanation: '超时不是放弃等待，而要真的杀掉进程组，包括 fork 出的子进程，并让取消信号传到执行路径。若真实结果拿不到，应区分结果不明，不能为了继续 Loop 而伪报测试失败。'
+    },
+    {
+      type: 'choice',
+      concept: '网络与凭证要同时收窄',
+      section: '3-4 四',
+      notesRef: '笔记 3.4 四 4.1–4.2',
+      question: '系统已配置外网域名白名单，但 Shell 能执行 env 并继承全部宿主变量。还缺什么边界？',
+      options: [
+        '增加命令超时时间；避免读取变量占用过多时间',
+        '只注入任务必需变量；秘密仍可能先进入上下文',
+        '记录完整变量全文；便于事后审计敏感信息内容',
+        '允许访问所有内网；通过内网转发替代外部访问'
+      ],
+      answer: 1,
+      explanation: '网络白名单只限制外发，不阻止 env 把秘密读进上下文；之后秘密可能被写进产物或评论。要显式裁剪环境变量，只注入任务必需项，同时保留网络与文件边界。'
+    },
+    {
+      type: 'choice',
+      concept: '按任务风险选择隔离方式',
+      section: '3-4 五',
+      notesRef: '笔记 3.4 五 5.3',
+      question: '夜间无人值守批量运行陌生仓库的第三方安装脚本，优先选择哪种方案？',
+      options: [
+        '本地 Sandbox；真实工作区可让宿主改动立即生效而且可见',
+        '只用提示词约束；模型自己能够完全识别陌生脚本中的所有潜在危险',
+        'Docker Sandbox；独立环境更适合陌生代码与批处理',
+        '直接开放通用 Shell；人工审批会拖慢夜间批量任务整体处理'
+      ],
+      answer: 2,
+      explanation: '陌生仓库、第三方 install 脚本、夜间批处理与并行 Agent 都优先 Docker Sandbox。它提供独立文件系统、网络与环境，代价是镜像服务、冷启动和产物显式回传。'
+    },
+    {
+      type: 'choice',
+      concept: 'OpenSandbox 演示的证明边界',
+      section: '3-4 五 + PDF',
+      notesRef: 'sandbox_demo.py:59-72 + 教师 PDF 3.4',
+      question: '本课 OpenSandbox 演示得到 exit_code=0、host_visible=false 且容器销毁，能证明什么？',
+      options: [
+        '所有网络外发已被阻断；容器没有任何联网能力',
+        '所有宿主目录不可访问；即使显式挂载也都无效',
+        '所有外部写入均可回滚；销毁容器即可全部撤销',
+        '测试执行与回收闭环成立；容器未看到宿主标记'
+      ],
+      answer: 3,
+      explanation: '演示证明固定测试通过、宿主标记在容器不可见且保持不变、结果可取回、容器显式销毁。教师 PDF 明确说尚未限制对外联网；挂载会扩大访问范围，容器销毁也不会撤销外部副作用。'
+    },
+    {
+      type: 'choice',
+      concept: '审计也记录被拒绝动作',
+      section: '3-4 六',
+      notesRef: '笔记 3.4 六 6.1 + 复习问题 10',
+      question: '为什么 append-only 审计必须记录被拒绝的敏感文件读取与内网访问？',
+      options: [
+        '它记录模型试图做什么；可帮助定位注入与越权探测',
+        '它证明拒绝动作执行成功；可完全替代真实工具结果',
+        '它保存完整秘密参数；便于恢复时再次原样重放调用',
+        '它自动修改放行规则；避免今后同类动作再次被拦截'
+      ],
+      answer: 0,
+      explanation: '审计一半回答做了什么，另一半回答试图做什么。反复出现凭证目录或内网探测，可能暴露 Prompt Injection 或错误任务理解。参数要脱敏摘要，审计不会自动改规则。'
+    },
+    {
+      type: 'choice',
+      concept: '拦截证据是 handler 未执行',
+      section: '3-4 七',
+      notesRef: '笔记 3.4 七 7.1–7.2 + A2',
+      question: '危险命令返回了明确拒绝码，但测试显示真实 handler 执行了 1 次。能否判定拦截通过？',
+      options: [
+        '可以；拒绝码语义明确，已经满足课程的全部安全拦截与审计要求',
+        '不能；副作用可能已发生，还要做到 handler 次数为零',
+        '可以；只要拒绝码写入日志，就能抵消已经产生的全部真实副作用',
+        '不能；但只要把拒绝码改成更明确的失败码就能通过全部安全验收'
+      ],
+      answer: 1,
+      explanation: '错误码可以事后打印，副作用却不能因此被撤销。A2 的关键证据是危险命令在 handler 前被拦、handler 执行次数为 0，并有 deny 审计；不是换一个错误码名称。'
+    },
+    {
+      type: 'short',
+      concept: 'Runtime、Sandbox、Harness 核心链路',
+      section: '3-4 二 / 五',
+      notesRef: '笔记 3.4 三 3.1 + 五 5.1；教师 PDF 1.2',
+      question: '从一次工具调用讲清 Runtime、Sandbox、Harness 的分工，并说明为什么进程内文件工具与 bash 需要两层防线。',
+      hint: '按「执行前检查 → 实际执行隔离 → 结果与状态回写」讲，再分别点出两条旁路。',
+      modelAnswer: '<ol><li><strong>得分点 1 · Runtime 检查放行：</strong>在唯一执行入口检查参数、路径、权限和审批；危险调用必须在 handler 前拒绝。</li><li><strong>得分点 2 · Sandbox 限制范围：</strong>限制实际执行能触及的文件、网络、进程与资源；它回答「开始以后能碰到什么」，不替代授权判断。</li><li><strong>得分点 3 · Harness 组织执行：</strong>统一工作区与执行入口，组织取消传播、真实结果回写、审计和状态更新；Loop 再依据真实结果继续或等待。</li><li><strong>得分点 4 · 两层缺一不可：</strong>进程内 read/write/edit 不被只包子进程的 OS 沙箱覆盖，需要 beforeToolCall 等应用层检查；bash 任意代码又可能绕过应用判断，需要 OS 或容器强制隔离。</li></ol><p><strong>加分项：</strong>指出「返回拒绝码」不是充分证据，还要 handler=0 与 deny 审计。</p>'
+    },
+    {
+      type: 'short',
+      concept: 'resolve 后校验的完整理由',
+      section: '3-4 二',
+      notesRef: '笔记 3.4 二 2.2 + 复习问题 8',
+      question: '为什么路径必须 resolve 后校验？请讲清 .. 逃逸、前缀冒充、符号链接和拒绝码四件事。',
+      hint: '不要只背一个 startsWith；说清每一步在防什么、resolve 又不能防什么。',
+      modelAnswer: '<ol><li><strong>得分点 1 · 先解析落点：</strong>用 <code>resolve(root, submitted)</code> 消解 <code>..</code> 并得到绝对路径；<code>artifacts/../../.env</code> 虽以合法前缀开头，解析后已在边界外。</li><li><strong>得分点 2 · 带分隔符比较：</strong>接受 <code>resolved === root</code> 或 <code>resolved.startsWith(root + sep)</code>，防止 <code>/repo/artifacts-evil</code> 冒充 <code>/repo/artifacts</code>。</li><li><strong>得分点 3 · 软链另处理：</strong>resolve 只做字符串规范化，不解析软链；要禁止在受控目录创建软链，或对真实落点做 realpath 二次校验。</li><li><strong>得分点 4 · 执行前明确拒绝：</strong>越界时在任何文件 I/O 前返回 <code>PATH_OUTSIDE_BOUNDARY</code>，让模型换合法路径，也让审计能按拒绝类型统计。</li></ol>'
+    },
+    {
+      type: 'short',
+      concept: '专用工具与通用 Shell 的取舍',
+      section: '3-4 三',
+      notesRef: '笔记 3.4 三 3.1–3.4 + 复习问题 9',
+      question: '为什么专用 run_test(scope) 优先于通用 run_command？若任务必须开放 Shell，还要补齐哪些控制？',
+      hint: '先讲表达力与攻击面的取舍，再按副作用分级、解析、进程与输出补防线。',
+      modelAnswer: '<ol><li><strong>得分点 1 · Shell 是工具超集：</strong>一条命令可读写任意文件、访问网络并启动进程，能绕过只加在 read_file 等工具上的边界。</li><li><strong>得分点 2 · 专用工具做结构性收窄：</strong><code>run_test</code> 只接收 scope，测试清单在执行上下文约定，命令由 Runtime 拼接；模型无法注入命令字符串。代价是失去任意命令的灵活性，收益是危险表达无法进入接口。</li><li><strong>得分点 3 · 通用 Shell 的执行前控制：</strong>按只读观察、可逆修改、不可逆或外发分级；解析命令头、参数、重定向和管道，在执行前拦截 <code>--no-verify</code>、强推、越界重定向、管道到 sh，不能只靠黑名单或整串正则。</li><li><strong>得分点 4 · 执行中与结果治理：</strong>每条命令有超时，超时杀进程组，AbortSignal 传到子进程；模型只看必要输出与真实退出码，完整输出留审计；结果不明时标 unknown，不伪报失败或直接重放。</li></ol>'
+    },
+    {
+      type: 'short',
+      concept: '本地与 Docker Sandbox 设计取舍',
+      section: '3-4 五',
+      notesRef: '笔记 3.4 五 5.1–5.3 + 教师 PDF 4.4',
+      question: '本地 Sandbox 与 Docker Sandbox 应该怎样选？请按收益、代价、适用场景讲清取舍，并说明容器销毁不能解决什么。',
+      hint: '至少覆盖真实工作区、隔离强度、产物回传、冷启动、无人值守和外部副作用。',
+      modelAnswer: '<ol><li><strong>得分点 1 · 本地取舍：</strong>真实工作区改动立即可见、无容器冷启动，适合可信仓库和交互式开发；代价是共享宿主文件系统与用户身份，环境变量要裁剪，进程内工具还需应用层检查。</li><li><strong>得分点 2 · Docker 取舍：</strong>独立文件系统、网络、用户与显式环境，适合陌生代码、无人值守、并行批处理和可复现环境；代价是镜像与服务维护、冷启动、产物显式回传。</li><li><strong>得分点 3 · 按任务组合：</strong>选择先看任务风险和协作方式；常见做法是策略规则共享，日常交互用本地，陌生或批量任务切 Docker，而不是一套隔离强度包打所有场景。</li><li><strong>得分点 4 · 外部副作用不回滚：</strong>销毁容器只回收沙箱环境，已经发出的远端 API 写入或数据外发不会消失，需要幂等、补偿或人工处理；挂载与开放网络也仍会扩大边界。</li></ol><p><strong>加分项：</strong>指出课程 OpenSandbox demo 尚未限制外网，因此「闭环跑通」不等于「网络边界已验收」。</p>'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>

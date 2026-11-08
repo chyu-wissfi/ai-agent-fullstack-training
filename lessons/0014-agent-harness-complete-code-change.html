@@ -1,0 +1,1266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week03 主题课 5/7 · Agent Harness</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 03 · 主题课 5 / 7 · 覆盖课程小节 3-5 · 版式：先讲后测，精讲与测验五五开</p>
+<h1>Agent Harness：把一次代码修改做完整</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：Week03 第五课。0010 让 Loop 转起来，0011 让任务有计划和证据，0012 让进度能跨进程恢复，0013 把执行限制在安全边界内；这一课回答最后一个装配问题：<strong>把这些模块接起来以后，一次代码修改能不能真正做完整。</strong>核心不再是「某个模块对不对」，而是「模块之间的连接有没有把同一份事实送到该去的地方」。<br>
+  <strong>材料定位</strong>：<a href="../course_code/week03/3-5/3.5%20PPT%20.md"><code>course_code/week03/3-5/3.5 PPT .md</code></a>（教师 PPT 的 md 版，<strong>本课第一材料</strong>，覆盖 3-5 全节）+ <a href="../course_code/week03/第三章-学习笔记.md"><code>第三章-学习笔记.md</code></a> 3.5 节（行 2042–2580，学生版学习笔记，术语对照）+ <a href="../course_code/week03/README.md"><code>course_code/week03/README.md</code></a> 的 3-5 目录说明。<br>
+  <strong>代码定位</strong>：三套实现对照——① <code>course_code/week03/3-5/harness_agent/</code>（pi 版课程工程）；② <code>course_code/week03/3-5/commerce-agents/</code>（Anthropic 手写 Messages API Loop）；③ <a href="https://github.com/chyu-wissfi/smolagents" target="_blank" rel="noopener"><code>chyu-wissfi/smolagents</code></a> 的 <code>guarded_harness/</code>（你的作业：不重写 <code>ToolCallingAgent</code> 核心，新增 Guarded Coding Harness）。作业导航见 <a href="../../smolagents/homework.md"><code>homework.md</code></a> 与 <a href="../../smolagents/homework-docs/方案/00-总览.md"><code>homework-docs/方案/00-总览.md</code></a>。<br>
+  <strong>预计用时</strong>：精讲 60 分钟 + 测验 25 分钟 + 第二层动手练习 60 分钟（本课是 Week03 的装配重点，值得按两段时间完成）<br>
+  <strong>本课验收标准</strong>（笔记「本节重点与验收」+ 作业迁移）：能回答——为什么单个模块正确不代表 Agent 正确；同一工具结果为什么要同时更新模型和状态；为什么「曾经通过」不能代表「当前验证」；取消与恢复分别要检查到哪一层；宿主批准后为什么仍要走统一执行器；<strong>在不重写框架核心的前提下，你的 Harness 挂在哪些切点、每条切点覆盖不到什么。</strong>
+</div>
+
+<h2>怎么用这一课</h2>
+<p><strong>先讲后测，五五开</strong>：第一部分先建立 Harness 的装配地图，每节都回答「为什么这样连接、不这样会出什么事故」；第二部分 18 题，其中 <strong>14 道选择题 + 4 道简述题</strong>。Q1–Q3 换形式重测 0013 的三条核心不变量（0013 分数未报，按核心不变量兜底）；Q4 起进入本课。四道简述题按得分点严格自评，漏掉关键点就选「部分对」。完成后自动生成诊断报告。</p>
+<p><strong>三层定位</strong>：第一层能默画 Harness 的六个连接（图 1）、一次 <code>run_test</code> 的双写时序（图 2A）、异常路径的五种判断（图 4）；第二层跑通课程工程与作业的确定性测试，再主动改造「最新证据」与「进程组」两处；第三层始终追问「这份事实送到了模型、状态、审批还是完成检查」「这条规则在哪个入口生效、覆盖不到哪条提前返回路径」「拿什么真实产物证明它生效」。最后能把同一套判断迁移到自己的 <code>guarded_harness</code>，而不是只会复述课程目录。</p>
+<p class="sidenote">就业面试视角：不要只答「我用了 Agent 框架」。面试官会沿着一次任务追问：工具结果有没有同时进模型和状态？测试通过后代码又改了怎么办？等待审批后执行的是不是批准过的补丁？取消有没有真的杀掉进程？恢复会不会重放已完成的写入？模型说「完成了」时，程序凭什么允许交付？能沿这条链回答，才说明理解的是 Harness，而不是背了几个模块名。</p>
+
+<nav class="toc">
+<strong>本课目录</strong>
+<ul>
+  <li><a href="#sec0">0. 开篇：四个追问</a></li>
+  <li><a href="#sec1">1. Harness：连接，不是新模块</a></li>
+  <li><a href="#sec2">2. 分工与唯一执行入口</a></li>
+  <li><a href="#sec2-code">2.5 读工程：Harness 与待测应用</a></li>
+  <li><a href="#sec3">3. 一个结果，两个消费者</a></li>
+  <li><a href="#sec4">4. 正常路径：先红后绿，再交付</a></li>
+  <li><a href="#sec5">5. 完成检查：只认当前最新事实</a></li>
+  <li><a href="#sec6">6. 异常路径：继续不是默认动作</a></li>
+  <li><a href="#sec7">7. 取消、暂停、恢复：三种语义</a></li>
+  <li><a href="#sec8">8. 接进 pi：三个容易接错的位置</a></li>
+  <li><a href="#sec9">9. 手写 Harness：commerce-agents 解剖</a></li>
+  <li><a href="#sec10">10. 作业迁移：smolagents Guarded Harness</a></li>
+  <li><a href="#sec11">11. 验收：看决定，也看实际后果</a></li>
+  <li><a href="#sec12">12. 面试视角：把连接讲成一条链</a></li>
+  <li><a href="#part2">第二部分：检索式测验</a></li>
+  <li><a href="#part3">第三部分：第二层练习</a></li>
+</ul>
+</nav>
+
+<hr>
+
+<h2>第一部分：精讲（先读，测验在后）</h2>
+
+<h3 id="sec0">0. 开篇：四个追问</h3>
+<p>先看一个具体任务：<strong>修复登录会话过期后仍能访问的问题，并完成修改、测试和交付说明。</strong></p>
+<p>假设模型找到 <code>session-policy.ts</code>，把日期比较改成完整时间比较，跑完测试，最后回复「问题已修复」。任务结束了吗？课程要求继续追问四件事：</p>
+<ol>
+  <li>它跑的是不是任务要求的测试范围？只跑 <code>target</code>，还是 <code>target</code> / <code>boundary</code> / <code>regression</code> 都跑了？</li>
+  <li>测试通过以后，它有没有再次修改代码？旧测试还能证明当前文件吗？</li>
+  <li>如果中途等待过审批，真正执行的还是批准过的那个补丁吗？</li>
+  <li>如果运行被打断，恢复后会不会把已经完成的修改再做一遍？</li>
+</ol>
+<p>这四个问题分别落在模型调用、工具执行、状态管理和运行环境之间。每个模块单独看都可能正确，但连接处的事实一旦不一致，整个任务就会错。这正是本课的主题：<strong>单个模块正确 ≠ 整个 Agent 能正确完成任务</strong>（PPT 开篇原话）。</p>
+<p>本课主线只有一句：<strong>把准备、修改、验证、异常处理、恢复和交付串成完整闭环，并让每一步都有可核对的证据。</strong></p>
+
+<h3 id="sec1">1. Harness：连接，不是新模块</h3>
+<p>课程给出的定义是：<strong>围绕模型组织工具、状态、上下文和执行环境的支撑程序，合在一起就是 Harness。</strong> 一句话：<strong>Agent = Model + Harness。</strong></p>
+<p>Model 负责理解、推理和生成动作；Harness 负责让动作真正发生，并组织整个执行过程。Harness 连接六样东西：Agent Loop、Context、State / Checkpoint、Tool Runtime、Governance、Sandbox。</p>
+<p>同一个模型，接入不同的 Harness，表现可能完全不同。比如测试失败后，一个系统只返回「执行失败」，另一个返回失败用例、断言差异和代码位置；后者让模型知道哪条行为没满足，前者可能让它反复修改不相关的代码。</p>
+<p>所以 Agent 工程优化不能只看模型和 Prompt，还要检查四个问题：<strong>模型看到了什么？动作是否真正执行？执行结果是否正确返回？失败后能否继续处理？</strong></p>
+
+<figure class="diagram" id="fig1">
+<svg viewBox="0 0 760 360" role="img" aria-label="Agent 等于 Model 加 Harness，Harness 连接六个模块">
+  <defs><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">Agent = Model + Harness：六个连接，不是第七个模块</text>
+
+  <rect class="dg-node" x="25" y="60" width="150" height="120" rx="8"/>
+  <text class="dg-label" x="100" y="88" text-anchor="middle">Model</text>
+  <text class="dg-soft" x="100" y="112" text-anchor="middle">理解 · 推理</text>
+  <text class="dg-soft" x="100" y="132" text-anchor="middle">生成动作</text>
+  <text class="dg-faint" x="100" y="158" text-anchor="middle">输出是不可信输入</text>
+
+  <rect class="dg-zone" x="215" y="45" width="520" height="180" rx="10"/>
+  <text class="dg-title" x="235" y="70">Harness：顶层组织与编排</text>
+
+  <rect class="dg-node-accent" x="240" y="88" width="140" height="48" rx="6"/>
+  <text class="dg-label" x="310" y="109" text-anchor="middle">Agent Loop</text>
+  <text class="dg-soft" x="310" y="126" text-anchor="middle">何时继续 / 停止</text>
+
+  <rect class="dg-node" x="400" y="88" width="140" height="48" rx="6"/>
+  <text class="dg-label" x="470" y="109" text-anchor="middle">Context</text>
+  <text class="dg-soft" x="470" y="126" text-anchor="middle">给模型什么信息</text>
+
+  <rect class="dg-node" x="560" y="88" width="150" height="48" rx="6"/>
+  <text class="dg-label" x="635" y="109" text-anchor="middle">State / Checkpoint</text>
+  <text class="dg-soft" x="635" y="126" text-anchor="middle">保存 · 中断恢复</text>
+
+  <rect class="dg-node" x="240" y="155" width="140" height="48" rx="6"/>
+  <text class="dg-label" x="310" y="176" text-anchor="middle">Tool Runtime</text>
+  <text class="dg-soft" x="310" y="193" text-anchor="middle">发现 · 调用 · 回写</text>
+
+  <rect class="dg-node" x="400" y="155" width="140" height="48" rx="6"/>
+  <text class="dg-label" x="470" y="176" text-anchor="middle">Governance</text>
+  <text class="dg-soft" x="470" y="193" text-anchor="middle">权限 · 审批 · 校验</text>
+
+  <rect class="dg-node" x="560" y="155" width="150" height="48" rx="6"/>
+  <text class="dg-label" x="635" y="176" text-anchor="middle">Execution / Sandbox</text>
+  <text class="dg-soft" x="635" y="193" text-anchor="middle">文件 · 命令 · 网络</text>
+
+  <line class="dg-arrow" x1="175" y1="110" x2="236" y2="110" marker-end="url(#m1)"/>
+  <line class="dg-arrow" x1="380" y1="112" x2="396" y2="112" marker-end="url(#m1)"/>
+  <line class="dg-arrow" x1="540" y1="112" x2="556" y2="112" marker-end="url(#m1)"/>
+  <line class="dg-arrow" x1="310" y1="136" x2="310" y2="151" marker-end="url(#m1)"/>
+  <line class="dg-arrow" x1="380" y1="179" x2="396" y2="179" marker-end="url(#m1)"/>
+  <line class="dg-arrow" x1="540" y1="179" x2="556" y2="179" marker-end="url(#m1)"/>
+  <path class="dg-arrow" d="M600 203 L600 225 L310 225 L310 203" marker-end="url(#m1)"/>
+  <text class="dg-faint" x="470" y="241" text-anchor="middle">结果回到 Loop，同时进入 State / Evidence</text>
+
+  <rect class="dg-node" x="240" y="285" width="470" height="45" rx="7"/>
+  <text class="dg-label" x="475" y="313" text-anchor="middle">真实世界：文件修改 · 命令执行 · API · 数据库</text>
+  <line class="dg-arrow" x1="660" y1="203" x2="660" y2="285" marker-end="url(#m1)"/>
+  <text class="dg-faint" x="20" y="350">同一个模型，换一套 Harness，表现可能完全不同。</text>
+</svg>
+<figcaption>图 1 · Harness 不是第七个模块，而是六条连接的组织方式。模型只提出动作；Harness 让动作发生，并把真实结果接回模型与状态。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么 Harness 不是「再包一层」：</strong>如果只是在模型外面堆模块，而不把同一份执行事实接进模型、状态、审批和完成检查，每个模块都可以局部正确，系统仍然会交付一个失败的任务。代价是要维护更多连接和一致性；收益是模型决策有真实依据，程序也能独立判断完成。课程材料没有把 Harness 当成第七个模块，而是把它定义为「把已有能力接成完整执行系统」。</div>
+
+<h3 id="sec2">2. 分工与唯一执行入口</h3>
+<p>Harness 不是重新写一个大类，而是把已有模块按职责连接起来。课程的分工表：</p>
+<table>
+  <tr><th>模块</th><th>本例中的职责</th></tr>
+  <tr><td>Tool</td><td>提供读取文件、应用补丁、运行测试等具体能力</td></tr>
+  <tr><td>Tool Runtime</td><td>检查调用，管理执行，记录并返回结果</td></tr>
+  <tr><td>Loop</td><td>组织模型与工具之间的多轮交互</td></tr>
+  <tr><td>State</td><td>保存计划、执行事实、验证证据和未完成事项</td></tr>
+  <tr><td>Sandbox</td><td>限制操作实际能够触及的文件、进程或其他资源</td></tr>
+  <tr><td>任务运行层</td><td>协调启动、等待、取消、恢复和收尾</td></tr>
+</table>
+<p>顺着一次补丁调用看，基本链路是：</p>
+<pre>Model → Loop → Runtime → Tool / Sandbox → Result → Loop</pre>
+<p>三条原则必须记住：</p>
+<ol>
+  <li><strong>执行约束放在执行入口。</strong>路径、权限、参数检查不能只写在某个 Loop 分支；换一条调用路径就可能漏掉。</li>
+  <li><strong>「是否继续下一轮」属于运行控制，不交给 Tool 决定。</strong>工具只回答「这次动作的结果」，Loop 和 Harness 才决定继续、等待、停止还是转人工。</li>
+  <li><strong>Agent Runtime 负责更高层的启动、等待、取消、恢复和收尾。</strong>这些语义不能混进某个工具的 handler。</li>
+</ol>
+<div class="why-box"><strong>为什么检查必须在唯一入口：</strong>如果检查写在 Loop 的某个分支，模型换一种调用方式、宿主直接调用、审批按钮直接写后端，都可能绕过它。唯一入口的代价是所有调用都要经过同一层，可能多一次间接调用；收益是规则只需要维护一份，所有写入路径都受同一组条件约束。这与 0013 的「Runtime 检查放行、Sandbox 限制影响范围」是同一条主线。</div>
+
+<h3 id="sec2-code">2.5 读工程：先分清 Harness 与待测应用</h3>
+<p>作业要写的是 Harness，不是把框架再实现一遍。课程工程里，<strong><code>src/</code> 是 Harness，<code>fixtures/demo-app/</code> 是被修改、被测试的目标应用</strong>。两类测试也不能混：<code>fixtures/demo-app/tests/</code> 证明登录行为；<code>harness_agent/tests/</code> 证明门禁、证据、取消与恢复。<strong>目标应用全绿，不证明 Harness 正确；Harness 全绿，也不证明它真的修好了目标应用。</strong></p>
+<table>
+  <tr><th>代码位置</th><th>它拥有的事实与职责</th><th>阅读时盯住的不变量</th></tr>
+  <tr><td><a href="../course_code/week03/3-5/harness_agent/src/main.ts"><code>main.ts</code></a> / <a href="../course_code/week03/3-5/harness_agent/src/cli.ts"><code>cli.ts</code></a></td><td>进程入口、工作区、AbortController、启动或恢复</td><td>恢复检查先于模型构造；待批动作未决时不启动模型</td></tr>
+  <tr><td><a href="../course_code/week03/3-5/harness_agent/src/agent-runner.ts"><code>agent-runner.ts</code></a></td><td>装配全部协作者，配置 pi Loop，累积真实历史并组织存档</td><td>新跑与恢复共用一条执行链；不是课程自己重写 Loop</td></tr>
+  <tr><td><a href="../course_code/week03/3-5/harness_agent/src/pi-tools.ts"><code>pi-tools.ts</code></a></td><td>模型可见工具、参数适配、Runtime 结果转换</td><td><code>modelView</code> 给模型；<code>details.evidence</code> 给程序</td></tr>
+  <tr><td><a href="../course_code/week03/3-5/harness_agent/src/runtime.ts"><code>runtime.ts</code></a></td><td>真实执行、当前文件哈希、测试前后摘要、证据草稿</td><td>证据来自执行侧，不由模型声明；工具成功与测试通过分开</td></tr>
+  <tr><td><a href="../course_code/week03/3-5/harness_agent/src/loop-guard.ts"><code>loop-guard.ts</code></a></td><td>重复动作、计划门禁、结果观测、完成检查、缺项回写</td><td>先落执行记录，再登记证据；缺项变 follow-up，不信模型收尾</td></tr>
+  <tr><td><a href="../course_code/week03/3-5/harness_agent/src/plan-store.ts"><code>plan-store.ts</code></a> / <a href="../course_code/week03/3-5/harness_agent/src/task-record.ts"><code>task-record.ts</code></a></td><td>计划与证据 ID / 业务任务状态、工具调用、状态迁移</td><td>计划完成与任务完成是两层；开始与结束都有真实记录</td></tr>
+  <tr><td><a href="../course_code/week03/3-5/harness_agent/src/checkpoint.ts"><code>checkpoint.ts</code></a> / <a href="../course_code/week03/3-5/harness_agent/src/resume.ts"><code>resume.ts</code></a></td><td>原子 JSON 存档、恢复前现场核查、未决动作三态</td><td>存档不是工作区快照；结果不明就停止自动重放</td></tr>
+  <tr><td><a href="../course_code/week03/3-5/harness_agent/src/approval-flow.ts"><code>approval-flow.ts</code></a> / <a href="../course_code/week03/3-5/harness_agent/src/test-process.ts"><code>test-process.ts</code></a></td><td>审批到执行的事务、真实进程组与取消清理</td><td>执行前重核补丁与现场；取消覆盖整棵进程树</td></tr>
+</table>
+<p>一条新任务的阅读顺序是：<strong><code>main/cli → agent-runner → pi Loop → pi-tools → runtime → loop-guard → plan-store/task-record → completion-contract</code></strong>。恢复则先从 <code>cli → resume.prepareResume</code> 读，确认模型还没有被创建，再看业务对象怎样还原。不要按文件名字母顺序读，那会看见很多正确函数，却看不见事实怎样跨边界。</p>
+<div class="why-box"><strong>为什么先画「事实归属图」再写代码：</strong>同一个词「状态」在这里至少有三种含义：pi 的会话历史、计划与证据、业务任务与执行记录。若不先指定谁拥有哪份事实，很容易出现模型文本被当成执行证据、计划步骤完成被当成任务完成、存档 JSON 被当成工作区快照。课程代码把三者分开，代价是对象和转换更多；收益是每份事实都有明确来源和验证者。</div>
+<p class="sidenote">本工程的证明边界也要说清：它组合 pi 的 Loop，不是手写 Loop；Checkpoint 只保证 JSON 原子替换，不是文件系统事务；<code>executeTestProcess</code> 支持超时参数，但 <code>runTest</code> 当前未传默认 <code>timeoutMs</code>（<code>runtime.ts:415–419</code>）。因此课程测试证明的是特定连接与反例，不等于生产级 Sandbox、完整时间治理或工作区回滚能力。</p>
+
+<h3 id="sec3">3. 一个结果，两个消费者</h3>
+<p>一次工具执行结果有两个消费者：</p>
+<ul>
+  <li><strong>给模型</strong>：提供下一步判断依据，比如失败用例、断言差异、日志位置。</li>
+  <li><strong>给程序</strong>：更新状态、证据、计划进度和完成条件。</li>
+</ul>
+<p>只返回给模型：模型知道失败了，但程序可能仍认为任务已经完成。只更新程序：状态正确，但模型不知道为什么失败、下一步怎么修。</p>
+<p>因此课程把结果写成：<strong>执行结果 → Model Context + State / Evidence</strong>。状态与上下文职责不同：</p>
+<ul>
+  <li><strong>State</strong>：保存程序可核对的事实。</li>
+  <li><strong>Context</strong>：提供模型当前需要的信息。</li>
+</ul>
+<p>模型可以只看到简短的测试摘要，程序仍然保留完整测试记录。还有一条容易漏掉的不变量：<strong>代码变化后，旧测试证据必须失效，并告诉模型哪些检查需要重新执行。</strong> 这不是「多写一条日志」，而是完成判断的前提。</p>
+<p>这条原则在课程代码里不是一个抽象要求，而是同一个 <code>ManagedToolResult</code> 的两个投影（<code>runtime.ts:24–30</code>、<code>pi-tools.ts:94–109</code>）：</p>
+<pre><code>export interface ManagedToolResult {
+  ok: boolean;
+  code: string;
+  modelView: unknown;       // 给模型看的内容
+  artifact?: string;
+  evidence?: ToolEvidence;  // 给程序补全并保存的证据草稿
+}
+
+// pi-tools.ts：同一次结果，content 与 details 分别服务两个消费者
+content: [{ type: "text", text: JSON.stringify(result.modelView) }],
+details: { ok: result.ok, code: result.code, evidence: result.evidence, ... }</code></pre>
+<p>模型没有直接填写 <code>evidence</code>。Runtime 先产生证据草稿，<code>LoopGuard.observeToolResult</code> 再补入 <code>stepId</code>、<code>toolCallId</code>、<code>artifactVersion</code> 和证据 ID（<code>loop-guard.ts:168–227</code>）。这决定了证据的来源是执行侧，而不是模型的一段自我汇报。</p>
+
+<figure class="diagram" id="fig-run-test">
+<svg viewBox="0 0 820 480" role="img" aria-label="run_test 从模型调用到双写与完成检查的时序图">
+  <defs>
+    <marker id="mrt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
+    <marker id="mrtw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#c62828"/></marker>
+  </defs>
+  <text class="dg-title" x="20" y="24">一次 run_test：同一份事实怎样走到模型、状态与完成检查</text>
+  <text class="dg-label" x="100" y="52" text-anchor="middle">Model / pi Loop</text>
+  <text class="dg-label" x="250" y="52" text-anchor="middle">pi-tools</text>
+  <text class="dg-label" x="420" y="52" text-anchor="middle">Runtime</text>
+  <text class="dg-label" x="590" y="52" text-anchor="middle">LoopGuard / State</text>
+  <text class="dg-label" x="740" y="52" text-anchor="middle">Completion</text>
+  <line class="dg-line" x1="100" y1="62" x2="100" y2="450"/>
+  <line class="dg-line" x1="250" y1="62" x2="250" y2="450"/>
+  <line class="dg-line" x1="420" y1="62" x2="420" y2="450"/>
+  <line class="dg-line" x1="590" y1="62" x2="590" y2="450"/>
+  <line class="dg-line" x1="740" y1="62" x2="740" y2="450"/>
+
+  <line class="dg-arrow" x1="100" y1="88" x2="240" y2="88" marker-end="url(#mrt)"/>
+  <text class="dg-soft" x="110" y="80">① tool call</text>
+  <line class="dg-arrow" x1="250" y1="126" x2="410" y2="126" marker-end="url(#mrt)"/>
+  <text class="dg-soft" x="260" y="118">② invoke(args, context)</text>
+
+  <rect class="dg-node-accent" x="345" y="150" width="150" height="65" rx="6"/>
+  <text class="dg-soft" x="420" y="171" text-anchor="middle">③ beforeDigest</text>
+  <text class="dg-soft" x="420" y="189" text-anchor="middle">真实执行测试进程</text>
+  <text class="dg-soft" x="420" y="207" text-anchor="middle">afterDigest</text>
+
+  <line class="dg-arrow" x1="420" y1="242" x2="260" y2="242" marker-end="url(#mrt)"/>
+  <text class="dg-soft" x="275" y="234">④ ManagedToolResult</text>
+  <line class="dg-arrow" x1="250" y1="278" x2="110" y2="278" marker-end="url(#mrt)"/>
+  <text class="dg-soft" x="112" y="270">⑤ content = modelView</text>
+  <line class="dg-arrow" x1="250" y1="314" x2="580" y2="314" marker-end="url(#mrt)"/>
+  <text class="dg-soft" x="270" y="306">⑥ details.evidence（同一结果）</text>
+
+  <rect class="dg-node" x="510" y="334" width="165" height="58" rx="6"/>
+  <text class="dg-soft" x="592" y="355" text-anchor="middle">⑦ endToolCall</text>
+  <text class="dg-soft" x="592" y="374" text-anchor="middle">addEvidence(step/call/version)</text>
+
+  <path class="dg-arrow" d="M100 400 L100 414 L730 414" marker-end="url(#mrt)"/>
+  <text class="dg-soft" x="115" y="407">⑧ 模型给出 final answer / 本轮无新工具结果</text>
+  <path class="dg-arrow-warn" d="M740 438 L740 452 L110 452 L110 440" marker-end="url(#mrtw)"/>
+  <text class="dg-soft" x="270" y="446">⑨ 缺项非空 → FINAL_REJECTED 回模型；缺项为空才 COMPLETED</text>
+</svg>
+<figcaption>图 2A · 先执行，再从同一结果生成模型视图与程序证据；完成检查读取当前现场。模型最后说「完成」，只是触发验收，不是验收结论。</figcaption>
+</figure>
+
+<p>这张图还解释了四种「成功」为什么必须分开：</p>
+<table>
+  <tr><th>层级</th><th>看什么</th><th>不能推出什么</th></tr>
+  <tr><td>工具调用结果</td><td><code>ok</code> / <code>code</code>，测试进程是否得到明确结果</td><td><code>run_test</code> 可以 <code>ok: true</code> 而测试 <code>exitCode: 1</code></td></tr>
+  <tr><td>测试行为</td><td><code>passed</code>、真实退出码、前后内容摘要</td><td>测试通过不等于计划步骤或任务已完成</td></tr>
+  <tr><td>计划步骤</td><td>步骤证据与 verifier；默认 verifier 可能只作宽松接收</td><td>步骤 completed 不等于最终交付成立</td></tr>
+  <tr><td>任务完成</td><td>当前 Diff、每组最新有效结果、交付物与当前现场</td><td>模型说完成或 Loop 结束都不能替代它</td></tr>
+</table>
+
+<div class="why-box"><strong>为什么必须双写：</strong>两个消费者拿到的必须是同一次执行事实。只给模型，程序会被模型的说法带着走；只给状态，模型会在缺少依据的情况下盲目重试。代价是双写一致性和更多状态字段；收益是模型与程序不会一边说成功、一边说失败。后面 commerce-agents 的 <code>ToolOutcome</code> 就是把这两条去向做进同一个返回值。</div>
+
+<h3 id="sec4">4. 正常路径：先红后绿，再交付</h3>
+<p>本例缺陷在 <code>fixtures/demo-app/src/auth/session-policy.ts</code>：<code>isSessionExpired()</code> 只比较 UTC 日期，没有比较完整时间。同一天内，即使会话已经到期，函数仍可能判断它有效。</p>
+<p>只说「把日期比较改成时间比较」可以引导修改，却没有说清修改后要满足什么行为。至少要覆盖四个边界：</p>
+<ul>
+  <li>到期前；</li>
+  <li>恰好到期；</li>
+  <li>到期后；</li>
+  <li><strong>同一天但已经超过到期时刻。</strong></li>
+</ul>
+<p>测试传入固定 <code>now: Date</code>，不需要真的等待会话过期。任务完成需要两层检查：</p>
+<ol>
+  <li><strong>第一层：测试验证行为</strong>——<code>target</code>、<code>boundary</code>、<code>regression</code> 三组测试。</li>
+  <li><strong>第二层：Completion Contract 验证交付证据</strong>——当前代码存在目标 Diff；三组验证全部通过；指定交付产物存在。</li>
+</ol>
+<blockquote>测试回答「代码行为对不对」；Completion Contract 回答「交付证据齐不齐」。</blockquote>
+<p>本例的契约由 <code>createLoginFixContract({ targetSource, targetArtifact, requiredScopes })</code> 创建；它只认当前版本上的目标 Diff、三组最新有效测试结果和真实交付产物。</p>
+
+<p><strong>准备工作区，给模型足够的起点。</strong>执行前先确认：工作区已有修改、本次允许修改的范围、测试运行目录、Runtime 与依赖、后台服务是否真实存在。不要依赖隐含环境状态：上一次 <code>cd</code> 不代表下一次 Shell 仍在该目录；历史记录写着「服务已启动」，不代表进程仍然存在。</p>
+<p>首轮 Context 只需要四类信息：</p>
+<table>
+  <tr><th>内容</th><th>模型需要知道什么</th></tr>
+  <tr><td>目标</td><td>修复什么行为，哪些情况必须满足</td></tr>
+  <tr><td>入口</td><td>从哪个文件、函数和测试开始检查</td></tr>
+  <tr><td>边界</td><td>允许修改什么，哪些动作需要审批</td></tr>
+  <tr><td>验收</td><td>必须完成哪些验证，生成什么交付产物</td></tr>
+</table>
+<p>原则是：<strong>给模型足够开始工作的上下文，而不是把整个仓库塞进去。</strong>代码、日志和其他信息后续通过 Tool 按需读取。</p>
+
+<p><strong>先确认失败，再应用补丁。</strong>证据链是：读取代码 → 读取测试 → 复现失败 → 修改 → 再验证。先确认三件事：缺陷是否真实存在？当前测试是否真正覆盖缺陷？调用方怎样使用这个函数？如果应该失败的测试却通过，<strong>先检查测试覆盖，不要立即修改代码。</strong></p>
+<p>补丁执行仍必须经过 <strong>Runtime 检查 → Sandbox 执行</strong>；所有写入路径都受同样约束。补丁失败时：返回真实失败原因；让模型重新读取文件；<strong>程序不能猜测模型想修改的位置。</strong> 成功后保存 Diff、保留 <code>toolCallId</code>、更新任务状态。</p>
+
+<p><strong>让测试结果决定下一步。</strong>修改后先做类型 / 语法 / Lint，再跑三组测试。失败先分两类：</p>
+<ul>
+  <li><strong>环境失败</strong>：测试没有真正运行 → 代码行为尚未验证。</li>
+  <li><strong>行为失败</strong>：测试正常运行但断言失败 → 把失败用例、预期值、实际值和日志位置交回模型。</li>
+</ul>
+<p>最重要的证据原则：<strong>测试结果必须对应实际受测代码。</strong> 测试通过后如果相关代码再次变化，旧测试记录仍然真实，但已经不能证明当前代码正确。</p>
+
+<p><strong>核对最终改动，再宣布完成。</strong>测试通过后还要看最终 Diff：是否真正修复目标问题？是否保留原有行为？是否删除失败测试？是否放宽断言？是否绕过验证？<code>exit_code = 0</code> 只是执行证据，不等于需求已经满足。最终由 Completion Contract 判断：<strong>当前 Diff + 当前有效测试证据 + 交付产物 → completed。</strong></p>
+<p>交付说明说清四件事：改了什么、验证了什么、什么没有验证、还有什么限制。</p>
+
+<figure class="diagram" id="fig2">
+<svg viewBox="0 0 760 340" role="img" aria-label="正常路径：准备、复现、补丁、三组测试与完成契约">
+  <defs>
+    <marker id="m2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
+    <marker id="m2w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#c62828"/></marker>
+  </defs>
+  <text class="dg-title" x="20" y="24">正常路径：先红后绿，再由契约判定交付</text>
+
+  <rect class="dg-node" x="20" y="55" width="125" height="55" rx="6"/>
+  <text class="dg-label" x="82" y="78" text-anchor="middle">准备现场</text>
+  <text class="dg-soft" x="82" y="96" text-anchor="middle">范围 · 目录 · 服务</text>
+  <line class="dg-arrow" x1="145" y1="82" x2="165" y2="82" marker-end="url(#m2)"/>
+
+  <rect class="dg-node" x="170" y="55" width="125" height="55" rx="6"/>
+  <text class="dg-label" x="232" y="78" text-anchor="middle">复现失败</text>
+  <text class="dg-soft" x="232" y="96" text-anchor="middle">先确认缺陷存在</text>
+  <line class="dg-arrow" x1="295" y1="82" x2="315" y2="82" marker-end="url(#m2)"/>
+
+  <rect class="dg-node" x="320" y="55" width="125" height="55" rx="6"/>
+  <text class="dg-label" x="382" y="78" text-anchor="middle">应用补丁</text>
+  <text class="dg-soft" x="382" y="96" text-anchor="middle">Runtime → Sandbox</text>
+  <line class="dg-arrow" x1="445" y1="82" x2="465" y2="82" marker-end="url(#m2)"/>
+
+  <rect class="dg-node" x="470" y="55" width="125" height="55" rx="6"/>
+  <text class="dg-label" x="532" y="78" text-anchor="middle">三组测试</text>
+  <text class="dg-soft" x="532" y="96" text-anchor="middle">行为是否正确</text>
+  <line class="dg-arrow" x1="595" y1="82" x2="615" y2="82" marker-end="url(#m2)"/>
+
+  <rect class="dg-node-accent" x="620" y="55" width="120" height="55" rx="6"/>
+  <text class="dg-label" x="680" y="78" text-anchor="middle">完成契约</text>
+  <text class="dg-soft" x="680" y="96" text-anchor="middle">证据是否齐全</text>
+
+  <rect class="dg-node" x="430" y="140" width="150" height="78" rx="6"/>
+  <text class="dg-label" x="505" y="162" text-anchor="middle">三组范围</text>
+  <text class="dg-soft" x="505" y="182" text-anchor="middle">target：目标缺陷</text>
+  <text class="dg-soft" x="505" y="200" text-anchor="middle">boundary：到期边界</text>
+  <text class="dg-soft" x="505" y="218" text-anchor="middle">regression：回归</text>
+  <line class="dg-arrow" x1="532" y1="110" x2="532" y2="136" marker-end="url(#m2)"/>
+
+  <rect class="dg-node" x="595" y="140" width="145" height="78" rx="6"/>
+  <text class="dg-label" x="667" y="162" text-anchor="middle">契约核对</text>
+  <text class="dg-soft" x="667" y="182" text-anchor="middle">当前代码有 Diff</text>
+  <text class="dg-soft" x="667" y="200" text-anchor="middle">三组最新结果通过</text>
+  <text class="dg-soft" x="667" y="218" text-anchor="middle">交付产物存在</text>
+  <line class="dg-arrow" x1="680" y1="110" x2="680" y2="136" marker-end="url(#m2)"/>
+
+  <path class="dg-arrow-warn" d="M505 110 L505 258 L382 258 L382 114" marker-end="url(#m2w)"/>
+  <text class="dg-faint" x="395" y="276">失败 / 缺项 → 回模型修正，再重新验证</text>
+  <text class="dg-faint" x="20" y="310">测试回答「代码行为对不对」；完成契约回答「交付证据齐不齐」。</text>
+  <text class="dg-faint" x="20" y="330">exit_code = 0 只是执行证据，不等于需求已经满足。</text>
+</svg>
+<figcaption>图 2 · 正常路径不是「改完就跑一次测试」。它要求先有红色基线，再有三组范围的最新证据，最后由完成契约核对当前 Diff 与交付产物。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么必须先确认失败：</strong>如果测试在修改前就通过，后面的绿色不能证明修复有效——它可能根本没覆盖缺陷。先红后绿才让「修复」有比较对象。代价是多跑一次基线测试；收益是避免「改了一个不相关的地方，测试本来就会过」的假修复。同理，测试通过也不等于交付完成：测试只覆盖行为，契约还要核对当前 Diff 和产物。</div>
+
+<h3 id="sec5">5. 完成检查：只认当前最新事实</h3>
+<p>现有完成契约已经从证据中查找测试结果，而不是根据模型最终回复判断。但它还可能接受两类不可靠证据。</p>
+<p><strong>第一类：版本编号没变，内容却变了。</strong> Runtime 在受控补丁成功后把 revision 从 <code>r0</code> 推到 <code>r1</code>，这能跟踪经过该入口的修改；但同一次运行中，如果文件被外部编辑，计数不一定变化。因此验证记录要关联<strong>实际受测内容 / 内容指纹</strong>，而不是只关联逻辑版本号。</p>
+<p><strong>第二类：早先成功掩盖后续失败。</strong> 同一内容、同一 <code>boundary</code> 范围，第一次通过、第二次失败；如果仍以「存在某个通过记录」为条件，早先的成功会掩盖最新失败。正确做法是：按验证范围取<strong>最后一次尝试</strong>，最新失败不能被更早的成功覆盖。</p>
+<p>交付文档也一样：已有写入记录只证明当时写过；收尾时还要检查文件是否存在、是否包含要求内容、内容哈希是否与最后写入一致。</p>
+
+<p>完成契约里的核心判断可以压缩成这段代码（<code>src/completion-contract.ts:110</code>）：</p>
+<pre><code>for (const scope of requiredScopes) {
+  // 先取最后一次尝试，再判断其有效性。取消或未知不能跳过后沿用旧通过。
+  const latest = evidence.findLast(
+    (item) =&gt; item.kind === "test" &amp;&amp; item.payload.scope === scope,
+  );
+  let reason: string | undefined;
+  if (!latest) reason = "尚未执行";
+  else if (latest.payload.resultCode !== "OK") {
+    reason = `最近一次结果 ${String(latest.payload.resultCode ?? "未知")}，不能作为通过证据`;
+  } else if (latest.payload.exitCode !== 0 || latest.payload.passed !== true) {
+    reason = `最近一次未通过（exit=${String(latest.payload.exitCode)}）`;
+  } else if (latest.payload.stable !== true
+    || latest.payload.beforeDigest !== latest.payload.afterDigest) {
+    reason = "测试期间输入变化或缺少前后指纹";
+  } else if (!current || latest.artifactVersion !== revision
+    || latest.payload.verificationDigest !== current.verificationDigest
+    || latest.payload.beforeDigest !== current.verificationDigest) {
+    reason = "源码、测试或配置与受测内容不一致";
+  }
+  if (reason) missing.push(`当前版本缺少通过的测试范围：${scope}；${reason}，请重新运行 run_test`);
+}</code></pre>
+
+<p>Runtime 在每次测试前后各算一次 <code>verificationDigest</code>，覆盖源码、测试与配置；两次不一致就返回 <code>TEST_INPUT_CHANGED</code>，即使退出码是 0 也不能作为通过证据。测试记录同时保存 <code>beforeDigest</code>、<code>afterDigest</code>、<code>stable</code> 与 <code>resultCode</code>，完成契约再拿它与当前现场比较（<code>src/runtime.ts:405–453</code>）。</p>
+<p class="sidenote">内容指纹只能证明「被纳入摘要的内容」。<code>verificationPaths</code> 与恢复时的 <code>digestFiles</code> 都是任务契约的一部分；漏掉关键源码、测试或配置，所谓「当前有效」就只是对这份清单有效。写自己的 Harness 时，先列验证范围，再谈哈希，不要只复制一个 digest 函数。</p>
+
+<figure class="diagram" id="fig3">
+<svg viewBox="0 0 760 470" role="img" aria-label="证据有效性四道门">
+  <defs>
+    <marker id="m3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
+    <marker id="m3w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#c62828"/></marker>
+  </defs>
+  <text class="dg-title" x="20" y="24">证据有效性：四道门，任何一道不过都不能完成</text>
+
+  <rect class="dg-node" x="40" y="55" width="330" height="48" rx="6"/>
+  <text class="dg-label" x="205" y="77" text-anchor="middle">① 它是该 scope 的最后一次尝试吗？</text>
+  <text class="dg-soft" x="205" y="95" text-anchor="middle">findLast：先取最后一次</text>
+  <line class="dg-arrow-warn" x1="370" y1="79" x2="425" y2="79" marker-end="url(#m3w)"/>
+  <text class="dg-faint" x="390" y="72">否</text>
+  <rect class="dg-node-warn" x="430" y="55" width="300" height="48" rx="6"/>
+  <text class="dg-label" x="580" y="77" text-anchor="middle">早先成功掩盖最新失败</text>
+  <text class="dg-soft" x="580" y="95" text-anchor="middle">不能使用 → 回模型重跑</text>
+
+  <line class="dg-arrow" x1="205" y1="103" x2="205" y2="128" marker-end="url(#m3)"/>
+  <text class="dg-faint" x="215" y="121">是</text>
+  <rect class="dg-node" x="40" y="133" width="330" height="48" rx="6"/>
+  <text class="dg-label" x="205" y="155" text-anchor="middle">② resultCode=OK 且 exitCode=0？</text>
+  <text class="dg-soft" x="205" y="173" text-anchor="middle">取消 / 未知 / 失败都不算通过</text>
+  <line class="dg-arrow-warn" x1="370" y1="157" x2="425" y2="157" marker-end="url(#m3w)"/>
+  <text class="dg-faint" x="390" y="150">否</text>
+  <rect class="dg-node-warn" x="430" y="133" width="300" height="48" rx="6"/>
+  <text class="dg-label" x="580" y="155" text-anchor="middle">最近一次未通过 / 取消 / 未知</text>
+  <text class="dg-soft" x="580" y="173" text-anchor="middle">不能使用 → 回模型重跑</text>
+
+  <line class="dg-arrow" x1="205" y1="181" x2="205" y2="206" marker-end="url(#m3)"/>
+  <text class="dg-faint" x="215" y="199">是</text>
+  <rect class="dg-node" x="40" y="211" width="330" height="48" rx="6"/>
+  <text class="dg-label" x="205" y="233" text-anchor="middle">③ 受测内容 = 当前 verificationDigest？</text>
+  <text class="dg-soft" x="205" y="251" text-anchor="middle">源码、测试、配置都要覆盖</text>
+  <line class="dg-arrow-warn" x1="370" y1="235" x2="425" y2="235" marker-end="url(#m3w)"/>
+  <text class="dg-faint" x="390" y="228">否</text>
+  <rect class="dg-node-warn" x="430" y="211" width="300" height="48" rx="6"/>
+  <text class="dg-label" x="580" y="233" text-anchor="middle">源码、测试或配置已变化</text>
+  <text class="dg-soft" x="580" y="251" text-anchor="middle">不能使用 → 回模型重跑</text>
+
+  <line class="dg-arrow" x1="205" y1="259" x2="205" y2="284" marker-end="url(#m3)"/>
+  <text class="dg-faint" x="215" y="277">是</text>
+  <rect class="dg-node" x="40" y="289" width="330" height="48" rx="6"/>
+  <text class="dg-label" x="205" y="311" text-anchor="middle">④ beforeDigest = afterDigest？</text>
+  <text class="dg-soft" x="205" y="329" text-anchor="middle">测试期间输入不能变化</text>
+  <line class="dg-arrow-warn" x1="370" y1="313" x2="425" y2="313" marker-end="url(#m3w)"/>
+  <text class="dg-faint" x="390" y="306">否</text>
+  <rect class="dg-node-warn" x="430" y="289" width="300" height="48" rx="6"/>
+  <text class="dg-label" x="580" y="311" text-anchor="middle">测试期间现场被修改</text>
+  <text class="dg-soft" x="580" y="329" text-anchor="middle">不能使用 → 回模型重跑</text>
+
+  <line class="dg-arrow" x1="205" y1="337" x2="205" y2="385" marker-end="url(#m3)"/>
+  <text class="dg-faint" x="215" y="365">是</text>
+  <rect class="dg-node-ok" x="40" y="390" width="330" height="45" rx="6"/>
+  <text class="dg-label" x="205" y="418" text-anchor="middle">该 scope 当前有效 → 才进入完成判断</text>
+  <text class="dg-faint" x="20" y="460">交付物同理：写入记录只证明当时写过，收尾要重新核对存在、非空与内容哈希。</text>
+</svg>
+<figcaption>图 3 · 「有通过记录」不等于「当前有效」。四道门分别挡住：早先成功、最近失败、内容变化、测试期间被改。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么是「最新结果」而不是「曾经通过」：</strong>完成检查回答的是「现在这份代码是否已经被验证」，不是「历史上有没有出现过一次成功」。版本号便宜但会漏掉绕过受控入口的外部编辑；内容指纹更贵，却能发现真实文件变化。课程的选择是：完成时读取当前可核对的事实，必要时重新计算摘要，而不是相信历史记录。注意它与 0010 的停止原因 write-once 方向不同：停止原因防止后来的成功覆盖先到的终局失败；测试证据要求最新一次失败压过更早的通过——两者共同的目标都是「不能让方便的历史叙事掩盖当前事实」。</div>
+
+<h3 id="sec6">6. 异常路径：继续不是默认动作</h3>
+<p>课程把异常处理统一为五个判断：</p>
+<ol>
+  <li><strong>判断失败：动作到底有没有发生？</strong></li>
+  <li><strong>结果不明：先核对现场。</strong></li>
+  <li><strong>用户取消：停止必须传到真实执行层。</strong></li>
+  <li><strong>再次恢复：重新检查旧状态和旧证据。</strong></li>
+  <li><strong>持续无进展：主动停止。</strong></li>
+</ol>
+<p>核心原则：<strong>继续执行不是默认动作，而是一个需要证据支持的决定。</strong></p>
+<p>错误处理首先不是决定「要不要重试」，而是确认「刚才的动作到底有没有发生」。三类情况：</p>
+<ul>
+  <li><strong>明确未执行</strong> → 可以按原因处理 / 有限重试。</li>
+  <li><strong>明确失败</strong> → 根据具体原因调整动作。</li>
+  <li><strong>执行结果不明</strong> → 先检查现场，不能直接重试。</li>
+</ul>
+<table>
+  <tr><th>发生了什么</th><th>程序应怎样处理</th></tr>
+  <tr><td>临时模型请求故障</td><td>按调用层规则有限重试</td></tr>
+  <tr><td>补丁明确未匹配、未写入</td><td>返回原因，让模型读取后调整</td></tr>
+  <tr><td>缺少授权</td><td>保存待批动作，进入等待</td></tr>
+  <tr><td>写操作结果不明</td><td>查执行记录与现场，再决定下一步</td></tr>
+  <tr><td>相同动作持续失败且无进展</td><td>达到限制后停止，保留未完成事项</td></tr>
+</table>
+<p>错误必须足够具体，能够推动下一步发生变化。不要只返回「修改失败」；应该说「目标文件存在，但待替换片段没有匹配，请重新读取当前内容」。同时守住事实边界：<strong>不知道有没有写入，就记录「结果不明」，不能伪装成普通失败。</strong></p>
+
+<p><strong>写操作结果不明为什么不能直接重放：</strong>典型情况是「补丁提交 → 文件已写入 → 程序退出 → 结果尚未保存」。此时 Checkpoint 认为修改还没完成，实际文件可能已经改成功。直接 Replay 可能重复写入、再次失败或扩大副作用。恢复时先核对：原动作涉及什么对象？执行前是什么状态？当前现场发生了什么变化？只有三种结论：</p>
+<ul>
+  <li><strong>确认已经执行</strong> → 恢复真实结果，不重复执行。</li>
+  <li><strong>确认没有执行</strong> → 满足条件后重新执行。</li>
+  <li><strong>部分执行 / 无法确认</strong> → 保留未决，继续核查或人工处理。</li>
+</ul>
+<p>不能仅凭文件里出现了某段预期代码，就认定整个动作成功；多文件补丁可能只完成一部分。核心原则：<strong>写操作恢复不是 Replay，而是先恢复执行事实。</strong></p>
+
+<p><strong>没有进展时怎样停止：</strong>区分局部 Retry（一个动作最多尝试多少次）与任务 Budget（整个任务最多运行多少轮、多久）。不能因为一次局部重试成功，就重置整个任务预算。停止后保存已有修改、测试结果、未决动作、停止原因。核心判断：<strong>程序运行结束 ≠ 任务完成。</strong></p>
+
+<figure class="diagram" id="fig4">
+<svg viewBox="0 0 760 430" role="img" aria-label="异常路径的五种判断">
+  <defs>
+    <marker id="m4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
+    <marker id="m4w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#c62828"/></marker>
+  </defs>
+  <text class="dg-title" x="20" y="24">异常路径：先判断动作有没有发生，再决定能不能继续</text>
+
+  <rect class="dg-node" x="280" y="45" width="200" height="40" rx="6"/>
+  <text class="dg-label" x="380" y="70" text-anchor="middle">任务执行出现异常</text>
+  <line class="dg-arrow" x1="380" y1="85" x2="380" y2="100" marker-end="url(#m4)"/>
+
+  <rect class="dg-node-accent" x="240" y="105" width="280" height="48" rx="6"/>
+  <text class="dg-label" x="380" y="127" text-anchor="middle">① 判断失败：动作发生了吗？</text>
+  <text class="dg-soft" x="380" y="145" text-anchor="middle">事实确认先于重试决定</text>
+
+  <path class="dg-arrow" d="M300 153 L130 153 L130 171" marker-end="url(#m4)"/>
+  <path class="dg-arrow" d="M380 153 L380 171" marker-end="url(#m4)"/>
+  <path class="dg-arrow" d="M460 153 L630 153 L630 171" marker-end="url(#m4)"/>
+
+  <rect class="dg-node-ok" x="20" y="176" width="220" height="52" rx="6"/>
+  <text class="dg-label" x="130" y="198" text-anchor="middle">明确未执行</text>
+  <text class="dg-soft" x="130" y="217" text-anchor="middle">按原因处理 / 有限重试</text>
+
+  <rect class="dg-node-warn" x="270" y="176" width="220" height="52" rx="6"/>
+  <text class="dg-label" x="380" y="198" text-anchor="middle">结果不明</text>
+  <text class="dg-soft" x="380" y="217" text-anchor="middle">先核对现场，不能直接重试</text>
+
+  <rect class="dg-node" x="520" y="176" width="220" height="52" rx="6"/>
+  <text class="dg-label" x="630" y="198" text-anchor="middle">明确失败</text>
+  <text class="dg-soft" x="630" y="217" text-anchor="middle">按具体原因调整动作</text>
+
+  <line class="dg-arrow-warn" x1="380" y1="228" x2="380" y2="247" marker-end="url(#m4w)"/>
+  <rect class="dg-node" x="270" y="252" width="220" height="58" rx="6"/>
+  <text class="dg-label" x="380" y="273" text-anchor="middle">三种结论</text>
+  <text class="dg-soft" x="380" y="292" text-anchor="middle">已执行 → 恢复事实</text>
+  <text class="dg-soft" x="380" y="307" text-anchor="middle">未执行 → 重做；不明 → 转人工</text>
+
+  <rect class="dg-zone" x="20" y="330" width="720" height="72" rx="8"/>
+  <text class="dg-faint" x="34" y="349">另外三种必须单独处理的语义：</text>
+  <rect class="dg-node" x="34" y="358" width="220" height="32" rx="5"/>
+  <text class="dg-soft" x="144" y="379" text-anchor="middle">③ 取消 → 停到真实执行层</text>
+  <rect class="dg-node" x="270" y="358" width="220" height="32" rx="5"/>
+  <text class="dg-soft" x="380" y="379" text-anchor="middle">④ 恢复 → 先核对现场</text>
+  <rect class="dg-node" x="506" y="358" width="220" height="32" rx="5"/>
+  <text class="dg-soft" x="616" y="379" text-anchor="middle">⑤ 无进展 → 停止并保存</text>
+
+  <text class="dg-faint" x="20" y="422">继续执行不是默认动作，而是需要证据支持的决定。</text>
+</svg>
+<figcaption>图 4 · 「失败」不是一种状态。先分未执行、明确失败、结果不明；取消、恢复、无进展停止又各有自己的检查层。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么「继续」需要证据：</strong>模型可以一直说「我再试一次」，但如果动作已经产生副作用、只是结果没保存，重试就是把一次不确定变成两次副作用。代价是要先查执行记录与现场，可能多花时间甚至转人工；收益是避免重复写入和扩大故障。课程把「结果不明」单独列为一类，而不是塞进「失败」，就是为了不让程序用错误码掩盖未知。</div>
+
+<h3 id="sec7">7. 取消、暂停、恢复：三种语义</h3>
+<p><strong>Cancel 解决「怎样真正停下来」，不是「怎样恢复到原状态」。</strong> UI 停止输出，不代表任务真正停止。取消信号必须沿调用链传播：任务入口 → Model / Runtime → Executor → 实际进程。还要确认：模型请求是否停止？测试进程是否退出？文件写入是否已经发生？取消不会自动撤销已经产生的副作用，因此取消后的状态应该记录「实际上发生了什么」，而不是统一标记为 failed。</p>
+<p>课程实现用 <code>AbortSignal</code> 把取消传到 <code>executeTestProcess</code>；POSIX 下子进程以 <code>detached: true</code> 启动，拥有自己的进程组，取消时对 <code>-pid</code> 发送 SIGTERM，宽限期后升级 SIGKILL，并在返回前确认进程组已经消失。这样停的是整棵进程树，而不只是 Node 的测试运行器父进程。</p>
+<pre><code>const child = spawn(command, [...args], {
+  cwd: options.cwd,
+  detached: grouped,   // POSIX: own process group
+  stdio: ["ignore", "pipe", "pipe"],
+});
+...
+if (grouped) process.kill(-child.pid, signal);</code></pre>
+<p>暂停与取消是两种语义，不能都叫「暂停」：</p>
+<table>
+  <tr><th>方式</th><th>语义</th></tr>
+  <tr><td><code>--pause-after</code></td><td>保存后停止，任务仍是 <code>running</code>，允许恢复</td></tr>
+  <tr><td><code>SIGINT</code> / <code>ABORTED</code></td><td>当前 runner 转为 <code>cancelled</code> 终态</td></tr>
+</table>
+<p><strong>Resume 之前，重新检查旧结论。</strong> Checkpoint 保存的是上一次运行结束时的事实，它不能证明这些事实现在仍然有效。恢复前检查三类信息：当前工作区与存档相比相关文件是否变化；未决动作上次执行到了哪里、是否可能已经产生修改；旧测试和待批动作是否仍适用于当前现场。恢复顺序是：<strong>现场核对 → 修正状态 → 失效过期证据 → 构建 Context → 继续 Loop</strong>。模型必须最后启动，因为前几步任何一步失败都意味着现场不可信或不允许继续。</p>
+<p>恢复不必一律从头开始。没有受变化影响的步骤，其有效证据可以保留；只重新验证变化涉及的部分。</p>
+<p class="sidenote">「内存里已经登记」不等于「已经落盘」。课程在轮次 / 收尾边界保存 Checkpoint；待批动作与存档之间仍可能存在崩溃窗口。恢复时用 journal、调用闭合记录与现场摘要把这种窗口判成 unknown，正是为了补上「存档还没写到」的事实缺口，而不是假设每次状态变化都已同步持久化。</p>
+<p class="sidenote">退出码方向不要记反：进程退出码 <code>0</code> 表示成功，非 <code>0</code> 表示失败；被信号终止时 <code>exitCode</code> 可能是 <code>null</code>，要结合 <code>signal</code>、<code>cancelled</code>、<code>timedOut</code> 判断。0012 的 A8 就曾在这里出过错。</p>
+<div class="why-box"><strong>为什么三种语义不能合并成一个「停止」：</strong>Pause 要保留可恢复的 running 状态；Cancel 要进入终态并记录真实副作用；Resume 要在启动模型前核对现场。把它们都叫「暂停」，要么会把已取消的任务重新跑起来，要么会把可恢复的任务当成终态丢掉。代价是状态机和入口分支更多；收益是每种停止都有明确的所有权和后续动作。</div>
+
+<h3 id="sec8">8. 接进 pi：三个容易接错的位置</h3>
+<p>先沿一次 <code>run_test</code> 读工程：<strong>main / cli → agent-runner → pi Loop → pi-tools → Runtime → State / Evidence → Completion Check</strong>。</p>
+<p>读 Harness 的重点不是「有没有 Hook」，而是<strong>规则有没有覆盖实际调用路径</strong>。三个容易接错的位置：</p>
+<ol>
+  <li><strong>首轮与后续轮次不同。</strong>首轮 Context 由应用准备；后续 Context 才由 <code>prepareNextTurn</code> 更新；完成判断必须读取最新业务状态。</li>
+  <li><strong>不是所有调用都会经过 <code>afterToolCall</code>。</strong>工具不存在、参数校验失败、<code>beforeToolCall</code> 拒绝，都可能提前结束。拒绝记录不能只放在 <code>afterToolCall</code>；否则这些调用会漏记。</li>
+  <li><strong>模型输出 <code>approved: true</code> ≠ 获得授权。</strong>真正批准必须来自宿主审批流程；批准后仍要重新核对条件，并走同一个执行器。</li>
+</ol>
+<pre><code>// src/agent-runner.ts:467
+// pi 参数校验失败、未知工具、beforeToolCall 拦截都跳过 afterToolCall。
+// 从真实结束事件补齐记录，不伪造执行，也不把阻塞步骤激活。
+if (pending &amp;&amp; !observedToolResults.delete(event.toolCallId)) {
+  ...
+  guard.observeToolResult({
+    ...pending, args, result: event.result, isError: event.isError, context,
+  });
+}</code></pre>
+<p>Completion Contract 拒绝完成以后，不能只返回「任务未完成」。要明确：哪组测试没执行、哪条证据已经过期、最新结果为什么失败、哪个动作正在等待批准。Runtime 的结构化错误不能在 Tool Adapter 中被压缩成模糊错误。<strong>状态记录事实，Context 告诉模型下一步缺什么。</strong></p>
+<p>模型可以根据失败调整动作，但不能修改规则：Patch 失败可以重新读取；权限不足不能换工具绕过；测试失败可以修代码，不能删除验收条件。</p>
+
+<figure class="diagram" id="fig5">
+<svg viewBox="0 0 760 380" role="img" aria-label="afterToolCall 覆盖不到的拒绝路径">
+  <defs>
+    <marker id="m5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
+    <marker id="m5w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#c62828"/></marker>
+  </defs>
+  <text class="dg-title" x="20" y="24">afterToolCall 覆盖不到的拒绝路径</text>
+
+  <rect class="dg-node" x="280" y="45" width="200" height="40" rx="6"/>
+  <text class="dg-label" x="380" y="70" text-anchor="middle">模型提出 Tool Call</text>
+  <line class="dg-arrow" x1="380" y1="85" x2="380" y2="100" marker-end="url(#m5)"/>
+
+  <rect class="dg-node" x="280" y="105" width="200" height="40" rx="6"/>
+  <text class="dg-label" x="380" y="130" text-anchor="middle">工具存在？</text>
+  <line class="dg-arrow-warn" x1="480" y1="125" x2="525" y2="125" marker-end="url(#m5w)"/>
+  <text class="dg-faint" x="495" y="118">否</text>
+  <rect class="dg-node-warn" x="530" y="105" width="200" height="45" rx="6"/>
+  <text class="dg-label" x="630" y="124" text-anchor="middle">未知工具：直接生成结果</text>
+  <text class="dg-soft" x="630" y="142" text-anchor="middle">跳过 afterToolCall</text>
+
+  <line class="dg-arrow" x1="380" y1="145" x2="380" y2="170" marker-end="url(#m5)"/>
+  <text class="dg-faint" x="390" y="163">是</text>
+  <rect class="dg-node" x="280" y="175" width="200" height="40" rx="6"/>
+  <text class="dg-label" x="380" y="200" text-anchor="middle">参数校验通过？</text>
+  <line class="dg-arrow-warn" x1="480" y1="195" x2="525" y2="195" marker-end="url(#m5w)"/>
+  <text class="dg-faint" x="495" y="188">否</text>
+  <rect class="dg-node-warn" x="530" y="175" width="200" height="45" rx="6"/>
+  <text class="dg-label" x="630" y="194" text-anchor="middle">参数错误：直接返回</text>
+  <text class="dg-soft" x="630" y="212" text-anchor="middle">跳过 afterToolCall</text>
+
+  <line class="dg-arrow" x1="380" y1="215" x2="380" y2="240" marker-end="url(#m5)"/>
+  <text class="dg-faint" x="390" y="233">是</text>
+  <rect class="dg-node" x="280" y="245" width="200" height="40" rx="6"/>
+  <text class="dg-label" x="380" y="270" text-anchor="middle">beforeToolCall 放行？</text>
+  <line class="dg-arrow-warn" x1="480" y1="265" x2="525" y2="265" marker-end="url(#m5w)"/>
+  <text class="dg-faint" x="495" y="258">否</text>
+  <rect class="dg-node-warn" x="530" y="245" width="200" height="45" rx="6"/>
+  <text class="dg-label" x="630" y="264" text-anchor="middle">前置拒绝：handler 未执行</text>
+  <text class="dg-soft" x="630" y="282" text-anchor="middle">跳过 afterToolCall</text>
+
+  <line class="dg-arrow" x1="380" y1="285" x2="380" y2="310" marker-end="url(#m5)"/>
+  <text class="dg-faint" x="390" y="303">是</text>
+  <rect class="dg-node-ok" x="250" y="315" width="260" height="45" rx="6"/>
+  <text class="dg-label" x="380" y="334" text-anchor="middle">handler 执行 → afterToolCall</text>
+  <text class="dg-soft" x="380" y="352" text-anchor="middle">只有这一条路径会进入钩子</text>
+
+  <rect class="dg-zone" x="20" y="110" width="220" height="150" rx="8"/>
+  <text class="dg-label" x="130" y="135" text-anchor="middle">拒绝记录写在哪里？</text>
+  <text class="dg-soft" x="130" y="160" text-anchor="middle">不能只写 afterToolCall</text>
+  <text class="dg-soft" x="130" y="183" text-anchor="middle">要从真实事件流补齐</text>
+  <text class="dg-soft" x="130" y="206" text-anchor="middle">模型与审计都要看到</text>
+  <text class="dg-faint" x="130" y="235" text-anchor="middle">tool_execution_end</text>
+  <path class="dg-arrow-warn" d="M240 185 L270 185" marker-end="url(#m5w)"/>
+  <text class="dg-faint" x="20" y="372">同一份拒绝事实，也要进入模型 Context 与审计 / 状态。</text>
+</svg>
+<figcaption>图 5 · <code>afterToolCall</code> 只覆盖「真正走到 handler」的调用。未知工具、参数错误、前置拒绝都在它之前结束；拒绝记录必须从真实事件流补齐。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么用事件流补齐而不是再加一个 Hook：</strong>在 <code>afterToolCall</code> 里加分支最省事，但它天然覆盖不到「还没走到 handler」的拒绝路径。代价是要观察真实事件流、处理去重和顺序；收益是未知工具、参数错误、前置拒绝、真实执行四类结果都能进入同一份记录。课程在 <code>agent-runner.ts</code> 里用 <code>observedToolResults</code> 去重，再从 <code>tool_execution_end</code> 补齐，正是为了不伪造执行、也不漏记拒绝。</div>
+
+<h3 id="sec9">9. 手写 Harness：commerce-agents 解剖</h3>
+<p><a href="https://github.com/anthropics/commerce-agents" target="_blank" rel="noopener"><code>commerce-agents</code></a> 是 Anthropic 开源的电商 Agent，用 Python 和 Claude Messages API 手写模型与工具之间的循环。课程只看最典型的 <code>runtime-messages-api</code> 路径：应用自己组织 Loop 与 Harness，业务规则仍放在独立的 <code>core</code>。</p>
+<p>工程可以理解为三部分：<strong>业务核心</strong>（<code>gates.py</code> 门禁、<code>executor.py</code> 执行器、<code>changes.py</code> 变更账本、<code>backend.py</code> 后端协议）由三条运行路径共用；<strong>模型循环</strong>每条路径一份（Messages API / Agent SDK / Managed MCP）；<strong>循环与执行器之间只有一个连接点</strong>：把「工具名 + 参数字典」交给 <code>BaseToolExecutor.execute()</code>，拿回一个 <code>ToolOutcome</code>。</p>
+<p>业务要求是：<strong>把这件商品的价格下调 10%，执行前先给我确认。</strong> 基本流程：查询 → 暂存 → 展示 → 审批 → 执行 → 返回结果。</p>
+
+<p><strong>同一结果给模型和宿主。</strong> <code>ToolOutcome</code> 有四个字段：</p>
+<table>
+  <tr><th>字段</th><th>给谁</th><th>含义</th></tr>
+  <tr><td><code>result_text</code></td><td>模型</td><td>继续判断所需的文本</td></tr>
+  <tr><td><code>events</code></td><td>宿主</td><td>界面和业务事件</td></tr>
+  <tr><td><code>is_error</code></td><td>双方</td><td>工具执行失败</td></tr>
+  <tr><td><code>blocked</code></td><td>宿主</td><td>被哪道业务门禁拦下</td></tr>
+</table>
+<pre><code>@dataclass
+class ToolOutcome:
+    result_text: str
+    events: list[AgentEvent] = field(default_factory=list)
+    is_error: bool = False
+    blocked: str | None = None</code></pre>
+<p><code>tool_result_block</code> 只读 <code>result_text</code> 和 <code>is_error</code>；界面事件全部来自 <code>outcome.events</code>。两个函数接收同一个 <code>outcome</code>，因此不可能出现一边说成功、一边说失败。模型一次查询两个商品，一个成功、一个失败时，只合成「一个成功，一个失败」不够；必须用原 <code>tool_use_id</code> 逐个配对，模型才能判断重试谁。</p>
+<p>手写 Loop 的顺序：准备身份、状态、Context 和 Tools → 请求模型 → 获取 <code>tool_use</code> → 交给 Executor → 使用原 <code>tool_use_id</code> 构造 <code>tool_result</code> → 进入下一轮。收尾时还要处理尚未配对的 <code>tool_use</code>：<code>settled</code> 里有真实结果就按真实结果回答；确实被打断且没有结果，才写「需要重试」。</p>
+<p><strong>轮次上限怎么收尾。</strong> <code>range(max_tool_iterations + 1)</code> 多出的那一轮，<code>force_text</code> 为真、<code>tool_choice</code> 是 <code>none</code>，模型只能给出自然语言回答，随后 <code>break</code>。到达上限时 <code>stop_reason</code> 是模型这次返回的 <code>end_turn</code>，不是「超限」；宿主如果只看这个字段，会以为任务正常收尾。所以循环结束以后，还得由宿主判断业务究竟走到哪一步。</p>
+
+<p><strong>调价先暂存，批准由宿主提供。</strong> 执行 <code>apply_change</code> 前依次检查三道门禁：</p>
+<ol>
+  <li><strong>Provenance</strong>：这个 <code>change_id</code> 是否真实存在于本会话的来源记录？</li>
+  <li><strong>Guardrail</strong>：当前业务规则是否允许？护栏读取的是 <code>state.seen_changes</code> 中的暂存内容，不是本次调用传进来的描述。</li>
+  <li><strong>Approval</strong>：开启 <code>require_host_approval</code> 时，宿主是否真实记录了批准？</li>
+</ol>
+<p>顺序有实际意义：未知 ID 没有可信内容可供检查；护栏读取已经暂存的方案，模型不能在本次调用中换一段描述就改变被检查的内容；批准是宿主对一个「存在且合规」的变更作决定，所以放在最后。</p>
+<pre><code>known = state.seen_changes.get(change_id)
+if known is None:
+    return ToolOutcome.held(PROVENANCE_GATE, ...)
+if violations := check_guardrails(known.kind, known.items, config):
+    return ToolOutcome.held(GUARDRAIL_GATE, ...)
+if config.require_host_approval and change_id not in state.approved_change_ids:
+    return ToolOutcome.held(APPROVAL_GATE, ...)
+return None</code></pre>
+<p><strong>宿主批准后，不必再让模型决定是否执行。</strong> 点击预览卡就是宿主的批准或驳回：先在 <code>state.approved_change_ids</code> 标记，再通过同一个 <code>executor.execute("apply_change", ...)</code> 执行，最后无论成败都撤销标记。标记不能留在状态里被后面某一轮对话消费。如果批准按钮绕过门禁直接访问后端，模型路径上的规则就没有覆盖全部写入入口。</p>
+<p><strong>防止重复写入 ≠ 恢复第一次执行结果。</strong> 第一次 Apply 成功但响应丢失，第二次请求被拒绝为「已经应用」，可以避免重复写入，却不能把第一次的完整结果交还给调用方；调用方仍然需要查询真实业务状态。这与代码补丁已经写入、回执尚未保存完全对应：<strong>结果不明 → 先查副作用 → 再决定下一步。</strong></p>
+<p>还要区分 <strong>Loop Complete</strong>（本轮模型运行结束）与 <strong>Business Complete</strong>（业务状态证明任务真正完成）。商品调价可能处于 Staged、已批准但 Apply 失败、Apply 结果不明、明确 Applied、因轮次上限结束但任务未完成；这些状态必须从业务记录读取，而不是从模型最后一句话推断。</p>
+
+<figure class="diagram" id="fig6">
+<svg viewBox="0 0 760 470" role="img" aria-label="commerce-agents 的业务核心、ToolOutcome 与三道门禁">
+  <defs>
+    <marker id="m6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
+  </defs>
+  <text class="dg-title" x="20" y="24">手写 Harness：三条循环，一份业务核心，一个 ToolOutcome</text>
+
+  <rect class="dg-node" x="30" y="45" width="200" height="42" rx="6"/>
+  <text class="dg-label" x="130" y="63" text-anchor="middle">Messages API</text>
+  <text class="dg-soft" x="130" y="80" text-anchor="middle">orchestrator.py</text>
+  <rect class="dg-node" x="280" y="45" width="200" height="42" rx="6"/>
+  <text class="dg-label" x="380" y="63" text-anchor="middle">Agent SDK</text>
+  <text class="dg-soft" x="380" y="80" text-anchor="middle">runtime-agent-sdk</text>
+  <rect class="dg-node" x="530" y="45" width="200" height="42" rx="6"/>
+  <text class="dg-label" x="630" y="63" text-anchor="middle">Managed MCP</text>
+  <text class="dg-soft" x="630" y="80" text-anchor="middle">merchant-mcp-server</text>
+
+  <path class="dg-arrow" d="M130 87 L130 132 L226 132" marker-end="url(#m6)"/>
+  <line class="dg-arrow" x1="380" y1="87" x2="380" y2="106" marker-end="url(#m6)"/>
+  <path class="dg-arrow" d="M630 87 L630 132 L534 132" marker-end="url(#m6)"/>
+
+  <rect class="dg-node-accent" x="230" y="110" width="300" height="45" rx="6"/>
+  <text class="dg-label" x="380" y="130" text-anchor="middle">BaseToolExecutor.execute(name, args)</text>
+  <text class="dg-soft" x="380" y="147" text-anchor="middle">循环与执行器之间唯一的连接点</text>
+
+  <rect class="dg-zone" x="30" y="180" width="480" height="130" rx="8"/>
+  <text class="dg-label" x="45" y="202">业务核心（三条路径共用）</text>
+  <rect class="dg-node" x="45" y="215" width="105" height="40" rx="5"/>
+  <text class="dg-soft" x="97" y="240" text-anchor="middle">gates.py</text>
+  <rect class="dg-node" x="160" y="215" width="105" height="40" rx="5"/>
+  <text class="dg-soft" x="212" y="240" text-anchor="middle">executor.py</text>
+  <rect class="dg-node" x="275" y="215" width="105" height="40" rx="5"/>
+  <text class="dg-soft" x="327" y="240" text-anchor="middle">changes.py</text>
+  <rect class="dg-node" x="390" y="215" width="105" height="40" rx="5"/>
+  <text class="dg-soft" x="442" y="240" text-anchor="middle">backend.py</text>
+  <line class="dg-arrow" x1="150" y1="235" x2="160" y2="235" marker-end="url(#m6)"/>
+  <line class="dg-arrow" x1="265" y1="235" x2="275" y2="235" marker-end="url(#m6)"/>
+  <line class="dg-arrow" x1="380" y1="235" x2="390" y2="235" marker-end="url(#m6)"/>
+  <text class="dg-soft" x="45" y="285">检查 → 执行 → 记账 → 写入，规则只有一份</text>
+
+  <rect class="dg-node" x="540" y="180" width="190" height="130" rx="8"/>
+  <text class="dg-label" x="635" y="202" text-anchor="middle">ToolOutcome</text>
+  <text class="dg-soft" x="635" y="225" text-anchor="middle">result_text → 模型</text>
+  <text class="dg-soft" x="635" y="247" text-anchor="middle">events → 宿主</text>
+  <text class="dg-soft" x="635" y="269" text-anchor="middle">is_error → 双方</text>
+  <text class="dg-soft" x="635" y="291" text-anchor="middle">blocked → 宿主</text>
+  <line class="dg-arrow" x1="510" y1="245" x2="536" y2="245" marker-end="url(#m6)"/>
+
+  <text class="dg-title" x="30" y="345">apply_change 前的三道门禁</text>
+  <rect class="dg-node" x="30" y="360" width="150" height="48" rx="6"/>
+  <text class="dg-label" x="105" y="381" text-anchor="middle">① Provenance</text>
+  <text class="dg-soft" x="105" y="399" text-anchor="middle">ID 是否真实存在</text>
+  <line class="dg-arrow" x1="180" y1="384" x2="200" y2="384" marker-end="url(#m6)"/>
+
+  <rect class="dg-node" x="205" y="360" width="150" height="48" rx="6"/>
+  <text class="dg-label" x="280" y="381" text-anchor="middle">② Guardrail</text>
+  <text class="dg-soft" x="280" y="399" text-anchor="middle">暂存内容是否合规</text>
+  <line class="dg-arrow" x1="355" y1="384" x2="375" y2="384" marker-end="url(#m6)"/>
+
+  <rect class="dg-node" x="380" y="360" width="150" height="48" rx="6"/>
+  <text class="dg-label" x="455" y="381" text-anchor="middle">③ Approval</text>
+  <text class="dg-soft" x="455" y="399" text-anchor="middle">宿主是否记录批准</text>
+  <line class="dg-arrow" x1="530" y1="384" x2="550" y2="384" marker-end="url(#m6)"/>
+
+  <rect class="dg-node-ok" x="555" y="360" width="175" height="48" rx="6"/>
+  <text class="dg-label" x="642" y="381" text-anchor="middle">④ Apply</text>
+  <text class="dg-soft" x="642" y="399" text-anchor="middle">后端真正写入</text>
+
+  <text class="dg-faint" x="30" y="440">前一道不通过，就不进入下一道；模型不能靠参数制造可信对象。</text>
+  <text class="dg-faint" x="30" y="460">宿主批准后仍走同一个执行器；防重复写入不等于恢复丢失结果。</text>
+</svg>
+<figcaption>图 6 · 三条运行路径共用业务核心；循环只把工具名和参数交给执行器，拿回一个同时服务模型与宿主的 <code>ToolOutcome</code>。门禁顺序由信任依赖决定，不是随便排列。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么业务规则要放在 core、循环可以替换：</strong>pi 版本由框架负责通用 Loop；Messages API 版本由应用自己处理 Tool Use、Tool Result 和下一轮请求。如果业务门禁、执行器和变更账本跟着循环重写，三条运行路径就会有三套规则，迟早分叉。把业务核心抽出来，代价是循环与执行器之间要定义清楚一个连接点；收益是模型循环可以替换，业务规则仍然只有一份。课程反复强调：真正不变的是「依据从哪里来 → 动作在哪里检查 → 实际执行了什么 → 结果怎样记录 → 为什么允许继续」。</div>
+
+<h3 id="sec10">10. 作业迁移：你的 Guarded Harness 怎样挂进 smolagents</h3>
+<p>你的作业要求很具体：<strong>不改 <code>src/smolagents/</code> 一行，只用新增文件给 <code>ToolCallingAgent</code> 加可恢复的 Guarded Coding Harness。</strong>这比「从零写 Loop」更接近真实工程：框架已经有自己的校验、记忆和异常路径，设计的第一问不是「我的类怎么写」，而是<strong>我能挂在哪里、每个切点之前框架已经做了什么</strong>。</p>
+
+<figure class="diagram" id="fig-smolagents">
+<svg viewBox="0 0 820 430" role="img" aria-label="smolagents 的三个真实切点与宿主最终结算">
+  <defs>
+    <marker id="msg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
+    <marker id="msgw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#c62828"/></marker>
+  </defs>
+  <text class="dg-title" x="20" y="24">不改核心：三个真实切点 + 一次宿主最终结算</text>
+
+  <rect class="dg-node" x="25" y="60" width="180" height="58" rx="7"/>
+  <text class="dg-label" x="115" y="84" text-anchor="middle">ToolCallingAgent</text>
+  <text class="dg-soft" x="115" y="103" text-anchor="middle">模型决策 · 框架记忆</text>
+
+  <rect class="dg-node" x="255" y="60" width="190" height="58" rx="7"/>
+  <text class="dg-label" x="350" y="84" text-anchor="middle">框架 schema 校验</text>
+  <text class="dg-soft" x="350" y="103" text-anchor="middle">execute_tool_call 前置</text>
+  <line class="dg-arrow" x1="205" y1="89" x2="250" y2="89" marker-end="url(#msg)"/>
+
+  <rect class="dg-node-warn" x="275" y="150" width="245" height="60" rx="7"/>
+  <text class="dg-label" x="397" y="174" text-anchor="middle">G1：校验失败在这里结束</text>
+  <text class="dg-soft" x="397" y="194" text-anchor="middle">自定义 Gate / Journal 看不到调用</text>
+  <line class="dg-arrow-warn" x1="350" y1="118" x2="370" y2="146" marker-end="url(#msgw)"/>
+
+  <rect class="dg-node-accent" x="500" y="50" width="285" height="78" rx="7"/>
+  <text class="dg-label" x="642" y="74" text-anchor="middle">① Tool.forward → Harness.invoke</text>
+  <text class="dg-soft" x="642" y="94" text-anchor="middle">Gate → Sandbox → Journal → Tool</text>
+  <text class="dg-faint" x="642" y="113" text-anchor="middle">只覆盖通过框架校验的结构化调用</text>
+  <line class="dg-arrow" x1="445" y1="89" x2="495" y2="89" marker-end="url(#msg)"/>
+
+  <rect class="dg-node-accent" x="35" y="250" width="250" height="70" rx="7"/>
+  <text class="dg-label" x="160" y="274" text-anchor="middle">② final_answer_checks</text>
+  <text class="dg-soft" x="160" y="294" text-anchor="middle">缺项 → AgentError → memory</text>
+  <text class="dg-faint" x="160" y="312" text-anchor="middle">拒绝本次答案，下一轮仍继续</text>
+
+  <rect class="dg-node" x="330" y="250" width="190" height="70" rx="7"/>
+  <text class="dg-label" x="425" y="274" text-anchor="middle">③ step_callbacks</text>
+  <text class="dg-soft" x="425" y="294" text-anchor="middle">只同步 step_id</text>
+  <text class="dg-faint" x="425" y="312" text-anchor="middle">不等于自动逐步存档</text>
+
+  <rect class="dg-node-ok" x="565" y="250" width="220" height="70" rx="7"/>
+  <text class="dg-label" x="675" y="274" text-anchor="middle">agent.run 返回后</text>
+  <text class="dg-soft" x="675" y="294" text-anchor="middle">Harness.finish → RunOutcome</text>
+  <text class="dg-faint" x="675" y="312" text-anchor="middle">宿主依据证据与预算结算</text>
+
+  <path class="dg-arrow" d="M115 118 L115 246" marker-end="url(#msg)"/>
+  <path class="dg-arrow" d="M90 118 L90 230 L425 230 L425 246" marker-end="url(#msg)"/>
+
+  <rect class="dg-zone" x="35" y="350" width="750" height="52" rx="7"/>
+  <text class="dg-label" x="410" y="373" text-anchor="middle">恢复边界：Harness.restore 恢复业务状态，不恢复完整 ReAct 会话</text>
+  <text class="dg-soft" x="410" y="393" text-anchor="middle">Checkpoint 当前主要是 task + workspace；模型历史与配置需要另行持久化</text>
+</svg>
+<figcaption>图 7 · 作业最有价值的不是「用了哪些 Hook」，而是说清 Hook 的先后顺序与证明边界。G1 没有自定义审计，是前置校验路径决定的；step callback 也不会自动带来逐步 Checkpoint。</figcaption>
+</figure>
+
+<p><strong>完成验收是「两道闸」，不是一次函数调用。</strong>第一道在模型给出 final answer 时：<code>Harness.final_answer_check</code> 重新读取当前证据和现场，缺项就抛 <code>AgentError</code>；smolagents 把错误写入当前 step 的 memory，再进入下一轮（<code>harness.py:322–353</code>）。第二道在 <code>agent.run</code> 返回以后：宿主调用 <code>Harness.finish</code>，按审批拒绝、预算、未闭合动作和完成证据推导 <code>RunOutcome</code>（<code>harness.py:270–320</code>）。<strong>前一道负责「别让模型停错」，后一道负责「程序到底怎样收尾」。</strong></p>
+
+<p><strong>审批复用同一执行器，但不是复用同一个调用。</strong>你的实现里，第一次 <code>Invocation</code> 因缺少批准停在 <code>WAITING_APPROVAL</code>；宿主调用 <code>Harness.approve</code> 后，重试是<strong>新的 <code>tool_call_id</code></strong>，由同一个 <code>approval_id</code> 把「请求 → 宿主批准 → 重试 → 执行」串起来。第二次进入 Gate 时仍核对参数摘要与目标文件摘要，再消费一次性批准：</p>
+<pre>Invocation #1 → PendingApproval(args_digest + target_digest)
+             → 宿主 approve（不是模型工具）
+Invocation #2 → 同一 approval_id → 重核现场并消费批准
+             → journal intent → tool.execute → journal result</pre>
+<p>这里同时守住三件事：模型不能伪造宿主批准；旧批准不能用于已经变化的目标文件；审计仍能还原跨两次调用的完整决定链。自动批准也是宿主显式开启的机器路径，记录 <code>actor=system</code>，不是绕开门禁。</p>
+
+<p><strong>摘要是同一原则，不是同一个字段包打天下。</strong>作业说明里「同一套指纹让旧证据与旧审批失效」需要按代码拆准：</p>
+<table>
+  <tr><th>机制</th><th>实际保护什么</th><th>不能过度声称什么</th></tr>
+  <tr><td><code>repo_digest</code>（选定的源码 + 测试文件）</td><td>C4 工作区漂移、H2 测试证据是否对应当前输入</td><td>只覆盖 <code>digest_files</code> 清单，不自动覆盖配置或任意文件</td></tr>
+  <tr><td><code>Gate.workspace_digest</code>（目标文件）</td><td>审批后目标内容是否仍与批准时一致</td><td>不是联合 <code>repo_digest</code>；<code>run_test</code> 无目标路径时摘要为空</td></tr>
+  <tr><td><code>content_hash</code> / 写入前后哈希</td><td>Diff 是否对应当前源码、交付文件是否与写入证据一致</td><td>不能单独证明测试通过或任务完成</td></tr>
+</table>
+<p>恢复时工作区漂移检查还先于未闭合 journal 检查。因此「写入已发生但结果未保存」若改变了摘要覆盖的文件，可能先报 <code>WORKSPACE_DRIFT</code>，不一定报 <code>UNKNOWN_RESULT</code>。<strong>结果码取决于检查顺序，不取决于你希望演示哪一种事故。</strong></p>
+
+<p><strong>T2 暴露的两个问题，恰好说明为什么要找第一个断开的连接：</strong></p>
+<ol>
+  <li><strong>空计划让契约永远拒绝。</strong>模型第 4 步已经修好且测试通过，契约却要求一份模型根本无法通过工具创建的计划。修复不是换模型或改 Prompt，而是宿主定义计划、由证据推进状态（<code>e2e_real.py:89–123</code>）。还要记住：<code>sync_plan</code> 只是进度视图，最终仍由读取当前证据的完成契约兜底。</li>
+  <li><strong>供应商拒绝 <code>tool_choice="required"</code>。</strong>这是框架默认请求参数与 DeepSeek thinking 模式的兼容问题，不是 Harness 门禁问题。用 <code>Model.kwargs</code> 覆盖为 <code>auto</code>，无需修改 smolagents 核心。</li>
+</ol>
+
+<div class="why-box"><strong>为什么作业复盘必须保留「尚未证明」的部分：</strong>当前 Checkpoint 主要保存 <code>task + workspace</code>，恢复的是 Harness 业务状态，不是完整 smolagents 会话；<code>step_callbacks</code> 只同步步号，存档由宿主显式调用；崩溃用例在 <code>journal.begin</code> 后直接 <code>os._exit</code>，证明的是 write-ahead 能识别未闭合动作，并没有执行一次真实写 handler 后再崩溃。承认这些边界不会让作业变差，反而能防止把「设计文档写了」误当成「代码已经证明」。这也是面试里最可信的回答方式：已实现什么、用什么测试证明、还剩什么不能声称。</div>
+
+<h3 id="sec11">11. 验收：看决定，也看实际后果</h3>
+<p>验收有两个对象：<strong>Agent Harness</strong> 与 <strong>目标登录应用</strong>。前者检查 Planning、Approval、Completion、Cancel、Resume；后者检查会话过期是否真正失效、原有登录行为是否正常。两条核心区别：</p>
+<blockquote>Harness 测试通过 ≠ 登录缺陷修复成功。<br>登录测试通过 ≠ Harness 的取消与恢复正确。</blockquote>
+<p><strong>第一层：用固定输入验证确定的程序规则。</strong> 脚本化实验用 faux 模型产生固定动作，检查暂停时是否留下可读取 Checkpoint、恢复后是否保留计划 / 执行记录 / 进度、已完成修改是否重复执行、最终状态是否与完成检查一致。它证明的是固定输入下机制符合预期，<strong>不能证明真实模型能够自主定位并修复缺陷</strong>。</p>
+<p><strong>第二层：用真实模型完成登录任务。</strong> 复用真实 Gateway 和模型配置运行任务；运行结束后不只看模型回复，还要核对实际 Diff、三组测试记录、交付文件、测试之后有没有新的相关修改。没有执行的检查记为未执行；环境问题导致测试无法启动，记为尚未验证。<strong>真实运行结果来自执行记录，不来自模型对执行过程的描述。</strong></p>
+<p><strong>主动制造反例，不等待模型偶然犯错。</strong> 一次成功不能证明控制规则可靠。课程给出的五个反例：</p>
+<table>
+  <tr><th>反例</th><th>要同时检查的结果</th></tr>
+  <tr><td>测试通过后再修改相关文件</td><td>任务不能直接完成，旧证据失效</td></tr>
+  <tr><td>同一范围先通过后失败</td><td>最新失败不能被旧成功掩盖</td></tr>
+  <tr><td>待批期间修改目标文件</td><td>旧批准不能直接执行旧补丁</td></tr>
+  <tr><td>运行中取消测试</td><td>相关进程真实退出，进度和结果被保存</td></tr>
+  <tr><td>模型输出「已完成」</td><td>缺少证据时不能绕过完成契约</td></tr>
+</table>
+<p>在你的 smolagents 作业上，还要补一组「切点是否真的生效」的验收：</p>
+<ul>
+  <li><strong>拒绝 final answer 后还有下一次真实工具调用</strong>，并且拒绝原因进入 memory；只断言 <code>AgentError</code> 被抛出，不能证明 Loop 没停。</li>
+  <li><strong>正常跨进程恢复后</strong>，轮数、步号、Checkpoint 序号和重复动作计数保留，文件没有被重写；只证明「能 new 一个 Harness」不够。</li>
+  <li><strong>摘要覆盖文件漂移与无关缓存文件变化要分开</strong>：前者拒绝恢复，后者不应制造假漂移。</li>
+  <li><strong>G1 两条路径分别验收</strong>：直接 <code>Harness.invoke</code> 有自定义审计，真实 agent 路径没有；两者都必须证明 handler 没执行。</li>
+  <li><strong>崩溃测试说清崩溃点</strong>：<code>intent</code> 后立即退出，只证明未闭合动作检测；若要声称「真实写入后恢复」，必须把崩溃点放到真实写 handler 之后，并预期检查顺序可能先报工作区漂移。</li>
+</ul>
+<p>只检查日志里有没有「拒绝」或「取消」不够，还要检查真实后果：文件有没有被修改？子进程有没有退出？任务有没有错误进入 <code>completed</code>？<strong>控制规则验收 = 检查程序决定 + 检查实际后果。</strong></p>
+<p><strong>失败后，找到第一个断开的连接。</strong> 沿链路定位：Runtime → Tool Adapter → Message / Context → State → Completion Contract。模型没看到失败，查 Runtime 结果 → Tool Adapter → 消息回写；状态已记录失败但任务仍完成，查 Evidence → Completion Contract。不要第一反应修改 Prompt。修复后重跑原失败场景，再检查相邻行为，保存配置、结果、失败原因和未验证项。</p>
+<div class="why-box"><strong>为什么一次成功不能证明控制规则可靠：</strong>成功路径可能只是模型碰巧没有触发边界；取消、恢复、审批、证据失效这些规则只在失败或中断时才生效。代价是要主动构造反例、跑更多场景；收益是你能拿出「程序决定 + 实际后果」的证据，而不是一句「我测过了」。这也是面试里区分「用过 Agent」和「做过 Agent 工程」的地方。</div>
+
+<h3 id="sec12">12. 面试视角：把连接讲成一条链</h3>
+<p><strong>主问题：「模型说完成了，你凭什么交付？」</strong> 不要按模块背，按一条链回答：</p>
+<ol>
+  <li><strong>完成判定</strong>：Completion Contract 读当前 Diff、当前有效测试证据和交付产物，不读模型最后一句。</li>
+  <li><strong>证据有效性</strong>：证据绑定内容指纹，每个验证范围取最新结果，测试前后摘要一致；旧证据在代码变化后失效。</li>
+  <li><strong>双消费者</strong>：同一执行结果同时进入模型 Context 和 State / Evidence，模型能修、程序能判。</li>
+  <li><strong>异常语义</strong>：Cancel 传到真实进程；Resume 先核对现场；写操作结果不明不重放。</li>
+  <li><strong>授权</strong>：宿主批准才有效，批准后仍走同一个执行器；门禁顺序 provenance → guardrail → approval。</li>
+  <li><strong>验收</strong>：控制规则看程序决定 + 实际后果，主动构造反例，不靠一次成功。</li>
+</ol>
+<p>常见追问与回答锚点：</p>
+<ul>
+  <li>「测试通过了不就行了吗？」——测试只证明行为；还要当前 Diff、三组最新有效结果、交付产物，且测试后改代码旧证据失效。</li>
+  <li>「模型说 <code>approved: true</code> 呢？」——模型参数不是授权；批准必须来自宿主审批入口，并在执行前重新核对文件状态与补丁内容。</li>
+  <li>「重复 apply 被拒，不就恢复了吗？」——防重复写入不等于恢复第一次丢失的结果；还要查业务状态，区分 staged / applied / unknown。</li>
+  <li>「为什么不用更强的 Prompt？」——Prompt 不能让程序看到真实进程、文件和证据；完成判定必须由程序依据当前事实作出。</li>
+  <li>「pi 和手写 Harness 有什么区别？」——Loop 谁来写不同；不变的连接是依据来源、检查位置、执行事实、记录方式和继续条件。</li>
+  <li>「你的作业为什么不改 smolagents 核心？」——核心已有 Loop、schema 校验和 memory；新增 Harness 只挂真实切点。代价是要接受框架前置路径的边界，收益是升级与维护时不用长期维护一个框架分叉。</li>
+  <li>「G1 没有自定义审计，是不是审计丢了？」——它在 <code>Tool.forward</code> 之前被框架 schema 校验拒绝，handler 没执行；当前作业选择明确记录这个限制。若需求是全量拒绝留痕，就必须接更早的调用路径，不能声称 Tool.forward 已覆盖所有提议。</li>
+  <li>「模型修好了却一直被拒，是模型不行吗？」——先查契约是否要求模型根本无法产生的事实。空计划问题就是宿主契约与工具能力不匹配，应该修宿主编排，而不是先改 Prompt。</li>
+  <li>「你的恢复能接着完整对话吗？」——当前恢复的是 Harness 业务状态与工作区事实，不是完整 ReAct 会话。把这句话说清楚，比笼统声称「支持恢复」更工程化。</li>
+</ul>
+<p><strong>2 分钟复述骨架：</strong></p>
+<pre>Agent = Model + Harness
+Harness 把 Loop / Context / Runtime / State / Governance / Sandbox 接起来
+一次结果 → 模型 Context + State/Evidence
+完成 = 当前 Diff + 最新有效证据 + 交付产物（不是模型说完成）
+异常 = 先判断动作有没有发生；结果不明先查现场；Cancel 到进程；Resume 先核对
+手写 Harness = ToolOutcome 双消费者 + tool_use_id 配对 + 三道门禁 + 暂存/应用分离
+smolagents 作业 = Tool.forward 执行治理 + final_answer_checks 拒绝续跑 + finish 独立结算
+恢复 = intent/result 判未闭合 + 现场摘要 + 业务状态；不冒充完整会话恢复
+验收 = 程序决定 + 实际后果 + 明确尚未证明的边界</pre>
+
+<hr>
+
+<h2 id="part2">第二部分：检索式测验（18 题 = 14 选择 + 4 简述）</h2>
+<p>Q1–Q3 换形式重测 0013 的三条核心不变量（0013 分数未报，按核心不变量兜底）；Q4–Q14 以本课的<strong>代码审查与事故场景</strong>为主，不只考定义；Q15–Q18 是简述题，最后一题直接复盘你的作业。简述题先脱稿写，再展开参考答案，按得分点严格自评；漏掉关键点就选「部分对」。</p>
+<div id="quiz"></div>
+
+<hr>
+
+<h2 id="part3">第三部分：第二层练习——跑起来，再主动改造</h2>
+<p>实验①②在 <code>harness_agent</code> 内运行，<strong>不需要模型 API key</strong>；实验③④是主动改造，先写预期再跑，完成后恢复源码；实验⑤迁移到你的 smolagents 作业，使用 <code>ScriptedModel</code>、直接 Harness 调用、真实子进程与既有交付记录；实验⑥是 commerce-agents 源码阅读，不需要安装 Python 依赖。除实验⑤外，命令均从本课程仓库根目录开始。</p>
+
+<h3>实验 ①：基线——测试与构建先全绿</h3>
+<ul>
+  <li>检查 Node 版本并安装依赖（首次需要联网；已有 <code>node_modules</code> 可跳过安装）：<pre>cd course_code/week03/3-5/harness_agent
+node --version   # 需要 &gt;= 22.19.0
+npm install      # 若 npm ci 报 lockfile 不同步，用 install 补齐当前平台依赖
+npm test
+npm run build</pre></li>
+  <li class="sidenote" style="list-style:none">如果 npm 报缓存目录权限错误，可临时指定可写缓存：<code>npm install --cache /tmp/npm-cache</code>。这是本机 npm 缓存问题，不是课程代码问题。</li>
+  <li><strong>先写预期</strong>：现有测试里，哪些在验证「完成证据」？哪些在验证「取消 / 恢复」？<code>npm run build</code> 会不会报类型错误？</li>
+  <li>预期：<code>npm test</code> 全部通过；<code>npm run build</code> 没有输出错误。若失败，先记录失败测试名和真实错误，不要先改代码。</li>
+</ul>
+
+<h3>实验 ②：脚本化暂停与恢复——同一条命令跑两段</h3>
+<ul>
+  <li>先跑一键闭环（faux 模型，固定动作）：<pre>npm run lab:harness</pre>预期末尾出现「结论：闭环成立」，七条断言全部 ✓；其中应看到第 1 段 <code>exit=0</code>、任务状态 <code>running</code>、停止原因 <code>INTERRUPTED</code>，第 2 段任务状态 <code>completed</code>，修复只执行一次。</li>
+  <li>再手动跑两段，观察暂停现场：<pre>WS=$(mktemp -d)
+node --import tsx scripts/child-run.ts \
+  --scenario ac_full --workspace "$WS" \
+  --run-id run-pause --pause-after 6 --auto-approve
+
+node -e 'const fs=require("node:fs");const c=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));console.log(JSON.stringify({status:c.payload.task.status,stopCode:c.payload.task.stopCode,turn:c.payload.task.counters.turn,diffs:c.payload.evidence.filter(e=>e.kind==="diff").length},null,2))' "$WS/.agent-runs/run-pause.json"</pre></li>
+  <li><strong>先写预期</strong>：暂停存档里的任务状态是什么？停止原因是什么？补丁证据有几条？恢复后轮数会从几开始？任务输入会不会再出现一次？</li>
+  <li>恢复：<pre>node --import tsx scripts/child-run.ts \
+  --scenario ac_full --workspace "$WS" \
+  --resume run-pause --auto-approve</pre>恢复后再次读取同一份存档，预期任务状态 <code>completed</code>、轮数大于暂停时、补丁证据仍然只有 1 条、会话历史保留暂停前的内容。</li>
+  <li>把脚本打印的「工作区」保存下来，再用上面的 <code>node -e</code> 命令读最终存档：重点看 <code>stopCode</code> 与补丁证据数量，而不是模型最后一句「全链路完成」。</li>
+</ul>
+
+<h3>实验 ③：主动改造——把「最新结果」改回「最早通过」</h3>
+<ul>
+  <li>先跑目标测试，确认基线绿：<pre>npx vitest run tests/harness-evidence.test.ts</pre></li>
+  <li>打开 <code>src/completion-contract.ts</code>，找到约 112 行：<pre>const latest = evidence.findLast(</pre><strong>先写预期</strong>：如果把 <code>findLast</code> 改成 <code>find</code>，哪条测试会变红？为什么？</li>
+  <li>把这一处临时改成：<pre>const latest = evidence.find(</pre>再跑：<pre>npx vitest run tests/harness-evidence.test.ts</pre>预期「同内容同范围后一次失败覆盖旧通过，重新通过才能完成」变红；依赖「最新一次尝试」的取消 / 未知 / 测试期间被改几条也会一起红。<code>find</code> 取到更早的 boundary 通过记录，完成契约看不到最新失败。</li>
+  <li>恢复 <code>findLast</code>，再跑一次确认全绿；用 <code>git diff -- src/completion-contract.ts</code> 确认只剩你预期的改动。</li>
+</ul>
+
+<h3>实验 ④：主动改造——让取消停不到真实进程</h3>
+<ul>
+  <li>先跑进程组测试：<pre>npx vitest run tests/test-process.test.ts</pre></li>
+  <li>打开 <code>src/test-process.ts</code>，找到约 33 行：<pre>detached: grouped,</pre><strong>先写预期</strong>：改成 <code>detached: false</code> 后，取消还能杀掉 TERM-resistant 的后代进程吗？测试会红在断言还是超时？</li>
+  <li>临时改成：<pre>detached: false,</pre>再跑：<pre>npx vitest run tests/test-process.test.ts</pre>预期「waits for a TERM-resistant descendant to be killed and reaped before cancellation settles」变红或超时：子进程不再拥有独立进程组，<code>process.kill(-pid)</code> 杀不到整棵进程树。</li>
+  <li>恢复 <code>detached: grouped</code>，再跑一次确认全绿。</li>
+</ul>
+
+<h3>实验 ⑤：迁移到自己的作业——跑确定性测试，读四份互证</h3>
+<p>这组命令在作业仓库执行。<strong>默认只跑测试、读取现有交付记录，不重新生成或覆盖 <code>runs/</code> 里的交付物。</strong>从本课程仓库根目录开始：</p>
+<ul>
+  <li>激活作业环境并跑全部 6 个测试文件：<pre>cd ../smolagents
+conda activate agentloop
+pytest -q tests/test_gate.py tests/test_sandbox.py \
+          tests/test_state_checkpoint.py tests/test_audit.py \
+          tests/test_harness_loop.py tests/test_completion.py</pre>按交付记录应为 <strong>76 passed</strong>。如果本机依赖或收集结果不同，先记录真实失败，不要为了凑数字修改验收。</li>
+  <li>再单独跑三条最能代表 Harness 的测试：<pre>pytest -q tests/test_harness_loop.py -k rejected_final_answer
+pytest -q tests/test_completion.py -k latest_attempt_wins
+pytest -q tests/test_state_checkpoint.py -k "c2 or c3 or c4"</pre><strong>先写预期</strong>：① <code>final_answer</code> 被拒后循环为什么还能继续？② 同范围先过后败，为什么不能退回旧通过？③ 崩溃、正常恢复、工作区漂移分别应该返回什么？</li>
+  <li>读恢复与真实模型记录，不只看 StopReason：<pre>sed -n '1,220p' runs/demo/resume.md
+cat runs/t2/audit-summary.json</pre>逐项核对：Diff ↔ 当前工作区、产物文件 ↔ 写入证据、最近一次测试 ↔ 当前 <code>verification_digest</code>、<code>intent</code> ↔ <code>result</code>。四份证据缺少任何一项，都不能只凭 <code>COMPLETED</code> 判定交付可信。</li>
+  <li>最后做一次边界复述：G1 在 agent 路径上为什么没有自定义门禁审计？如果需求改成「所有被拒绝调用都必须留痕」，还能否只保留 <code>Tool.forward → Harness.invoke</code> 这一个入口？答案应指向<strong>更早的真实调用路径或明确的能力边界</strong>，而不是一句「框架有 bug」。</li>
+</ul>
+
+<h3>实验 ⑥：阅读验收——commerce-agents 的三个连接点</h3>
+<ul>
+  <li>不安装依赖，只读源码。先看同一个 <code>ToolOutcome</code> 怎样变成两份视图：<pre>cd course_code/week03/3-5/commerce-agents
+grep -n "class ToolOutcome" -A 10 commerce-common/commerce_common/streaming.py
+grep -n "def tool_result_block" -A 10 commerce-common/commerce_common/turn.py
+grep -n "def outcome_events" -A 18 commerce-common/commerce_common/turn.py</pre></li>
+  <li>再看三道门禁的顺序：<pre>grep -n "def check_apply_change" -A 45 merchant-agent/core/merchant_agent/gates.py</pre></li>
+  <li>最后看宿主批准怎样走同一个执行器：<pre>grep -n "async def change_action" -A 25 examples/demo_common/merchant.py</pre></li>
+  <li><strong>先写答案再看解释</strong>：① 为什么 <code>tool_result_block</code> 只读 <code>result_text</code> 与 <code>is_error</code>，界面事件却来自 <code>events</code>？② 为什么 provenance 必须排在 guardrail 前面？③ 如果批准按钮绕过 <code>executor.execute</code> 直接写后端，哪条规则会失效？</li>
+  <li>参考：① 两个消费者共享同一次执行事实，避免一边成功一边失败；② 未知 ID 没有可信内容可供护栏检查，且护栏要读已暂存方案而不是本次参数；③ 模型路径上的 provenance / guardrail / approval 不再覆盖全部写入入口，批准可能被用于未检查的内容。</li>
+</ul>
+
+<h2>回读与验证指引</h2>
+<ul>
+  <li>primary source：<a href="../course_code/week03/3-5/3.5%20PPT%20.md"><code>course_code/week03/3-5/3.5 PPT .md</code></a>——重点回读第一节「模型提出动作，程序让动作发生」、第二节「跑通登录修复」、第三节「遇到异常时让继续执行有依据」、第四节「完善 pi 工程」、第六节「手动实现全套 Harness」与「本节小结」。</li>
+  <li>学生笔记：<a href="../course_code/week03/第三章-学习笔记.md"><code>course_code/week03/第三章-学习笔记.md</code></a> 3.5 节（行 2042–2580）——重点回读「Harness 是什么」「同一结果有两类去向」「完成检查读取当前内容的最新结果」「取消和恢复遵守状态语义」「ToolOutcome」「先暂存，再由宿主批准」「三层验收」。</li>
+  <li>代码回读顺序：<a href="../course_code/week03/3-5/harness_agent/src/agent-runner.ts"><code>agent-runner.ts</code></a>（Hook 接线与事件补齐）→ <a href="../course_code/week03/3-5/harness_agent/src/runtime.ts"><code>runtime.ts</code></a>（runTest 的前后摘要与结果码）→ <a href="../course_code/week03/3-5/harness_agent/src/completion-contract.ts"><code>completion-contract.ts</code></a>（findLast 与原因链）→ <a href="../course_code/week03/3-5/harness_agent/src/resume.ts"><code>resume.ts</code></a>（恢复前核对现场）→ <a href="../course_code/week03/3-5/harness_agent/src/test-process.ts"><code>test-process.ts</code></a>（进程组与取消）→ <a href="../course_code/week03/3-5/harness_agent/tests/harness-evidence.test.ts"><code>tests/harness-evidence.test.ts</code></a>（五类反例）。</li>
+  <li>commerce-agents 回读顺序：<a href="../course_code/week03/3-5/commerce-agents/commerce-common/commerce_common/streaming.py"><code>streaming.py</code></a>（ToolOutcome）→ <a href="../course_code/week03/3-5/commerce-agents/commerce-common/commerce_common/turn.py"><code>turn.py</code></a>（tool_result_block / outcome_events / close_open_tool_uses）→ <a href="../course_code/week03/3-5/commerce-agents/merchant-agent/core/merchant_agent/gates.py"><code>gates.py</code></a>（三道门禁）→ <a href="../course_code/week03/3-5/commerce-agents/merchant-agent/core/merchant_agent/changes.py"><code>changes.py</code></a>（ChangeLedger）→ <a href="../course_code/week03/3-5/commerce-agents/examples/demo_common/merchant.py"><code>examples/demo_common/merchant.py</code></a>（宿主批准走同一执行器）。</li>
+  <li>作业迁移回读顺序：<a href="../../smolagents/homework.md"><code>homework.md</code></a>（验收与已知限制）→ <a href="../../smolagents/homework-docs/方案/00-总览.md"><code>homework-docs/方案/00-总览.md</code></a> → <code>guarded_harness/contracts.py</code>（事实对象）→ <code>harness.py</code>（唯一编排者）→ <code>journal.py</code>（write-ahead）→ <code>resume.py</code>（恢复六步）→ <code>completion.py</code>（完成与 RunOutcome）→ <code>tests/test_harness_loop.py</code>、<code>test_completion.py</code>、<code>test_state_checkpoint.py</code>（反例证据）。</li>
+  <li>笔记附录「源码与工程阅读路线」：本课对应第 4 步「结果怎样回到模型和状态」、第 5 步「完成、暂停、取消和恢复怎样判断」、第 6 步「用失败场景验证连接是否真的生效」；<code>project3/v2/src/runtime.ts</code> 与 <code>context-budget.ts</code> 会在项目三继续展开这些连接。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<ul>
+  <li><a href="../course_code/week03/3-5/3.5%20PPT%20.md"><code>course_code/week03/3-5/3.5 PPT .md</code></a>（教师 PPT 的 md 版，本课第一材料）</li>
+  <li><a href="../course_code/week03/第三章-学习笔记.md"><code>course_code/week03/第三章-学习笔记.md</code></a> 3.5 节（学生版学习笔记，术语以此为准）</li>
+  <li><a href="../course_code/week03/README.md"><code>course_code/week03/README.md</code></a> 的 3-5 目录说明（harness_agent 与 commerce-agents 的职责）</li>
+  <li><a href="https://github.com/anthropics/commerce-agents" target="_blank" rel="noopener"><code>anthropics/commerce-agents</code></a>（Anthropic 开源手写 Harness，本课第六节对照阅读）</li>
+</ul>
+<p><strong>迁移案例（你的真实实现，不替代课程原始材料）</strong>：<a href="../../smolagents/homework.md"><code>smolagents/homework.md</code></a>、<a href="../../smolagents/homework-docs/方案/00-总览.md"><code>homework-docs/方案/</code></a> 与 <a href="https://github.com/chyu-wissfi/smolagents" target="_blank" rel="noopener"><code>chyu-wissfi/smolagents · guarded_harness/</code></a>。它用来验证同一套不变量怎样落到另一个框架，并保留真实缺陷与边界，不作为「课程标准答案」。</p>
+
+<div class="ask-reminder">
+  <strong>卡住了就问你的 agent。</strong>任何一处让你觉得「等等，为什么」——例如为什么版本号不够还要内容指纹、为什么测试证据取最新而不是取最早通过、为什么取消不能顺便回滚、为什么 <code>afterToolCall</code> 覆盖不到拒绝路径、为什么宿主批准后还要走执行器、为什么防重复 apply 不等于恢复结果——直接回到对话里问。本课全部内容都在回答一个问题：<strong>一次任务从开始到交付，哪些事实必须被连接起来，又拿什么证明这些连接真的生效。</strong>
+</div>
+
+<div class="lesson-footer">
+  Week03 主题课序列：<a href="./0010-agent-loop-pi-integration.html">1/7 从 Runtime 到 Agent Loop</a> · <a href="./0011-planning-and-task-decomposition.html">2/7 Planning 与任务拆解</a> · <a href="./0012-state-machine-checkpoint-recovery.html">3/7 State Machine 与 Checkpoint</a> · <a href="./0013-sandbox-execution-boundaries.html">4/7 Sandbox 与执行边界</a> · <strong>5/7 Agent Harness</strong>（本课，3-5）· 6/7 LangGraph 与 Agent 编排（3-6）· 7/7 项目三：Codebase Agent v2（3-7，结课课）<br>
+  前课回顾：0013 的 Sandbox 限制影响范围；本课把 Runtime、State、Governance、Sandbox 接成完整 Harness。下一课 0015 用 LangGraph 把分支、并行、人工中断和循环显式化。<br>
+  结课条件：① 前 3 题重测全对，本课部分（第 4 题起）正确率 85% 以上；② 完成实验①②⑤，并至少完成实验③或④中的一项（预期先写后验）；③ 不看稿 2 分钟讲清：Agent = Model + Harness、一个结果两个消费者、完成契约读当前最新事实、Cancel / Resume 语义，以及你的 smolagents 作业怎样通过真实切点完成治理、哪些边界尚未证明。三者都过，再向你的 agent 要主题课 6/7（LangGraph，3-6）。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  questions: [
+    {
+      type: 'choice',
+      concept: '【重测·0013】路径 resolve 后校验',
+      section: '0013 间隔重测',
+      notesRef: '0013 测后反馈 + 笔记 3.4 二 2.2',
+      question: '<code>artifacts/../../.env</code> 能通过 <code>startsWith("artifacts/")</code>，根因是什么？',
+      options: [
+        '文件系统拒绝读取隐藏文件，导致路径判断失真',
+        '路径解析后变成相对路径，绕过了目录边界',
+        '前缀比较只看字符串开头，没有校验解析后的落点',
+        '符号链接自动展开，使合法目录指向了外部文件'
+      ],
+      answer: 2,
+      explanation: 'resolve 会消解 .. 得到绝对路径；artifacts/../../.env 解析后已经离开 artifact 根。startsWith 只比较字符串开头，不代表最终落点合法。符号链接是另一个问题，需要 realpath 或禁止软链。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·0013】denyWrite 优先级',
+      section: '0013 间隔重测',
+      notesRef: '0013 测后反馈 + 笔记 3.4 二 2.1',
+      question: '同一路径同时出现在 <code>allowWrite</code> 与 <code>denyWrite</code> 中，pi-sandbox 的行为是什么？',
+      options: [
+        'denyWrite 硬阻断，写入被拒绝且不提示',
+        'allowWrite 优先，明确允许会覆盖拒绝',
+        '两条规则相互抵消，系统把写入转入人工审批流程',
+        '按配置顺序决定，以配置中最后出现的规则为准'
+      ],
+      answer: 0,
+      explanation: '写侧 denyWrite 是硬阻断，优先于 allowWrite，不提示、不放行。不要与读侧混淆：读侧明确的 allowRead 可以覆盖 denyRead。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·0013】拦截证据是 handler=0',
+      section: '0013 间隔重测',
+      notesRef: '0013 测后反馈 + 笔记 3.4 七 7.1',
+      question: '要证明危险调用被拦在副作用之前，最关键的证据是什么？',
+      options: [
+        '返回了语义明确的拒绝码并且写入了审计日志',
+        '模型收到拒绝后没有再次尝试同一危险动作',
+        '审计日志里同时记录了放行与拒绝两类决定',
+        'handler 次数为零，拒绝发生在执行入口'
+      ],
+      answer: 3,
+      explanation: '错误码可以事后打印，但副作用不会因此被撤销。只有拒绝发生在 beforeToolCall、真实 handler 调用次数为 0，再配合 deny 审计，才能证明防线拦在副作用之前。'
+    },
+    {
+      type: 'choice',
+      concept: 'Harness 的定义',
+      section: '3-5 一',
+      notesRef: 'PPT 一 1.1 + 笔记 3.5 一',
+      question: '课程对 Harness 的定义，最准确的是哪一项？',
+      options: [
+        '在模型外新增的一层封装，用来统一所有工具的调用',
+        '围绕模型组织工具、状态、上下文与执行环境的支撑程序',
+        '负责模型推理与生成、并把结果交给工具执行的运行时',
+        '替代 Loop 的编排框架，管理多个 Agent'
+      ],
+      answer: 1,
+      explanation: 'Harness 不是第七个模块，而是把 Loop、Context、Tool Runtime、State/Checkpoint、Governance、Sandbox 连接成完整执行系统的支撑程序。Agent = Model + Harness。'
+    },
+    {
+      type: 'choice',
+      concept: '一个结果两个消费者',
+      section: '3-5 一',
+      notesRef: 'PPT 一 1.3 + runtime.ts:455–464',
+      question: '某 runner 只把工具的失败文本回写模型，不生成 Evidence。模型随后修完代码并说「已完成」。这条连接最先缺掉什么？',
+      options: [
+        '模型缺少失败文本，程序已经自动保存完整证据',
+        '程序缺少真实结果，模型已经无法看到失败文本',
+        '模型缺少停止原因，程序已经自动阻止任务交付',
+        '程序缺少执行证据，模型仍有失败文本可修正'
+      ],
+      answer: 3,
+      explanation: '模型仍能看到失败文本，所以它能修正；缺的是程序侧可核对的 Evidence，完成契约、计划和审计都没有事实依据。这正是「只给模型、不更新状态」的断链。'
+    },
+    {
+      type: 'choice',
+      concept: '交付物要按当前现场复核',
+      section: '3-5 二 / 四',
+      notesRef: 'completion-contract.ts:38–50 + harness-evidence.test.ts:167',
+      question: '三组测试对当前代码都通过，目标 Diff 也在，但 <code>login-fix.md</code> 写入后又被删除。完成检查应怎样判断？',
+      options: [
+        '允许交付，历史写入记录已经证明文件曾经存在',
+        '只重跑测试，交付物是否存在由模型最后说明',
+        '拒绝交付，交付产物要按当前文件现场重新核对',
+        '允许交付，当前测试通过可以替代交付产物存在'
+      ],
+      answer: 2,
+      explanation: '写入记录只证明当时写过。完成时 artifactMissing 还要读取当前文件，检查存在、非空、内容哈希与最后写入一致；删除或改写都不能凭旧记录交付。'
+    },
+    {
+      type: 'choice',
+      concept: '版本号与内容指纹',
+      section: '3-5 四',
+      notesRef: '笔记 3.5 四 4.1 + runtime.ts:405–453',
+      question: 'Runtime revision 从 r1 没有变化，但目标文件被外部编辑了。旧测试证据为何失效？',
+      options: [
+        '版本号只跟踪受控入口的写入，内容指纹才能反映真实文件',
+        '外部编辑会重置测试进程，旧退出码因此不能再被读取',
+        '版本号在每次读取文件时都会变化，旧证据自动过期',
+        '测试证据只与测试文件有关，与目标源码的内容无关'
+      ],
+      answer: 0,
+      explanation: 'revision 只能跟踪经过受控入口的修改；同一次运行中外部编辑不一定推进版本号。验证记录要绑定实际受测内容的摘要（verificationDigest），完成时与当前现场比较。'
+    },
+    {
+      type: 'choice',
+      concept: '每个范围取最新结果',
+      section: '3-5 四',
+      notesRef: 'PPT 四 4.2 + completion-contract.ts:110',
+      question: '同一内容、同一 <code>boundary</code> 范围先通过后失败，完成检查应采用哪条记录？',
+      options: [
+        '采用最早一次通过，因为历史成功已经证明能力存在',
+        '采用最新一次失败，要求重新运行并通过后才能完成',
+        '两条都保留，只要存在任意一条通过记录即可完成',
+        '直接删除失败记录，避免它影响后续的完成判断'
+      ],
+      answer: 1,
+      explanation: '完成检查按验证范围取最后一次尝试。最新一次失败不能被更早的成功掩盖；只有重新运行并通过，才能重新作为当前证据。'
+    },
+    {
+      type: 'choice',
+      concept: 'Cancel 的语义',
+      section: '3-5 三',
+      notesRef: 'PPT 三 3.3 + 笔记 3.5 三 3.3',
+      question: '用户取消任务后，哪种处理符合课程对 Cancel 的定义？',
+      options: [
+        '立即标为 failed，并撤销已经产生的全部写入',
+        '停止信号传到真实进程，并记录已经发生过的写入',
+        '只停止界面输出，后台测试进程仍然可以继续运行',
+        '把任务标为 paused，等待用户下次恢复后继续'
+      ],
+      answer: 1,
+      explanation: '取消要沿任务入口 → 模型/Runtime → 执行器 → 实际进程传播，并确认模型请求停止、测试进程退出、写入是否发生。取消不会自动撤销副作用，因此要记录实际发生了什么。'
+    },
+    {
+      type: 'choice',
+      concept: '旧批准不能执行新现场',
+      section: '3-5 三 / 四',
+      notesRef: '笔记复习问题 18 + lifecycle.test.ts:51',
+      question: '补丁 P 在文件哈希 H1 上获得批准；等待期间文件变成 H2，恢复后直接执行 P。这段实现漏掉了哪条约束？',
+      options: [
+        '暂停必须保存会话历史，恢复必须沿用原来的轮数',
+        '工具必须返回失败文本，模型才能重新读取文件',
+        '完成必须核对三组测试，审批只需要记录人工点击',
+        '批准绑定补丁和当时现场，执行前必须重新核对'
+      ],
+      answer: 3,
+      explanation: '批准不是一张永久通行证。等待期间目标文件可能变化，所以执行前要重新核对 patchHash 与当前文件状态；旧批准不能直接用于新现场。'
+    },
+    {
+      type: 'choice',
+      concept: '恢复前核对现场',
+      section: '3-5 三',
+      notesRef: 'PPT 三 3.4 + resume.ts:104',
+      question: '恢复时为什么必须在启动模型之前核对工作区与未决动作？',
+      options: [
+        '现场可能已变化，先启动模型会在检查前发出写操作',
+        '模型启动太慢，提前核对可以缩短整体恢复的时间',
+        '核对工作区会自动重放上次补丁，避免模型重复劳动',
+        '启动模型会清空存档，之后将无法再核对现场'
+      ],
+      answer: 0,
+      explanation: '恢复顺序是现场核对 → 修正状态 → 失效过期证据 → 构建 Context → 继续 Loop，模型最后启动。前几步任何一步失败都意味着现场不可信或不允许继续；先启动模型可能让它基于旧假设发出新的写操作。'
+    },
+    {
+      type: 'choice',
+      concept: '记录点必须覆盖真实路径',
+      section: '3-5 四 + 作业迁移',
+      notesRef: 'agent-runner.ts:467 + 作业说明第九节 G1',
+      question: 'pi 只在 <code>afterToolCall</code> 记录；smolagents 只在 <code>Tool.forward</code> 审计。两种实现共同要警惕什么？',
+      options: [
+        '两个钩子都太慢，真实工具执行必须先于审计',
+        '两个框架都不安全，必须重写各自核心循环代码',
+        '调用可能提前结束，单一记录点覆盖不到全部路径',
+        '模型输出都不可信，所有工具调用必须转人工审批'
+      ],
+      answer: 2,
+      explanation: 'pi 的未知工具、参数错误、前置拒绝会跳过 afterToolCall；smolagents 的 schema 校验失败会在 Tool.forward 之前结束。应先画真实路径再选记录点；作业选择保留框架校验分工并明确 G1 不留痕的限制，而不是为形式统一重写核心。'
+    },
+    {
+      type: 'choice',
+      concept: '调用与结果必须逐一配对',
+      section: '3-5 六',
+      notesRef: 'PPT 六 6.2 + turn.py:530',
+      question: '模型一次发出两个 <code>tool_use</code>，实现却把两个结果拼成一段自然语言放回历史，不再保留 ID。最直接的问题是什么？',
+      options: [
+        '调用与结果失去配对，模型无法判断重试哪一个',
+        '模型无法生成自然语言，下一轮一定请求失败',
+        '宿主无法保存审计，两个工具都会重新执行',
+        '工具结果自动变长，上下文预算一定被耗尽'
+      ],
+      answer: 0,
+      explanation: '两个结果不能合并成模糊自然语言。tool_result 必须用原 tool_use_id 构造，并保留各自的 is_error；否则模型无法把结果映射回原调用，协议层也可能拒绝不完整的 tool_use 配对。'
+    },
+    {
+      type: 'choice',
+      concept: '门禁顺序与被检查对象',
+      section: '3-5 六',
+      notesRef: 'PPT 六 6.3 + gates.py:192',
+      question: '某实现先问人批准，再对模型本次传入的 <code>proposedChange</code> 做护栏检查，全程不查会话里的暂存记录。它同时丢了哪两条约束？',
+      options: [
+        '审批必须自动通过，护栏必须只检查命令名称',
+        '审批必须在执行后，护栏必须只读取模型文本',
+        '暂存必须等于写入，审批必须能够多次消费',
+        '先确认可信来源再批准，护栏读取已暂存内容'
+      ],
+      answer: 3,
+      explanation: '先批准再验证，会让人给一个可能不存在或不合规的对象背书；只检查本次 proposedChange，模型可以换一份看似合规的描述绕过暂存内容。应先 provenance，再对已暂存对象做 guardrail，最后读取宿主 approval。'
+    },
+    {
+      type: 'short',
+      concept: '单个模块正确不等于 Agent 正确',
+      section: '3-5 一',
+      notesRef: 'PPT 一 + 笔记 3.5 一',
+      question: '为什么「单个模块正确」不代表整个 Agent 能正确完成任务？请以一次代码修改任务为例，说明 Harness 必须接通的至少两条事实链。',
+      hint: '从「结果给谁」和「完成凭什么」两条线讲：一条通到模型，一条通到状态与证据。',
+      modelAnswer: '<ol><li><strong>得分点 1 · Harness 的定义：</strong>Agent = Model + Harness；Harness 不是第七个模块，而是把 Loop、Context、Tool Runtime、State/Checkpoint、Governance、Sandbox 连接成完整执行系统。</li><li><strong>得分点 2 · 结果链一：</strong>工具执行结果要回到模型 Context，模型才能看到失败用例、断言差异和下一步依据；只更新状态，模型下一轮不知道为何失败。</li><li><strong>得分点 3 · 结果链二：</strong>同一结果要进入 State/Evidence，程序才能更新计划、完成检查和审计；只回给模型，程序可能仍认为任务完成。</li><li><strong>得分点 4 · 典型断点：</strong>测试没跑要求的范围、测试通过后又改代码、等待审批后执行了旧补丁、恢复后重放已完成的写入——每个模块单独看都对，但连接处的事实不一致。</li><li><strong>得分点 5 · 完成判定：</strong>Completion Contract 读当前 Diff、当前有效测试证据和交付产物，而不是模型最后一句「已完成」。</li></ol><p><strong>加分项：</strong>指出「测试曾经通过」与「当前代码已验证」是两个结论，并给出内容指纹或最新结果任一证据。</p>'
+    },
+    {
+      type: 'short',
+      concept: '曾经通过不等于当前验证',
+      section: '3-5 二 / 四',
+      notesRef: 'PPT 二 2.4 + 四 4.2 + completion-contract.ts',
+      question: '为什么「测试曾经通过」不能证明「当前代码已经验证」？请从版本号、内容指纹、最新结果、交付物四个方面说明。',
+      hint: '先讲 revision 的盲区，再讲摘要与最新结果，最后讲交付物的收尾复核。',
+      modelAnswer: '<ol><li><strong>得分点 1 · 版本号的盲区：</strong>revision 只跟踪经过受控入口的写入；同一次运行中文件被外部编辑，r1 可能不变，但内容已变。</li><li><strong>得分点 2 · 内容指纹：</strong>验证记录要绑定实际受测的源码、测试与配置摘要（verificationDigest），完成时与当前现场比较；不一致就失效。</li><li><strong>得分点 3 · 最新结果：</strong>每个验证范围取最后一次尝试；同一内容、同一范围先通过后失败，最新失败不能被更早的成功掩盖；测试前后摘要不一致（TEST_INPUT_CHANGED）即使 exit=0 也无效。</li><li><strong>得分点 4 · 交付物复核：</strong>写入记录只证明当时写过；收尾还要检查文件存在、非空、内容哈希与最后写入一致。</li><li><strong>得分点 5 · 结论：</strong>完成判断依据当前可核对的事实，不依据历史上曾经出现过一次成功。</li></ol>'
+    },
+    {
+      type: 'short',
+      concept: '取消、暂停与恢复的语义',
+      section: '3-5 三',
+      notesRef: 'PPT 三 3.2–3.4 + resume.ts + test-process.ts',
+      question: '取消、暂停、恢复各要检查到哪一层？为什么写操作结果不明时不能直接重放？',
+      hint: '按「Cancel 到进程 → Pause 与 Cancel 不同 → Resume 先核对 → 结果不明三态」作答。',
+      modelAnswer: '<ol><li><strong>得分点 1 · Cancel 传到真实执行层：</strong>任务入口 → 模型/Runtime → 执行器 → 实际进程；确认模型请求停止、测试进程退出、已经发生的写入被记录。Cancel 不会撤销副作用。</li><li><strong>得分点 2 · Pause 与 Cancel 语义不同：</strong>--pause-after 保存后停止，任务仍是 running，可恢复；SIGINT/ABORTED 进入 cancelled 终态，不能当可恢复暂停。</li><li><strong>得分点 3 · 恢复前核对：</strong>检查工作区是否变化、未决动作执行到哪、旧证据与授权是否仍适用；顺序是现场核对 → 修正状态 → 失效过期证据 → 构建 Context → 继续 Loop，模型最后启动。</li><li><strong>得分点 4 · 结果不明不能重放：</strong>写操作可能已经成功，只是结果未保存；直接重放可能重复写入或扩大副作用。三态处理：确认已执行 → 恢复事实不重复；确认未执行 → 满足条件后重做；部分/不明 → 保留未决，核查或转人工。</li><li><strong>得分点 5 · 证据：</strong>用真实产物证明没有重放，例如修复片段只出现一次、轮数接着数、历史不重发任务输入、旧批准不执行新补丁。</li></ol>'
+    },
+    {
+      type: 'short',
+      concept: '作业迁移：不重写框架核心',
+      section: '3-5 迁移案例',
+      notesRef: 'smolagents/homework.md 第二、五、七、九节 + 方案文档',
+      question: '用你的 Guarded Harness 说明：怎样在不重写 smolagents 核心的前提下，把门禁、审计、恢复与完成验收接成闭环？哪些地方仍必须承认覆盖边界？',
+      hint: '按「执行入口 → final_answer 拒绝后续跑 → write-ahead 与恢复 → 证据/审批各自的 digest → G1 边界与四份互证」作答。',
+      modelAnswer: '<ol><li><strong>得分点 1 · 执行侧切点：</strong>模型仍由 ToolCallingAgent 决策；受治理工具经 Tool.forward → Harness.invoke，依次做 schema、指纹去重、边界、审批与真实执行，并写审计，不把规则塞进提示词。</li><li><strong>得分点 2 · 完成侧切点：</strong>final_answer_checks 调用完成契约；缺项时抛 AgentError，由框架原循环接住、写入 memory、结束本轮并继续。最终还要由宿主 Harness.finish 依据证据给出 RunOutcome，模型文本不决定 StopReason。</li><li><strong>得分点 3 · 审计与恢复：</strong>每次调用先写 intent、执行后写 result；有 intent 无 result 是 UNKNOWN_RESULT，恢复先核查存档、现场、未决动作与审批，不能自动重放写操作。当前恢复的是 Harness 业务状态，不是完整 smolagents 会话历史。</li><li><strong>得分点 4 · 证据与审批分别绑定内容：</strong>repo_digest 同时用于工作区漂移和测试证据失效；审批另用目标文件 digest 复核，不能笼统说「同一 digest 让旧证据与旧批准都失效」。每个范围取最近一次尝试，计划由宿主定义、由证据推进。</li><li><strong>得分点 5 · 边界与验收：</strong>G1 的 schema 错误会被框架在 Tool.forward 前拒绝，所以自定义门禁没有审计；若要求全量留痕必须接更早路径。最终用 Diff↔工作区、产物↔写入证据、测试↔当前 digest、intent↔result 四份证据互证。</li></ol><p><strong>加分项：</strong>说出 T2 的两个真实问题——空计划导致契约永远拒绝、thinking 模式拒绝 tool_choice=required——并说明为什么先修 Harness 连接或模型配置，而不是先改 Prompt。</p>'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>
+
+
+
+
