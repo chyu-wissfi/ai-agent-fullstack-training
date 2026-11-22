@@ -43,7 +43,7 @@
 | 0012 | Week03 3-3 | State Machine 与 Checkpoint | 2026-10-31 生成；前 3 题为间隔重测（2 道 0011 核心不变量 + 1 道 0010 停止原因）；18 题；7 张 SVG 图；实验①–⑤离线可跑；**2026-10-31 测验 83%（15/18）**，3 个薄弱点已讲解（停止原因不可覆盖、恢复五步、Q18 不重放证据），隔 1-2 天重测；已加目录 |
 | 0013 | Week03 3-4 | Sandbox 与执行边界 | 2026-11-01 生成；首课完整套用「本课目录 + 14 选择 + 4 简述」；前 3 题重测 0012 三个薄弱点；6 张 SVG 图；简述题按关键得分点严格自评；实验①②为 pi-sandbox 本地边界与 denyWrite 优先级，③④为 OpenSandbox 闭环与失败清理，均需先写预期再跑改造 |
 | 0014 | Week03 3-5 | Agent Harness：把一次代码修改做完整 | 2026-11-02 生成并按真实作业优化；材料以 `3.5 PPT .md` 为主、笔记 3.5 对照；前 3 题重测 0013 核心不变量；18 题 = 14 选择 + 4 简述（场景/代码审查为主）；8 张 SVG 图；新增 src 模块地图、run_test 双写时序、smolagents Guarded Harness 迁移案例与实验⑤；明确恢复、Checkpoint、G1 与真实崩溃证明边界 |
-| 0015 | Week03 3-6 | LangGraph 与 Agent 编排 | 待生成（2026-10-17 新增）；Python 侧（release_pipeline，demos/01–06 渐进式 + pytest 验收）；未配 DEEPSEEK_API_KEY 自动降级规则实现、无 key 可跑；笔记八「三个实际工程坑」（恢复时审批节点从头执行、旧 checkpoint 污染测试、异步节点阻塞 I/O）是重点考点 |
+| 0015 | Week03 3-6 | LangGraph 与 Agent 编排 | **2026-11-16 生成**；Python 侧（release_pipeline + demos/01–06）；无 DEEPSEEK_API_KEY 自动降级、可离线跑；前 3 题重测 0014 三条核心不变量；7 张 SVG、18 题 = 14 选择 + 4 简述；实验①–⑥含 M/H 跨进程审批、print 证明审批节点重跑、approvals reducer 改覆盖 2 条测试变红；笔记八三个工程坑为重点考点 |
 | 0016 | Week03 3-7 | 项目三：Codebase Agent v2 | 待生成（2026-10-17 新增）；**Week03 结课课**；TS Agent + Python LangGraph 审批服务、十件仓库工具、JSON Schema 契约、SQLite 账本、cli eval；两类任务端到端验收 |
 
 ## 0014 生成记录（2026-11-02）
@@ -62,6 +62,16 @@
 - **以后讲作业不要照抄过强表述**：当前恢复是 Harness 业务状态，不恢复完整 ReAct 会话；逐步 Checkpoint 未自动接线；崩溃用例在 `journal.begin` 后 `os._exit`，未执行真实写 handler；H2/C4 用 `repo_digest`，审批另用目标文件 digest，不能统称为一套摘要同时失效旧证据与旧批准。设计文档与实现不一致时以代码和测试为准。
 - 作业 T2 两个真实问题纳入精讲：空计划导致契约不可满足（宿主定义计划、证据推进）与 DeepSeek thinking 拒绝 `tool_choice=required`（`Model.kwargs` 改 auto），用于训练「先找断链，不先改 Prompt」。
 - 本机验证：`conda run -n agentloop --cwd /Users/chyu-wissfi/Projects/smolagents ...` 六个文件 **76 passed**；定向命令 `rejected_final_answer` 1 过、`latest_attempt_wins` 1 过、`c2 or c3 or c4` 9 过；作业工作树未被测试改动。
+
+## 0015 生成记录（2026-11-16）
+
+- 0014 分数未报，Q1–Q3 按 0014 三条核心不变量（一个结果两个消费者 / 完成检查只认最新事实 / 恢复先核对现场）换形式重测，不当作已消除薄弱点。
+- 精讲主线按笔记 3.6：业务流水线 → 业务概念映射（State/Node/Edge/StateGraph/interrupt/Checkpointer/ToolNode）→ P1 主线 → reducer 三种语义 → P2 条件路由 → P3 ToolNode 并行 → P4 interrupt 与恢复重跑 → P5 修订/灰度双循环与业务预算 → P6 Mermaid/updates/get_state/langgraph dev → 三个实际工程坑 → 何时用 LangGraph → 面试两分钟主链。
+- 7 张 SVG：业务对象映射、完整发布图（分支+并行+审批+双循环+终态）、三种 reducer、ToolNode 四路并行、interrupt 恢复时间线、修订/回滚双循环、编排方式决策树。why 均落到取舍：显式图 vs 装配成本、增量 vs reducer 心智负担、三种字段语义、业务预算 vs recursion_limit、sync 节点线程池 vs async 阻塞事件循环、按职责切分 vs 整系统一张图。
+- 实验设计：① 顶层 7 条验收 + demo 04/05 各 5 条（逐目录跑，避免同名模块冲突）；② `demo L` 与 `demo canary_fail` 看正常/异常收尾；③ M 级 `submit → status → approve` 跨进程，再接三次 SRE，H 级用 `samples/patch.diff`（含 auth 路径，实测判 H）；④ `approval_m` 开头加 `print`，`submit` 与 `approve` 各打印一次证明节点从头重跑；⑤ `approvals` 的 `add` 改覆盖，实测 2 failed / 5 passed；⑥ Mermaid 导出与 `get_state` 快照只读验收。
+- 本机验证（`conda run -n agentloop`，Python 3.12 / LangGraph 1.2.17）：顶层 7 passed；demos 01–06 分别 4/4/4/5/5/5 passed；`demo L` → released、cursor=3、三次 SRE interrupt；`demo canary_fail` → rolled_back、rollback_count=2、cursor=0；M 级 `submit` 停 INT-1，跨进程 `approve` 后停 INT-3-canary_10；`visualize` 产出 `.mmd` 且 PNG ok。
+- 两处材料/实现不一致，已在课中标注并要求以代码为准：① README §2 的 `python -m app submit --ticket ...` 与当前 `app.py` 的位置参数不符（实际是 `submit T-M-002 orders-svc 1.4.2 --diff-file ...`）；② demo 的固定 `ticket_id` 复用旧 `checkpoints.sqlite` 会从旧存档续跑，本机实测第二次得到 `canary_cursor=1` 却仍报 `released`，是工程坑 8.2 的现场版；干净重跑需删库或换 `CHECKPOINT_DB`。
+- 简述题 Q15–Q18 对应四条应能脱稿复述的主链：interrupt 两次执行时间线与副作用后移、三种 reducer 的字段语义、修订/灰度循环与业务预算、三个工程坑的现象/原因/避免。
 
 ## 0006 测后反馈（2026-09-26，81% / 17-21）
 

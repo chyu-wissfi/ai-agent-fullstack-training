@@ -43,6 +43,20 @@
   不重写 `ToolCallingAgent` 核心的迁移案例：真实切点、write-ahead 审计、完成验收与 76 个离线测试。用于 0014 对照课程不变量；恢复范围、G1 覆盖边界与真实崩溃证明范围须按代码阅读，不只照抄设计文档。
 - 课程代码：`course_code/week03/3-5/harness_agent/`（完成契约、证据指纹、取消与恢复）与 `course_code/week03/3-5/commerce-agents/`（业务核心与三条运行路径）。
 
+### Week03 3-6 补充（2026-11-16）
+
+- [第三章 学习笔记.md](./course_code/week03/第三章-学习笔记.md) 3.6 节（行 2583–3107）
+  LangGraph 的第一材料：State/节点/边、P1–P6、interrupt 恢复重跑、业务预算、三个工程坑、何时用 LangGraph。术语与验收以此为准。
+- [release_pipeline README](./course_code/week03/3-6/release_pipeline/README.md)
+  发布审批教学工程的结构、5 个演示场景、demos/01–06 渐进台阶、`langgraph dev` 端点。注意 §2 的手动 CLI 写法与当前 `app.py` 不一致，以代码签名为准。
+- [LangGraph Graph API overview](https://docs.langchain.com/oss/python/langgraph/graph-api)
+  官方文档：State、reducer、条件边、节点增量更新。
+- [LangGraph Interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)
+  官方文档：`interrupt()` / `Command(resume=...)`，并明确恢复时节点从头执行、interrupt 之前的代码会重跑。
+- [LangGraph Checkpointers](https://docs.langchain.com/oss/python/langgraph/checkpointers)
+  官方文档：`thread_id` 与持久化、跨进程恢复；`thread_id` 是存档键，不是权限。
+- 课程代码：`course_code/week03/3-6/release_pipeline/`（顶层完整案例）与 `demos/01_minimal`–`06_visualize`（每层自带 pytest 验收；必须逐目录运行，避免同名模块冲突）。
+
 ## Wisdom (Communities)
 
 - OpenViking 团队同事与导师
