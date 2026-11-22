@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week04 主题课 1/6 · Context Engineering：让模型每一轮拿到足够、适用、可核对的信息</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 04 · 主题课 1 / 6 · 覆盖课程小节 4-1 · 版式：先讲后测，精讲与测验五五开</p>
+<h1>Context Engineering——模型答错之前，先查它实际看到了什么</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：Week04 第一课。第三章让 Agent「能持续推进任务直到完成或停止」；但能继续执行，不代表每一步判断正确。本课回答第四章的核心问题的第一半：<strong>怎样让模型每一轮拿到足够、适用、可核对的信息</strong>——装配、优先级、预算、压缩、污染防护与调试报告。后五课（工作记忆、长期记忆、RAG、Wiki、项目四）都建立在这条输入链上。<br>
+  <strong>材料定位</strong>：<a href="../course_code/week04/第四章 学习笔记.md"><code>第四章 学习笔记.md</code></a> 4.1 节（行 152–665，<strong>本课第一材料</strong>，术语以此为准）+「本章复习问题」Q1–Q10（行 2564–2582，本课测验换形式覆盖）+ <a href="../course_code/week04/README.md"><code>week04/README.md</code></a> 4-1 目录说明 + 教师 PDF <a href="../course_materials/week04/4-1.pdf"><code>4-1.pdf</code></a>（补充）。<br>
+  <strong>代码定位</strong>：<code>course_code/week04/4-1/</code>——七个按课件编号命名的演示脚本（Packing / Prioritization / Budget / Compression / check / Report / Gateway）+ <code>tokenizer.json</code>（本地 Token 计数）。<strong>前六个脚本的核心路径全部离线可跑</strong>（标准库 + tokenizers）；Budget <code>--send</code>、Report 完整链路、Gateway 需要 <code>DEEPSEEK_API_KEY</code>，列为可选加餐。<br>
+  <strong>预计用时</strong>：精讲 50 分钟 + 测验 30 分钟 + 第二层动手练习 60 分钟<br>
+  <strong>本课验收标准</strong>（笔记「本节重点与验收」行 640–663）：能证明——当前限制、当前源码和失败断言进入实际请求；旧版本测试不被当作当前验证；工具调用与结果配对完整；必须项压缩后仍超限时请求没有发出；原始历史、摘要、请求与响应能相互关联；成本统计包含摘要等额外调用并明确未知值。
+</div>
+
+<h2>怎么用这一课</h2>
+<p><strong>先讲后测，五五开</strong>：第一部分按「请求解剖 → 装配 → 优先级 → 预算 → 压缩 → 污染 → 报告 → 缓存网关」建地图，每节回答「为什么这样设计、不这样会出什么事故」；第二部分 18 题 = <strong>14 选择 + 4 简述</strong>。Q1–Q3 换形式重测 0016 的三条核心不变量（0016 分数未报，按核心不变量兜底）；Q4–Q14 进入本课，换形式覆盖笔记「本章复习问题」Q1–Q10（4-1 段），为结课课 0022 的集中复测铺垫。简述题按得分点严格自评，漏掉关键点就选「部分对」。</p>
+<p><strong>三层定位</strong>：第一层能默画三张图——请求解剖（图 2）、预算分层与两道拒绝门（图 4）、四位置定位链（图 7）；第二层跑通六个离线脚本（实验①–④），再主动改造边界运算符与证据有效性（实验⑤⑥）；第三层始终追问「这份材料凭什么进请求」「这个压缩丢了什么」「这个数字证明了什么、没证明什么」。最后一问与你的 benchmark 工作同构：<strong>原稿记录的数字是那次运行的证据，不是普适结论</strong>。</p>
+<p class="sidenote">就业面试视角：面试官问「模型答错了你怎么排查」，最想听到的不是「换更强的模型」，而是一条分流链：请求超窗？当前失败没进请求？旧证据被复用？无关文档挤占？有当前证据仍答错？——先定位信息在哪一步变化，再修对应规则。本课的四位置定位法（原始历史 → 摘要 → 实际请求 → 响应）就是这条链的工程化。</p>
+
+<nav class="toc">
+<strong>本课目录</strong>
+<ul>
+  <li><a href="#sec0">0. 开篇：三个事故与第四章地图</a></li>
+  <li><a href="#sec1">1. Prompt 与 Context：请求解剖</a></li>
+  <li><a href="#sec2">2. Packing：材料的三种去向</a></li>
+  <li><a href="#sec3">3. Prioritization：先有效，再优先</a></li>
+  <li><a href="#sec4">4. Budget：先留输出，再算输入</a></li>
+  <li><a href="#sec5">5. Compression：两类对象两种方法</a></li>
+  <li><a href="#sec6">6. 污染与配对：结构与内容分开查</a></li>
+  <li><a href="#sec7">7. Debug Report：四位置定位法</a></li>
+  <li><a href="#sec8">8. 补读、成本口径、缓存与网关</a></li>
+  <li><a href="#sec9">9. 面试视角：两分钟主链</a></li>
+  <li><a href="#part2">第二部分：检索式测验</a></li>
+  <li><a href="#part3">第三部分：第二层练习</a></li>
+</ul>
+</nav>
+
+<hr>
+
+<h2>第一部分：精讲（先读，测验在后）</h2>
+
+<h3 id="sec0">0. 开篇：三个事故与第四章地图</h3>
+<p>笔记开篇（行 15）给了三个事故现场，全部发生在「Agent 能继续执行」之后：</p>
+<ol>
+  <li>Agent 明明运行了失败测试，下一轮却说「测试已经通过」——<strong>旧证据或摘要失真</strong>。</li>
+  <li>用户最早要求「不得修改现有测试」，十几轮以后这条限制不见了——<strong>装配裁剪丢约束</strong>。</li>
+  <li>几天后重新打开项目，Agent 又要从头搜索会话模块和测试命令——<strong>知识没有跨会话保存</strong>。</li>
+</ol>
+<p>这些问题不一定要靠换模型解决。先检查六件事：模型这一轮实际看到了什么？输入里的测试结果测的是哪一版代码？工具执行了任务记录有没有更新？新任务能不能读到上次留下的知识？关键规则有没有被检索到？原文变化后知识页、索引和缓存有没有一起更新？——正好对应本章六节：</p>
+<figure class="diagram" id="fig1">
+<svg viewBox="0 0 760 330" role="img" aria-label="第四章六节信息链路地图">
+  <defs><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">第四章地图：一条信息链，六节各管一段</text>
+  <text class="dg-soft" x="20" y="46">贯穿案例仍是登录会话修复；第二阶段是退出登录新任务；第三阶段是 30→60 分钟规则更新实验。</text>
+  <rect class="dg-node-accent" x="20" y="66" width="220" height="52" rx="6"/>
+  <text class="dg-label" x="130" y="88" text-anchor="middle">4-2 Working Memory</text>
+  <text class="dg-soft" x="130" y="106" text-anchor="middle">准确的任务记录（上游）</text>
+  <rect class="dg-node-accent" x="270" y="66" width="220" height="52" rx="6"/>
+  <text class="dg-label" x="380" y="88" text-anchor="middle">4-1 Context Engineering</text>
+  <text class="dg-soft" x="380" y="106" text-anchor="middle">本轮输入装配（本课）</text>
+  <rect class="dg-node" x="520" y="66" width="220" height="52" rx="6"/>
+  <text class="dg-label" x="630" y="88" text-anchor="middle">模型本轮判断</text>
+  <text class="dg-soft" x="630" y="106" text-anchor="middle">足够、适用、可核对？</text>
+  <path class="dg-arrow-accent" d="M240 92 L270 92" marker-end="url(#m1)"/>
+  <path class="dg-arrow-accent" d="M490 92 L520 92" marker-end="url(#m1)"/>
+  <rect class="dg-node" x="20" y="150" width="220" height="52" rx="6"/>
+  <text class="dg-label" x="130" y="172" text-anchor="middle">4-3 Memory / OKF</text>
+  <text class="dg-soft" x="130" y="190" text-anchor="middle">跨会话知识：保存→召回→维护</text>
+  <rect class="dg-node" x="270" y="150" width="220" height="52" rx="6"/>
+  <text class="dg-label" x="380" y="172" text-anchor="middle">4-4 RAG</text>
+  <text class="dg-soft" x="380" y="190" text-anchor="middle">资料多了：找证据→查回答</text>
+  <rect class="dg-node" x="520" y="150" width="220" height="52" rx="6"/>
+  <text class="dg-label" x="630" y="172" text-anchor="middle">4-5 LLM Wiki</text>
+  <text class="dg-soft" x="630" y="190" text-anchor="middle">整理结果：来源→更新→权限</text>
+  <path class="dg-arrow" d="M130 150 L130 118" marker-end="url(#m1)"/>
+  <path class="dg-arrow" d="M380 150 L380 118" marker-end="url(#m1)"/>
+  <path class="dg-arrow" d="M630 150 L630 118" marker-end="url(#m1)"/>
+  <rect class="dg-zone" x="20" y="234" width="720" height="56" rx="8"/>
+  <text class="dg-label" x="380" y="258" text-anchor="middle">4-6 项目四：长期记忆 + RAG 接回 project3/v2 的同一治理链</text>
+  <text class="dg-soft" x="380" y="278" text-anchor="middle">真正读取、修改和测试仍走第三章的 Loop、Runtime 与 Sandbox——不另开绕过治理的执行路径</text>
+  <path class="dg-arrow" d="M380 202 L380 234" marker-end="url(#m1)"/>
+</svg>
+<figcaption>图 1 · 第四章六节信息链路（笔记行 41–59）。六节不是六个独立知识点：装配器要选信息，先得有准确的任务记录（4-2）；任务结束后决定哪些值得留下（4-3）；留下的资料多了需要检索（4-4）；反复整理的结论形成 Wiki 并跟着原文变化（4-5）；最后全部接回第三章的 Harness（4-6）。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么「能执行」之后还要专章讲信息？</strong> 因为 Loop 只保证「继续调用模型」，不能把遗漏的业务规则自动补回来（笔记行 162）。模型会写比较运算符，不代表它知道这个项目恰好到期时算不算有效。替代方案是「换更强模型 / 更长窗口」，代价是成本与延迟上升，且容量解决不了适用性——旧版通过记录、已废弃规则照样干扰判断。当前约束下选「管理输入」：让每一轮的判断材料足够、适用、可核对，这是比换模型更便宜也更可验收的路径。
+</div>
+
+<h3 id="sec1">1. Prompt 与 Context：一次请求到底由什么组成</h3>
+<p><strong>Prompt 主要规定怎样做，Context Engineering 管理这一轮实际给模型什么</strong>（笔记行 156）。「到期立即失效，不修改现有测试」是指令；但模型要判断错误在哪里，还需要当前源码、失败断言、任务进度和可用工具。一次模型请求至少包含六个对象：</p>
+<figure class="diagram" id="fig2">
+<svg viewBox="0 0 760 360" role="img" aria-label="一次模型请求的解剖图">
+  <text class="dg-title" x="20" y="24">请求解剖：messages 与 tools 都属于本轮输入</text>
+  <rect class="dg-zone" x="20" y="44" width="480" height="290" rx="8"/>
+  <text class="dg-label" x="260" y="66" text-anchor="middle">request.messages</text>
+  <rect class="dg-node" x="36" y="80" width="448" height="34" rx="6"/>
+  <text class="dg-label" x="260" y="102" text-anchor="middle">system：系统规则（角色、材料处理、执行纪律）</text>
+  <rect class="dg-node" x="36" y="122" width="448" height="34" rx="6"/>
+  <text class="dg-label" x="260" y="144" text-anchor="middle">user：当前目标与约束（修复什么、禁止什么）</text>
+  <rect class="dg-node" x="36" y="164" width="448" height="34" rx="6"/>
+  <text class="dg-label" x="260" y="186" text-anchor="middle">历史消息：选中的此前交互与工具结果（配对）</text>
+  <rect class="dg-node" x="36" y="206" width="448" height="34" rx="6"/>
+  <text class="dg-label" x="260" y="228" text-anchor="middle">当前任务状态：已定位 / 未修改 / 待验证</text>
+  <rect class="dg-node-accent" x="36" y="248" width="448" height="34" rx="6"/>
+  <text class="dg-label" x="260" y="270" text-anchor="middle">源码与证据：当前比较条件、失败输入、预期与实际</text>
+  <rect class="dg-node-muted" x="36" y="290" width="448" height="34" rx="6"/>
+  <text class="dg-label" x="260" y="312" text-anchor="middle">完整日志？→ 外存 + 引用，缺细节时工具补读</text>
+  <rect class="dg-zone" x="520" y="44" width="220" height="130" rx="8"/>
+  <text class="dg-label" x="630" y="66" text-anchor="middle">request.tools</text>
+  <rect class="dg-node" x="536" y="80" width="188" height="34" rx="6"/>
+  <text class="dg-label" x="630" y="102" text-anchor="middle">工具快照：名称+描述</text>
+  <rect class="dg-node" x="536" y="122" width="188" height="34" rx="6"/>
+  <text class="dg-label" x="630" y="144" text-anchor="middle">参数 Schema 也占 Token</text>
+  <rect class="dg-node-warn" x="520" y="196" width="220" height="60" rx="8"/>
+  <text class="dg-label" x="630" y="220" text-anchor="middle">预算检查覆盖完整请求</text>
+  <text class="dg-soft" x="630" y="240" text-anchor="middle">不能只算用户那句话的长度</text>
+  <text class="dg-faint" x="630" y="290" text-anchor="middle">Prompt 是 Context 中的指令部分；</text>
+  <text class="dg-faint" x="630" y="308" text-anchor="middle">Context 管理指令+材料+历史+工具+状态</text>
+</svg>
+<figcaption>图 2 · 一次模型请求的解剖（笔记 4.1 一，行 166–196）。工具定义（名称、描述、参数 Schema）与消息格式开销都计入输入；「程序已存的材料」不等于「模型已看到的材料」。</figcaption>
+</figure>
+<p>上下文窗口解决容量，不能保证判断正确（笔记 4.1 二）。即使没有超限，大量支付文档、旧版测试通过记录和已废弃规则也会干扰登录到期判断。所以<strong>判断错误时先分流</strong>，而不是先换模型：</p>
+<table>
+<tr><th>现象</th><th>优先检查</th></tr>
+<tr><td>请求超出窗口</td><td>输入预算、工具定义、输出预留和计数方法</td></tr>
+<tr><td>当前失败没进入请求</td><td>材料选择与装配</td></tr>
+<tr><td>旧版通过记录被使用</td><td>证据版本与失效规则</td></tr>
+<tr><td>输入充满无关文档</td><td>相关性与优先级</td></tr>
+<tr><td>有当前证据仍答错</td><td>原始请求、响应与生成行为</td></tr>
+</table>
+<div class="why-box">
+<strong>为什么长窗口不能代替信息筛选？</strong> 窗口是容量约束，判断需要的是适用性约束——两者正交。把全部材料塞进去，除了可能超窗、挤占输出空间，还会让过期与无关内容参与判断（污染，第 6 节）。反过来，盲目删减也可能删掉必要的调用方或类型定义。取舍点：目标是「在预算内保留足够支持当前判断的信息」，不是「越多越好」也不是「越少越省」。这一分流表与 0008 的门禁漏斗同构：先定位问题属于哪一层，再修那一层。
+</div>
+
+<h3 id="sec2">2. Packing：装配不是拼接，是安排材料去向</h3>
+<p><strong>装配围绕下一步决策，确定直接提供、外部保存和按需读取的内容</strong>（笔记行 226）。登录边界排查阶段的安排：</p>
+<table>
+<tr><th>去向</th><th>内容</th><th>原因</th></tr>
+<tr><td>本轮直接提供</td><td>到期立即失效、不得修改现有测试</td><td>决定正确行为与修改边界</td></tr>
+<tr><td>本轮直接提供</td><td>当前比较条件、失败输入、预期和实际结果</td><td>决定本次错误怎样复现和修复</td></tr>
+<tr><td>外部保存</td><td>完整测试日志</td><td>保留核对依据，避免每轮复制全部内容</td></tr>
+<tr><td>请求中提供引用</td><td>完整日志路径与执行编号</td><td>缺细节时能够补读</td></tr>
+<tr><td>暂缓读取</td><td>无关模块与早期探索全文</td><td>当前动作不依赖它们</td></tr>
+</table>
+<figure class="diagram" id="fig3">
+<svg viewBox="0 0 760 380" role="img" aria-label="材料去向决策树">
+  <defs><marker id="m3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">每份材料过三问，再定去向</text>
+  <rect class="dg-node-accent" x="280" y="44" width="200" height="40" rx="6"/>
+  <text class="dg-label" x="380" y="69" text-anchor="middle">一份候选材料</text>
+  <rect class="dg-node" x="280" y="110" width="200" height="40" rx="6"/>
+  <text class="dg-label" x="380" y="135" text-anchor="middle">① 现在仍然有效吗？</text>
+  <path class="dg-arrow" d="M380 84 L380 110" marker-end="url(#m3)"/>
+  <rect class="dg-node-warn" x="540" y="110" width="200" height="40" rx="6"/>
+  <text class="dg-label" x="640" y="128" text-anchor="middle">失效 → 排除；必须项先刷新</text>
+  <text class="dg-soft" x="640" y="144" text-anchor="middle">旧版通过记录在这里被拦下</text>
+  <path class="dg-arrow-warn" d="M480 130 L540 130" marker-end="url(#m3)"/>
+  <rect class="dg-node" x="280" y="176" width="200" height="40" rx="6"/>
+  <text class="dg-label" x="380" y="201" text-anchor="middle">② 与当前步骤相关吗？</text>
+  <path class="dg-arrow" d="M380 150 L380 176" marker-end="url(#m3)"/>
+  <rect class="dg-node-muted" x="540" y="176" width="200" height="40" rx="6"/>
+  <text class="dg-label" x="640" y="194" text-anchor="middle">不相关 → 暂缓读取</text>
+  <text class="dg-soft" x="640" y="210" text-anchor="middle">支付文档、早期探索全文</text>
+  <path class="dg-arrow" d="M480 196 L540 196" marker-end="url(#m3)"/>
+  <rect class="dg-node" x="280" y="242" width="200" height="40" rx="6"/>
+  <text class="dg-label" x="380" y="260" text-anchor="middle">③ 缺了它会选错动作吗？</text>
+  <path class="dg-arrow" d="M380 216 L380 242" marker-end="url(#m3)"/>
+  <rect class="dg-node-ok" x="40" y="306" width="220" height="44" rx="6"/>
+  <text class="dg-label" x="150" y="324" text-anchor="middle">必须且放得下 → 直接提供</text>
+  <text class="dg-soft" x="150" y="342" text-anchor="middle">规则、限制、当前源码、失败断言</text>
+  <rect class="dg-node-ok" x="290" y="306" width="220" height="44" rx="6"/>
+  <text class="dg-label" x="400" y="324" text-anchor="middle">必须但太长 → 压缩 + 引用</text>
+  <text class="dg-soft" x="400" y="342" text-anchor="middle">断言与版本进请求，全文外存可补读</text>
+  <rect class="dg-node-muted" x="540" y="306" width="200" height="44" rx="6"/>
+  <text class="dg-label" x="640" y="324" text-anchor="middle">可选 → 按优先级与余量</text>
+  <text class="dg-soft" x="640" y="342" text-anchor="middle">任务状态、背景线索</text>
+  <path class="dg-arrow" d="M330 282 L150 306" marker-end="url(#m3)"/>
+  <path class="dg-arrow" d="M380 282 L400 306" marker-end="url(#m3)"/>
+  <path class="dg-arrow" d="M430 282 L640 306" marker-end="url(#m3)"/>
+</svg>
+<figcaption>图 3 · 材料去向决策树（笔记 4.1 三/四）。三问的顺序就是优先级：先有效性，再相关性，最后必要性。引用必须真实存在且在允许访问范围内——<strong>一个不能读取的引用，承担不了恢复证据的作用</strong>（笔记行 260）。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么「外部保存 + 引用」而不是「全文进请求」或「直接丢掉」？</strong> 全文进请求：每轮复制几千行日志，预算被吃掉且失败断言可能被启动信息淹没；直接丢掉：缺细节时无法核对，压缩就成了不可逆的信息销毁。取舍后的第三条路：完整记录持久化，请求里只放断言、版本和真实路径，模型缺细节时提出 <code>read_file</code>，真实读取仍由 Loop 和 Runtime 完成（权限边界不变）。这与 0016 审计「存截断 + 全量哈希」是同一个取舍：<strong>请求里放判断所需的摘要，核对依据留在可反查的外部记录里</strong>。
+</div>
+
+<h3 id="sec3">3. Prioritization：先判断有效，再分配空间</h3>
+<p>只保留最近 N 条历史有两个明显问题（笔记行 266）：最早的「不得修改测试」可能被删；刚出现的一句旧版「测试通过」也可能挤掉当前失败证据。所以选择材料先问三件事（图 3）：<strong>现在是否仍然有效 → 是否与当前步骤相关 → 缺少它会不会选错动作或判断错进度</strong>。优先级随任务阶段变化：排查阶段规则、当前源码和失败证据优先；补丁完成后当前 Diff、修改结果和新测试状态优先。</p>
+<p>分配空间的顺序由 <code>allocation_order</code> 决定（<a href="../course_code/week04/4-1/4-1-4-Prioritization.py"><code>4-1-4-Prioritization.py</code></a>）：<strong>必须项优先，随后按优先级数值，同级保持原顺序</strong>。它只回答「先给谁空间」，没有完成预算检查，也没有授权任何工具。两个边界必须分清：</p>
+<ul>
+  <li><strong>必须保留的是必要信息，不一定是原文全文</strong>——失败断言和准确引用可以替代几千行日志。</li>
+  <li><strong>空间分配顺序不是历史消息发送顺序</strong>——工具调用仍在结果之前，调用与结果保持配对（第 6 节的协议检查）。</li>
+</ul>
+<p>约束还可以保留理由：「继续使用现有 session 中间件，因为所有客户端共用它」比只有一个禁止句更容易让模型理解影响范围。但记住分工：<strong>上下文帮助模型选择方案，执行权限仍由 Runtime 强制检查</strong>（笔记行 312）——写进请求的约束只是「让模型知道」，不是「强制执行」。</p>
+<div class="why-box">
+<strong>为什么必须项优先，而不是按时间或按优先级数值一刀切？</strong> 按时间裁剪（最近 N 条）会把最早的用户限制裁掉——限制通常只说一次，后续消息不会重复它；按数值一刀切则可能让高分的旧证据挤掉当前失败。必须项优先的代价是低优先级材料可能本轮缺席，收益是「缺了就会判错」的信息永不缺席。这与 0008 门禁「拒绝压过放行」同构：<strong>关键不变量不参与排序竞争</strong>。另注意 must ≠ 全文：必须项也可以给压缩版，只要断言、版本与引用还在。
+</div>
+
+<h3 id="sec4">4. Budget：先留输出，再算完整输入</h3>
+<p>输入预算公式（笔记行 320）：</p>
+<pre>B_input = W_context − R_output − M_safety</pre>
+<p>同时还要满足模型和 Provider 各自的输入、输出限制。<strong>输出预留不能被输入借走</strong>：模型读完输入还要生成回答或工具参数，输入占满窗口，后续动作可能无法正常产生。安全余量覆盖计数误差，但不能代替校准——发送前用估算检查，发送后用服务端 <code>usage</code> 核对，多次运行后再调整计数方式与余量。</p>
+<figure class="diagram" id="fig4">
+<svg viewBox="0 0 760 350" role="img" aria-label="课堂预算分层与两道拒绝门">
+  <text class="dg-title" x="20" y="24">课堂容量 1000 Token 的分层（教学限制，不是真实模型窗口）</text>
+  <rect class="dg-node-ok" x="20" y="44" width="520" height="44" rx="6"/>
+  <text class="dg-label" x="280" y="71" text-anchor="middle">输入预算 722（材料 + 固定开销）</text>
+  <rect class="dg-node-accent" x="540" y="44" width="92" height="44" rx="6"/>
+  <text class="dg-label" x="586" y="64" text-anchor="middle">输出 128</text>
+  <text class="dg-soft" x="586" y="80" text-anchor="middle">不可借走</text>
+  <rect class="dg-node-muted" x="632" y="44" width="108" height="44" rx="6"/>
+  <text class="dg-label" x="686" y="64" text-anchor="middle">余量 150</text>
+  <text class="dg-soft" x="686" y="80" text-anchor="middle">计数误差</text>
+  <rect class="dg-zone" x="20" y="110" width="720" height="100" rx="8"/>
+  <text class="dg-label" x="380" y="132" text-anchor="middle">装配过程（本机实测，4-1-5-Budget.py）</text>
+  <text class="dg-soft" x="40" y="156">全部材料装入估算 17183 → 规则/源码/失败压缩版/状态依次进入 → 装配后 222</text>
+  <text class="dg-soft" x="40" y="178">旧测试（valid=False）被排除；支付文档优先级低且超限被跳过；完整日志 12137 超预算 → 改用断言+引用</text>
+  <text class="dg-faint" x="40" y="198">日志里的「12137 / 722」是加入该材料后的整个输入预计占用，不是该材料单独大小</text>
+  <rect class="dg-node-warn" x="20" y="234" width="350" height="88" rx="8"/>
+  <text class="dg-label" x="195" y="258" text-anchor="middle">拒绝门 1：固定输入已超限</text>
+  <text class="dg-soft" x="195" y="280" text-anchor="middle">预算缩到 1：规则与工具说明都放不下</text>
+  <text class="dg-soft" x="195" y="300" text-anchor="middle">→ ValueError，请求不发出</text>
+  <rect class="dg-node-warn" x="390" y="234" width="350" height="88" rx="8"/>
+  <text class="dg-label" x="565" y="258" text-anchor="middle">拒绝门 2：必须项压缩后仍超限</text>
+  <text class="dg-soft" x="565" y="280" text-anchor="middle">必要证据压缩版仍 6108 &gt; 722</text>
+  <text class="dg-soft" x="565" y="300" text-anchor="middle">→ ValueError，不静默删掉继续调用</text>
+</svg>
+<figcaption>图 4 · 预算分层与两道拒绝门（笔记 4.1 五；数字为本机 2026-11-22 实测）。课堂主动设置容量 1000、输出 128、余量 150，输入预算 722——这是教学限制，不是 deepseek-flash 的实际窗口。</figcaption>
+</figure>
+<p>关键内容放不下时的处理顺序（笔记行 366–374）：① 规则与工具说明重复就精简，只提供本轮需要的工具并保持执行快照一致；② 必要代码或证据太长就缩小读取范围或拆成多步；③ <strong>必须项仍放不下就拒绝发送，不能静默删掉关键限制继续调用</strong>；④ 切换到更小窗口的模型，重新检查并装配。</p>
+<p>还要分清两笔账：<strong>本轮请求是否放得下</strong>（装配入口检查）与<strong>整个 Run 是否还有 Token、费用和时间额度</strong>（Harness 累计管理，0016 的 loop-guard 五道预算就是后者）。计数口径提醒：本机一次真实发送实测输入 131 Token、本地估算 221，差 90——只说明这次计数口径不同，<strong>不能以后固定减去 90，也不能认定本地估算永远偏大</strong>（笔记行 350）。</p>
+<div class="why-box">
+<strong>为什么宁可拒发也不静默删关键项？</strong> 静默删除必须项后继续调用，模型会在信息不足时「自信地」判断——丢约束的修复方案可能改测试、可能延长有效期，且事后无法从请求记录发现信息缺过。拒发的代价是本轮停下来（要拆步或换模型），收益是失败显式、可定位、可恢复。这与 0008 门禁的 fail closed、0016 空审批名单的 NO_APPROVER_CONFIGURED 是同一条纪律：<strong>关键条件不满足时停下来，比带着缺口继续更便宜</strong>。
+</div>
+
+<h3 id="sec5">5. Compression：两类对象，两种方法</h3>
+<p>工具结果和任务历史不是同一种压缩对象（笔记行 384）：</p>
+<figure class="diagram" id="fig5">
+<svg viewBox="0 0 760 340" role="img" aria-label="两类压缩对象的双路径">
+  <defs><marker id="m5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">压缩双路径：结构化提取 vs 交接摘要</text>
+  <rect class="dg-node" x="20" y="44" width="340" height="44" rx="6"/>
+  <text class="dg-label" x="190" y="71" text-anchor="middle">结构化测试结果（有明确字段）</text>
+  <rect class="dg-node-accent" x="20" y="110" width="340" height="44" rx="6"/>
+  <text class="dg-label" x="190" y="130" text-anchor="middle">程序提取关键字段（不请模型）</text>
+  <text class="dg-soft" x="190" y="146" text-anchor="middle">revision / status / 失败断言 / output_ref</text>
+  <path class="dg-arrow-accent" d="M190 88 L190 110" marker-end="url(#m5)"/>
+  <rect class="dg-node-ok" x="20" y="176" width="340" height="66" rx="6"/>
+  <text class="dg-label" x="190" y="198" text-anchor="middle">三条纪律</text>
+  <text class="dg-soft" x="190" y="218" text-anchor="middle">字段缺失报错，不当作测试通过</text>
+  <text class="dg-soft" x="190" y="234" text-anchor="middle">至少留一条失败证据；总数与省略数都在</text>
+  <path class="dg-arrow-accent" d="M190 154 L190 176" marker-end="url(#m5)"/>
+  <rect class="dg-node" x="400" y="44" width="340" height="44" rx="6"/>
+  <text class="dg-label" x="570" y="71" text-anchor="middle">长任务历史（目标/尝试/决策/进度）</text>
+  <rect class="dg-node-accent" x="400" y="110" width="340" height="44" rx="6"/>
+  <text class="dg-label" x="570" y="130" text-anchor="middle">模型生成交接摘要（语义归纳）</text>
+  <text class="dg-soft" x="570" y="146" text-anchor="middle">目标/约束/已完成/未完成/失败方案/下一步</text>
+  <path class="dg-arrow-accent" d="M570 88 L570 110" marker-end="url(#m5)"/>
+  <rect class="dg-node-warn" x="400" y="176" width="340" height="66" rx="6"/>
+  <text class="dg-label" x="570" y="198" text-anchor="middle">摘要必须核对（可能漏约束、改状态）</text>
+  <text class="dg-soft" x="570" y="218" text-anchor="middle">关键约束程序保留；测试状态以执行记录为准</text>
+  <text class="dg-soft" x="570" y="234" text-anchor="middle">摘要调用本身计入 Token、费用和时间</text>
+  <path class="dg-arrow-warn" d="M570 154 L570 176" marker-end="url(#m5)"/>
+  <rect class="dg-zone" x="20" y="266" width="720" height="52" rx="8"/>
+  <text class="dg-label" x="380" y="288" text-anchor="middle">共同底线：压缩后更短 + 关键判断仍有依据 + 缺细节还能补读</text>
+  <text class="dg-soft" x="380" y="306" text-anchor="middle">revision 用内容哈希标识受测代码；完整记录外存，短结果仍要过总预算检查</text>
+</svg>
+<figcaption>图 5 · 压缩双路径（笔记 4.1 六）。本机实测：三个边界检查只有恰好到期失败，完整记录 36506 字符 → 短结果 510 字符（笔记约 459，差异来自 output_ref 路径长度；字符数不是 Token 数）。</figcaption>
+</figure>
+<p>工具结果<strong>不能只截开头</strong>：只截前 500 字符，留下的可能全是启动信息，失败断言却在末尾。到期边界需要保留 <code>now=100</code>、<code>expires_at=100</code>、预期 <code>False</code>、实际 <code>True</code>，以及测试对应的代码版本（<code>revision</code> 内容哈希）。模型摘要也可能把「怀疑时区问题」写成「已确认」——所以关键约束由程序保留、测试状态以执行记录为准、更新摘要要结合新增记录和可核对事实。</p>
+<div class="why-box">
+<strong>为什么工具结果用程序提取，历史却用模型摘要？</strong> 结构化日志有明确字段，程序提取是确定性的：可复现、零模型调用、字段缺失能直接报错；请模型摘要反而引入失真与成本。任务历史是语义对象（目标、尝试、决策、进度），程序没有字段可提，只能归纳——但归纳就有失真风险，所以摘要必须核对。取舍的本质：<strong>能用确定性规则做的不用模型，必须用模型的地方加核对</strong>。这与 0016「压缩不请模型帮忙」一脉相承；也解释了为什么无关材料「本轮不提供」即可——不必先花一次模型调用去摘要它。
+</div>
+
+<h3 id="sec6">6. 污染与配对：结构完整与内容可信分别检查</h3>
+<p><strong>错误、过期或不适用的信息进入请求并影响判断，就是上下文污染</strong>（笔记行 458）。四类污染与处理：</p>
+<table>
+<tr><th>类型</th><th>登录案例</th><th>处理动作</th></tr>
+<tr><td>过期信息</td><td>旧版通过结果用于新代码</td><td>标记受测版本，重新验证当前代码</td></tr>
+<tr><td>信息冲突</td><td>旧宽限期规则与当前立即失效要求冲突</td><td>标明来源，核对采用规则</td></tr>
+<tr><td>摘要失真</td><td>猜测被改成确定根因</td><td>回看执行记录与原文</td></tr>
+<tr><td>外部指令混入</td><td>源码注释要求上传环境变量</td><td>当作材料内容，执行仍走权限边界</td></tr>
+</table>
+<p>装配和裁剪还可能破坏工具消息配对：保留结果却删掉调用，或留下调用却没有结果。<a href="../course_code/week04/4-1/4-1-7-check.py"><code>4-1-7-check.py</code></a> 的 <code>check()</code> 在发送前做四条检查：</p>
+<figure class="diagram" id="fig6">
+<svg viewBox="0 0 760 330" role="img" aria-label="工具消息配对检查状态机">
+  <defs><marker id="m6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">配对检查：pending 集合的一生</text>
+  <rect class="dg-node-ok" x="40" y="60" width="180" height="46" rx="6"/>
+  <text class="dg-label" x="130" y="88" text-anchor="middle">空闲（pending = ∅）</text>
+  <rect class="dg-node-accent" x="330" y="60" width="200" height="46" rx="6"/>
+  <text class="dg-label" x="430" y="82" text-anchor="middle">批次进行中</text>
+  <text class="dg-soft" x="430" y="98" text-anchor="middle">assistant 提出调用，pending += id</text>
+  <path class="dg-arrow-accent" d="M220 83 L330 83" marker-end="url(#m6)"/>
+  <path class="dg-arrow" d="M430 106 C430 140 130 140 130 106" marker-end="url(#m6)"/>
+  <text class="dg-soft" x="280" y="136" text-anchor="middle">结果按 id 配齐，pending −= id</text>
+  <rect class="dg-node-warn" x="40" y="180" width="330" height="40" rx="6"/>
+  <text class="dg-label" x="205" y="205" text-anchor="middle">结果没有对应调用 → ORPHAN_TOOL_RESULT</text>
+  <rect class="dg-node-warn" x="390" y="180" width="330" height="40" rx="6"/>
+  <text class="dg-label" x="555" y="205" text-anchor="middle">未配齐就进后续交互 → INCOMPLETE_TOOL_BATCH</text>
+  <rect class="dg-node-warn" x="40" y="232" width="330" height="40" rx="6"/>
+  <text class="dg-label" x="205" y="257" text-anchor="middle">非 assistant 提出 / id 重复 → INVALID_TOOL_CALL_ID</text>
+  <rect class="dg-node-warn" x="390" y="232" width="330" height="40" rx="6"/>
+  <text class="dg-label" x="555" y="257" text-anchor="middle">序列结束仍有 pending → MISSING_TOOL_RESULT</text>
+  <text class="dg-faint" x="380" y="306" text-anchor="middle">normalize 只为「已确认取消」的调用补 aborted（executed=false），保留原 ID；状态未知 → 拒绝补齐</text>
+</svg>
+<figcaption>图 6 · 配对检查状态机（4-1-7-check.py 的 check/normalize，本机探针实测四种错误码）。补齐消息是在修复历史；重新读取是一次新的工具调用——不能补造成功结果，也不能借补齐历史重放结果不明的写操作。</figcaption>
+</figure>
+<p>两条边界要背下来：<strong>补齐消息是在修复历史；重新读取是一次新的工具调用</strong>（笔记行 485）。<strong>消息配对正确，只证明协议结构完整</strong>——合法的「测试通过」消息仍可能来自旧版本（内容可信是另一道检查，第 5 节的 revision）。</p>
+<div class="why-box">
+<strong>为什么取消的调用补 aborted 而不是补成功、或直接删掉？</strong> 补成功：伪造了没发生过的执行，模型会基于假证据判断；直接删掉调用：历史失去「模型曾申请过这个动作」的事实，且可能制造孤立结果。补 <code>aborted, executed=false</code> 保留原 ID：协议配对恢复完整，内容如实说明「没执行、没拿到结果」，模型可以重新申请读取（新调用、新 ID）。这与 0012「恢复不重放副作用」同构：<strong>修复记录不等于重做执行，结果不明时先核对现场</strong>。状态未知的调用连 aborted 都不能补——「不知道执没执行」和「确认没执行」是两回事。
+</div>
+
+<h3 id="sec7">7. Debug Report：查清模型实际收到了什么</h3>
+<p>只记录本轮 Token 数，无法解释「当前失败为什么没有进入请求」。一份装配报告至少记录五个范围（笔记行 499–507）：每份材料（身份、来源与版本、处理方式、选择或排除原因、处理前后占用）；整个请求（输入预算、最终估算、计数方法、请求哈希、实际请求位置）；运行关联（Run ID、轮次、策略版本、实际模型、工具快照）；压缩过程（原始历史、摘要、重建历史、触发原因和耗时）；调用结果（响应、实际 usage、首文字延迟、总耗时和错误状态）。</p>
+<figure class="diagram" id="fig7">
+<svg viewBox="0 0 760 300" role="img" aria-label="判断错误的四位置定位链">
+  <defs><marker id="m7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">判断错了：沿四个位置找第一个信息变化点</text>
+  <rect class="dg-node" x="20" y="50" width="165" height="88" rx="6"/>
+  <text class="dg-label" x="102" y="74" text-anchor="middle">① original-history</text>
+  <text class="dg-soft" x="102" y="96" text-anchor="middle">原始结果是什么？</text>
+  <text class="dg-soft" x="102" y="114" text-anchor="middle">失败断言本来在不在</text>
+  <rect class="dg-node" x="215" y="50" width="165" height="88" rx="6"/>
+  <text class="dg-label" x="297" y="74" text-anchor="middle">② summary.md</text>
+  <text class="dg-soft" x="297" y="96" text-anchor="middle">摘要漏约束了吗？</text>
+  <text class="dg-soft" x="297" y="114" text-anchor="middle">推断被写成事实了吗</text>
+  <rect class="dg-node" x="410" y="50" width="165" height="88" rx="6"/>
+  <text class="dg-label" x="492" y="74" text-anchor="middle">③ *-request.json</text>
+  <text class="dg-soft" x="492" y="96" text-anchor="middle">正确摘要与用户要求</text>
+  <text class="dg-soft" x="492" y="114" text-anchor="middle">是否真正发送了</text>
+  <rect class="dg-node" x="605" y="50" width="135" height="88" rx="6"/>
+  <text class="dg-label" x="672" y="74" text-anchor="middle">④ 对应响应</text>
+  <text class="dg-soft" x="672" y="96" text-anchor="middle">看到正确信息</text>
+  <text class="dg-soft" x="672" y="114" text-anchor="middle">仍判断错误？</text>
+  <path class="dg-arrow" d="M185 94 L215 94" marker-end="url(#m7)"/>
+  <path class="dg-arrow" d="M380 94 L410 94" marker-end="url(#m7)"/>
+  <path class="dg-arrow" d="M575 94 L605 94" marker-end="url(#m7)"/>
+  <rect class="dg-zone" x="20" y="170" width="720" height="96" rx="8"/>
+  <text class="dg-label" x="380" y="194" text-anchor="middle">先找到第一个出错的位置，再修对应规则</text>
+  <text class="dg-soft" x="380" y="216" text-anchor="middle">①错 → 执行记录/工具问题；②错 → 摘要规则；③错 → 装配器；④错 → 生成行为与提示词</text>
+  <text class="dg-soft" x="380" y="238" text-anchor="middle">请求哈希只能核对请求身份，仍要打开实际内容</text>
+  <text class="dg-faint" x="380" y="256" text-anchor="middle">报告证明程序发送了什么，不能证明模型内部怎样理解</text>
+</svg>
+<figcaption>图 7 · 四位置定位链（笔记 4.1 八 8.2；文件名来自 4-1-8-Report.py 的真实产物）。接入位置：Harness 模型入口保存请求、结束后关联响应与消耗；pi 继续负责 Loop，Runtime 继续负责工具执行。</figcaption>
+</figure>
+<p>笔记 8.1 的真实摘要与恢复实验（DeepSeek 生成摘要，非 OpenAI 远端压缩接口）给了几个<strong>只能支持有限结论</strong>的数字：相同探测问题输入 637 → 262 Token（本次减少约 59%）；摘要调用本身花 848 Token；恢复后模型重读源码核对版本再修改复测；最终三个测试通过且测试文件未修改。同时：压缩后后续输入又从 677 涨到 1472——<strong>一次压缩不是永久控制上下文</strong>；本次实验也没有验证「排除旧通过」「跳过支付文档」「必须项超限」，不能把前面装配实验的结果混进来。</p>
+<div class="why-box">
+<strong>为什么报告要记「选择或排除原因」，而不只记最终请求？</strong> 只记最终请求，能回答「发了什么」，回答不了「为什么当前失败没进来」——是失效被排除、优先级不够、还是压缩丢了？排除原因把装配器的决策变成可审查的事实。代价是报告本身体积与存储；收益是事故复盘时能沿四位置定位到第一个变化点，而不是猜。注意报告的边界：<strong>它证明程序发送了什么，不能证明模型内部怎样理解</strong>——所以第④位置（响应）永远不可省。
+</div>
+
+<h3 id="sec8">8. 补读、成本口径、缓存与网关：输入链的边界</h3>
+<p><strong>按需补读</strong>（笔记 4.1 九）：资料不在当前记录中，就通过工具寻找——需要堆栈读日志，找不到函数搜索定义再读相关范围。这已经是按需检索上下文，<strong>不一定先建向量数据库</strong>（分块、Embedding、混合检索与重排放到 4-4）。补回来的内容仍要检查来源、版本、范围和预算；检索成功不意味着全文直接进入下一轮，也不意味着其中的文字变成指令。</p>
+<p><strong>成本与延迟统计整个任务</strong>（笔记 4.1 十）：压缩后一个请求变短，不能推出整个任务更便宜。比较方案至少看五件事：任务完成率、总 Token、总费用、首文字延迟、端到端耗时。摘要、重试和探测请求也要计入；模型等待与生成、工具执行分别计时（工具跑五秒不能全算成模型慢）；缺失 usage 记为未知，缺单价就不能给确定费用。</p>
+<p><strong>两种缓存复用不同的对象</strong>（笔记 4.1 十一/十二）：</p>
+<table>
+<tr><th>类型</th><th>复用的对象</th><th>边界</th></tr>
+<tr><td>KV / 前缀缓存</td><td>已完成的模型注意力计算</td><td>稳定规则保持内容与顺序一致、变化状态放后面，有机会提高复用；是否命中看实际服务统计</td></tr>
+<tr><td>Gateway 响应缓存</td><td>已生成的回答</td><td>代码版本、权限、工具变化要进入请求或隔离规则；不能只凭「修复登录」几个字返回旧答案</td></tr>
+</table>
+<p><strong>LiteLLM 接回 Gateway</strong>：<a href="../course_code/week04/4-1/4-1-12-Gateway.py"><code>4-1-12-Gateway.py</code></a> 直接用 LiteLLM 库 + <code>DEEPSEEK_API_KEY</code>，配置 <code>agent-default</code> 路由并关闭 thinking，不需要另起网关服务。分工：<strong>Harness 整理输入，LiteLLM 按配置发送、路由、限流和重试</strong>——网关不会自动补回失败证据，也不会修正错误摘要。原稿实测：首次 1514ms → 相同输入缓存命中 8ms；版本/源码/测试描述变化后未命中重新调用；限流第二次 429（跨分钟边界可能不同）；两个并发都成功（不能据此证明并发限制）；配置了重试但只有一个模型（没有回退证据）。缓存命中的 usage 来自原响应，不能再算一次新消耗。SDK 与网关的重试要统一管理避免倍增；<strong>模型重试不能顺带重放已经执行的补丁</strong>；输入超限回到装配器，切模型重新检查窗口与能力。</p>
+<div class="why-box">
+<strong>为什么缓存命中不能证明信息正确？</strong> 缓存复用「计算」或「回答」，不复用「适用性」——规则、权限或工具变化后，旧回答可能已过期。所以版本、权限、工具状态必须进入请求或隔离规则，让变化天然不命中；不能为了命中率继续使用过期内容。这与第 5 节 revision 是同一条纪律：<strong>复用必须绑定版本，否则省下的钱会以错误判断的形式还回来</strong>。另注意原稿自己记录的两个问题：价格配置缺失显示零不代表免费；<code>acompletion</code> 未 await 的警告要修复——报告生成了不等于代码完全正确。
+</div>
+
+<h3 id="sec9">9. 面试视角：两分钟主链 + 追问链</h3>
+<p>如果面试官问「你们的 Agent 怎么管理上下文」，按这条链讲：</p>
+<ol>
+  <li><strong>边界</strong>：Prompt 规定怎样做，Context Engineering 管理本轮实际给模型什么——指令、材料、历史、任务状态、工具快照都计入输入。</li>
+  <li><strong>装配</strong>：围绕下一步决策安排三种去向（直接提供 / 外存+引用 / 暂缓）；先问有效性、相关性、必要性，必须项优先；分配顺序不是发送顺序，工具调用与结果保持配对。</li>
+  <li><strong>预算</strong>：B = W − R − M，输出预留不可借；估算发送前检查、usage 发送后核对；必须项压缩后仍超限就拒绝发送，不静默删关键限制。</li>
+  <li><strong>压缩</strong>：结构化结果程序提取（revision 哈希绑定版本、至少一条失败证据、字段缺失报错），长历史模型摘要加核对；压缩本身计入成本，一次压缩不是永久控制。</li>
+  <li><strong>核对</strong>：配对检查保证协议结构完整，revision 与失效规则保证内容适用；判断错了沿四位置（原始历史→摘要→实际请求→响应）找第一个变化点。</li>
+  <li><strong>边界</strong>：缓存复用计算或回答，不证明适用；网关管路由限流重试，不补证据；本轮预算与整次 Run 预算两笔账分开。</li>
+</ol>
+<p><strong>常见追问与回答方向</strong>：</p>
+<ul>
+  <li>「窗口 128k 了为什么还要压缩？」→ 容量≠适用；无关与过期材料干扰判断；成本延迟随输入增长；压缩还要保留核对依据。</li>
+  <li>「怎么保证压缩不丢关键约束？」→ 必须项程序保留不参与竞争；字段缺失报错；至少一条失败证据；必须项超限拒发；摘要与原始记录核对。</li>
+  <li>「模型说测试通过了，你信吗？」→ 先查消息对应哪个 revision，再核对当前代码哈希；旧通过不能证明新版本（与 0014 完成契约同构）。</li>
+  <li>「一次压缩省 59%，任务就省钱了吗？」→ 不能；摘要调用 848 Token 另计，后续输入还会累积；整次任务看五件事口径。</li>
+  <li>「KV cache 和响应缓存什么区别？」→ 前者复用已完成的注意力计算，后者复用已生成的回答；两者都要让版本/权限/工具变化进入请求或隔离规则。</li>
+</ul>
+<p class="sidenote">工作对应点：你在 OpenViking 做 VikingDB 与 local 后端的检索质量对比——本课的「固定口径五件事」「原稿数字只是那次运行的证据」「未知 usage 不填零」正是 benchmark 报告的口径纪律；4-4 的 V0–V3 评估会把这条纪律展开成完整方法。</p>
+
+<hr>
+
+<h2 id="part2">第二部分：检索式测验（18 题 = 14 选择 + 4 简述）</h2>
+<p>Q1–Q3 换形式重测 0016 的三条核心不变量（0016 分数未报，按核心不变量兜底）；Q4–Q14 以本课为主，换形式覆盖笔记「本章复习问题」Q1–Q10（4-1 段）；Q15–Q18 是简述题，覆盖装配、预算、压缩、定位四条应能脱稿复述的主链。简述题先脱稿写，再展开参考答案，按得分点严格自评；漏掉关键点就选「部分对」。</p>
+<div id="quiz"></div>
+
+<hr>
+
+<h2 id="part3">第三部分：第二层练习——跑起来，再主动改造</h2>
+<p>本课实验①–⑥<strong>全部离线可跑，不需要模型 API key</strong>；真实模型三脚本列为可选加餐。实验①–④是基线观察，⑤⑥是主动改造（先写预期再跑，完成后恢复现场）。命令均从<strong>本课程仓库根目录</strong>开始；所有「本机实测」数字来自 2026-11-22 的验证运行（Python 3.12.14 + tokenizers 0.23.3）。</p>
+
+<h3>实验 ①：环境准备 + 装配基线——七块材料为什么只选五块</h3>
+<ul>
+  <li>建独立环境（<strong>版本坑</strong>：系统 python3 是 3.9，且 conda agentloop 环境不宜混装 pip 包——用它的 3.12 解释器建独立 venv，与 0016 同策）：<pre>cd course_code/week04/4-1
+~/miniconda3/envs/agentloop/bin/python -m venv .venv   # 已建过可跳过
+./.venv/bin/pip install tokenizers                      # 已装过可跳过</pre></li>
+  <li>跑装配与优先级两个脚本：<pre>./.venv/bin/python 4-1-3-Packing.py
+./.venv/bin/python 4-1-4-Prioritization.py</pre><strong>先写预期</strong>：Packing 的请求里会出现完整日志全文吗？Prioritization 的七块材料哪两块落选、为什么？<br>预期（本机实测）：Packing 输出完整请求 JSON——规则、限制、当前代码、失败证据、<strong>日志路径而非全文</strong>，外加 read_file 工具定义；Prioritization 装配报告七选五：「旧版通过记录」被排除（证据已失效）、「早期探索」本轮未选（优先级低），「当前失败」提供压缩版。注意它用<strong>材料块数量</strong>演示容量，不等于 Token 预算。</li>
+</ul>
+
+<h3>实验 ②：预算——17183 怎样装进 722，两道拒绝门怎样触发</h3>
+<ul>
+  <li>跑预算脚本（不带 --send 纯离线）：<pre>./.venv/bin/python 4-1-5-Budget.py</pre><strong>先写预期</strong>：输入预算是多少？「当前失败/完整」那行的 12137 是什么口径？两个反例分别在哪道门被拦？<br>预期（本机实测）：课堂容量 1000 − 输出 128 − 余量 150 = <strong>722</strong>；全部装入估算 <strong>17183</strong>；完整日志尝试 12137 超预算 → 压缩版 185 进入；装配后 <strong>222</strong>（临时日志路径不同会有 ±1–2 浮动）；反例一「固定输入已超限，不能发送」、反例二「必须项 必要证据 压缩后仍超限，拒绝发送」。</li>
+  <li>打开最终请求 JSON 核对：旧测试与支付文档都不在；失败断言、版本引用、当前状态都在。<strong>这就是验收标准第 1、2、4 条的现场</strong>。</li>
+</ul>
+
+<h3>实验 ③：压缩——真实跑三个边界测试，看程序提取保留了什么</h3>
+<ul>
+  <li>跑压缩脚本（它会真实执行边界检查，不调用模型）：<pre>./.venv/bin/python 4-1-6-Compression.py</pre><strong>先写预期</strong>：三个用例哪个失败？短结果里必须出现哪些字段？<br>预期（本机实测）：完整 36506 字符 → 短 510 字符（笔记约 459，差异来自 output_ref 绝对路径长度；<strong>字符数不是 Token 数</strong>）；status=failed、failure_count=1、at_expiry 输入 now=100/expires_at=100、预期 false 实际 true；revision 是脚本内容哈希；完整记录存 artifacts/test_result.json 可按 output_ref 补读。</li>
+</ul>
+
+<h3>实验 ④：配对——self-test 五项 + 四发探针</h3>
+<ul>
+  <li>先跑离线自测：<pre>./.venv/bin/python 4-1-7-check.py --self-test</pre>预期（本机实测）：发送前拦截 MISSING_TOOL_RESULT、取消补齐 aborted（executed=false）、孤立结果移除、幂等修复、未知状态停止——五项离线验收通过。</li>
+  <li>四发探针（脚本名带横杠不能直接 import，用 importlib 加载；在 4-1 目录执行）：<pre>./.venv/bin/python - &lt;&lt;'EOF'
+import importlib.util
+spec = importlib.util.spec_from_file_location("chk", "4-1-7-check.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+probes = [
+  ("孤立结果", [{"role":"user","content":"hi"},
+               {"role":"tool","tool_call_id":"call_1","content":"test passed"}]),
+  ("批次未齐", [{"role":"assistant","tool_calls":[{"id":"a"},{"id":"b"}]},
+               {"role":"tool","tool_call_id":"a","content":"ok"},
+               {"role":"user","content":"继续"}]),
+  ("重复ID",   [{"role":"assistant","tool_calls":[{"id":"a"},{"id":"a"}]}]),
+]
+for name, msgs in probes:
+    try: m.check(msgs)
+    except ValueError as e: print(name, "→", e)
+try: m.normalize([{"role":"assistant","tool_calls":[{"id":"x"}]}], set())
+except ValueError as e: print("未知状态 →", e)
+EOF</pre><strong>先写预期</strong>：四发各报什么？「批次未齐」和「缺失结果」的区别在哪？<br>预期（本机实测）：ORPHAN_TOOL_RESULT: call_1 / INCOMPLETE_TOOL_BATCH: ['b'] / INVALID_TOOL_CALL_ID: a / 调用尚未结束或状态未知，不能补结果：x。区别：批次未齐是<strong>过程中</strong>被后续交互打断；缺失结果是<strong>序列结束</strong>时仍有 pending。</li>
+</ul>
+
+<h3>实验 ⑤：主动改造 A——把边界修对，看证据怎样跟着版本走</h3>
+<ul>
+  <li>把 4-1-6 的故意错误改对，重跑，再恢复：<pre>sed -i '' 's/return now &lt;= expires_at/return now &lt; expires_at/' 4-1-6-Compression.py
+./.venv/bin/python 4-1-6-Compression.py
+git checkout -- 4-1-6-Compression.py   # 恢复课程原样（故意保留的边界错误）</pre><strong>先写预期</strong>：status 变成什么？revision 会变吗？为什么 revision 必须变？<br>预期（本机实测）：status=<strong>passed</strong>、failure_count=0、failures 为空；<strong>revision 哈希变了</strong>（它是脚本内容哈希）。这就是「证据绑定版本」的现场：改代码前那次 failed 记录是真实历史，但不能证明新代码仍失败；改代码后的 passed 也不能反过来证明旧代码正确。恢复后 <code>git diff -- 4-1-6-Compression.py</code> 应为空。</li>
+</ul>
+
+<h3>实验 ⑥：主动改造 B——让失效证据「复活」，看污染怎样进入请求</h3>
+<ul>
+  <li>不改原文件，用 heredoc 把旧测试的 valid 改成 True 重跑装配（在 4-1 目录执行）：<pre>./.venv/bin/python - &lt;&lt;'EOF'
+import importlib.util, tempfile
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("budget", "4-1-5-Budget.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+from tokenizers import Tokenizer
+tok = Tokenizer.from_file("tokenizer.json")
+count = lambda r: len(tok.encode(m.dump(r), add_special_tokens=False).ids)
+with tempfile.TemporaryDirectory() as d:
+    failure = "test_at_expiry：now=100，expires_at=100；预期 False，实际 True。"
+    log = "启动信息和依赖检查通过\n" * 2000 + failure
+    p = Path(d) / "session_tests.log"; p.write_text(log)
+    blocks = [
+        m.Block("业务规则和限制", "到期立即失效；不得修改现有测试。", 100, True),
+        m.Block("当前源码", "return now &lt;= expires_at", 90, True),
+        m.Block("当前失败", log, 100, True, compact=failure + f"\n完整日志：{p}"),
+        m.Block("当前状态", "失败已复现，补丁未应用。", 80),
+        m.Block("支付文档", "无关支付模块说明\n" * 1000, 10),
+        m.Block("旧测试", "旧版本全部通过。", 95, valid=True),  # 改造点
+    ]
+    req = m.pack(blocks, m.Budget(), count)
+    print("旧测试进入请求:", "旧版本全部通过" in m.dump(req), "估算:", count(req))
+EOF</pre><strong>先写预期</strong>：「旧版本全部通过」会进入请求吗？预算检查拦得住它吗？<br>预期（本机实测）：<strong>进入请求</strong>，估算约 222→236（临时日志路径长度不同会有 ±2 浮动）。它短、优先级 95、预算放得下——<strong>预算检查拦不住污染，有效性检查才能</strong>。这就是 valid=False 那道排除的 why：失效证据不是「占地方」，是「会误导」。模型可能据此认为「测试已经通过」——开篇事故一的现场复现。</li>
+</ul>
+
+<h3>可选加餐（需要 DEEPSEEK_API_KEY，本机未配置则跳过）</h3>
+<ul>
+  <li>估算 vs 服务端计数：<pre>./.venv/bin/python 4-1-5-Budget.py --send</pre>看实际 usage 与本地估算之差（原稿一次差 90；你的差值以本次为准，不能固定加减）。</li>
+  <li>完整摘要-恢复-修复链路：<pre>./.venv/bin/python 4-1-8-Report.py</pre>产物在 codex_deepseek_runs/&lt;id&gt;/：沿四位置打开 original-history.json → summary.md → 06-resume-*-request.json → 对应响应；看 context-report.json 的 before/after prompt_tokens、summary_usage 与 run_usage（摘要成本计入）。离线版 <code>--check-tools</code> 不需要 key，建议先跑：本地工具验收 exit 1→补丁→exit 0（本机实测通过）。</li>
+  <li>网关缓存/限流/并发：<pre>./.venv/bin/pip install litellm
+./.venv/bin/python 4-1-12-Gateway.py</pre>看 litellm_runs/&lt;时间&gt;/report.json：首次与相同输入的 cache_hit 标记（不是靠速度猜）、版本变化未命中、限流 429、并发实际行为。原稿的 1514ms→8ms 只是那次记录。</li>
+</ul>
+
+<h2>回读与验证指引</h2>
+<ul>
+  <li>primary source：<a href="../course_code/week04/第四章 学习笔记.md"><code>第四章 学习笔记.md</code></a> 4.1 节（行 152–665）——重点回读「二、判断错误先分流」「三、三种去向」「四、两个边界」「五、处理顺序与两笔账」「六、两类压缩」「七、污染四类型与配对四检查」「八、四位置定位」「十二、缓存与重试边界」；章复习问题 Q1–Q10（行 2564–2582，参考答案行 2634–2662）本课已换形式覆盖，结课前再对照原题自测。</li>
+  <li>代码回读顺序：<a href="../course_code/week04/4-1/4-1-3-Packing.py"><code>4-1-3-Packing.py</code></a>（请求组成与引用）→ <a href="../course_code/week04/4-1/4-1-4-Prioritization.py"><code>4-1-4-Prioritization.py</code></a>（allocation_order 与装配报告）→ <a href="../course_code/week04/4-1/4-1-5-Budget.py"><code>4-1-5-Budget.py</code></a>（Budget/pack 的两道拒绝门）→ <a href="../course_code/week04/4-1/4-1-6-Compression.py"><code>4-1-6-Compression.py</code></a>（compact_test_result 三纪律与 revision）→ <a href="../course_code/week04/4-1/4-1-7-check.py"><code>4-1-7-check.py</code></a>（check/normalize）→ <a href="../course_code/week04/4-1/4-1-8-Report.py"><code>4-1-8-Report.py</code></a>（报告产物与独立验收）→ <a href="../course_code/week04/4-1/4-1-12-Gateway.py"><code>4-1-12-Gateway.py</code></a>（Router/缓存/限流）。</li>
+  <li>官方文档（解释 API 语义时回查）：<a href="https://docs.litellm.ai/docs/caching/all_caches" target="_blank" rel="noopener">LiteLLM Caching</a>（响应缓存与命中口径）、<a href="https://docs.litellm.ai/docs/routing" target="_blank" rel="noopener">LiteLLM Router</a>（路由/限流/重试策略）、<a href="https://api-docs.deepseek.com/" target="_blank" rel="noopener">DeepSeek API 文档</a>（usage 与流式字段）。与课程材料冲突时以仓库代码与实测为准。</li>
+  <li>口径提醒：笔记中「原稿记录」的数字（637→262、59%、848、459 字符、1514ms→8ms）是那次运行的证据；本机实测数字已在实验中标注（如短结果 510 字符）。两者差异先查口径（路径长度、计数方法、计时范围），不急着判定谁错。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<ul>
+  <li><a href="../course_code/week04/第四章 学习笔记.md"><code>course_code/week04/第四章 学习笔记.md</code></a> 4.1 节 + 本章复习问题 Q1–Q10（学生版学习笔记，本课术语与验收的第一材料）</li>
+  <li><a href="../course_code/week04/README.md"><code>course_code/week04/README.md</code></a> 的 4-1 目录说明</li>
+  <li><a href="../course_materials/week04/4-1.pdf"><code>course_materials/week04/4-1.pdf</code></a>（教师 PDF，补充材料）</li>
+</ul>
+
+<div class="ask-reminder">
+  <strong>卡住了就问你的 agent。</strong>任何一处让你觉得「等等，为什么」——例如为什么输出预留不能被借走、为什么必须项超限要拒发而不是删掉继续、为什么取消的调用补 aborted 而不是补成功、为什么预算检查拦不住旧测试污染、为什么缓存命中还要让版本进请求、为什么报告证明不了模型的理解——直接回到对话里问。本课全部内容都在回答一个问题：<strong>模型这一轮实际看到了什么，拿什么证明。</strong>
+</div>
+
+<div class="lesson-footer">
+  Week04 主题课序列：<strong>1/6 Context Engineering</strong>（本课，4-1）· 2/6 Working Memory（0018，待生成）· 3/6 Memory 体系与 OKF（0019，待生成）· 4/6 RAG（0020，待生成）· 5/6 LLM Wiki（0021，待生成）· 6/6 项目四（0022，结课课，待生成）<br>
+  前课回顾：<a href="./0016-codebase-agent-v2-capstone.html">0016 项目三</a>把七节能力装成能验收的机器；本课开始回答「它每一轮判断的信息基础是否可靠」。<br>
+  <strong>本课通过条件</strong>：① 前 3 题重测全对，本课部分（第 4 题起）正确率 85% 以上；② 完成实验①–④，并至少完成实验⑤或⑥中的一项（预期先写后验）；③ 不看稿 2 分钟讲清主链（请求解剖 → 装配三去向 → 预算拒发 → 两类压缩 → 四位置定位）。通过后进入 0018 Working Memory。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  questions: [
+    {
+      type: 'choice',
+      concept: '【重测·0016】批准≠执行',
+      section: '0016 间隔重测',
+      notesRef: '0016 精讲第 6 节 + 第三章笔记 3.7 审批执行分离',
+      question: '项目三任务一中，审批单已经 decide approve，但还没有 execute。此时 artifacts/login-flow.md 的状态是？',
+      options: [
+        '文件尚未创建，批准只是授权',
+        '文件已经创建，等待确认生效',
+        '文件创建一半，等待补齐内容',
+        '文件已被锁定，禁止任何读取'
+      ],
+      answer: 0,
+      explanation: 'decide 只授权、execute 才落盘；批准绑定参数指纹，执行前重核契约与策略，且一张单只能领一次（重复 execute 回 APPROVAL_NOT_EXECUTABLE）。0016 实验③的现场：批准后 ls 看不到文件，execute 后才创建。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·0016】状态≠结论',
+      section: '0016 间隔重测',
+      notesRef: '0016 精讲第 8 节 + 第三章笔记 3.7 验收',
+      question: 'eval 报告里任务一执行状态是「待审批」，模型自述「文档已完成」。交付判定应该怎么做？',
+      options: [
+        '不计完成，交付只认审计的账',
+        '计为完成，模型自述就是结论',
+        '计为完成，状态只是个参考值',
+        '不计完成，等模型再次说完成'
+      ],
+      answer: 0,
+      explanation: '执行状态与验收结论分开；deliverable 只看审计里最后一次成功写入，model_claims 单列。评估不代人批准，所以「待审批」绝不计为完成——模型再说一遍也不改变账上事实。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·0016】handler=0 的证据口径',
+      section: '0016 间隔重测',
+      notesRef: '0016 精讲 why-box + 实验⑤（类型折叠）',
+      question: '要证明「参数错误时 handler 没执行」，哪组探针与证据口径是对的？（提示：上游校验器会先做类型折叠）',
+      options: [
+        '缺必填字段探针，账上只有决策',
+        '路径传数字探针，账上只有决策',
+        '路径传数字探针，返回错误即可',
+        '缺必填字段探针，返回错误即可'
+      ],
+      answer: 0,
+      explanation: 'pi-ai 的 validateToolArguments 先做 Value.Convert：path:42 折成 "42" 后 handler 真的执行（ENOENT），账上会有 tool_execution。要用折叠不掉的错误（缺必填字段/超上界/多余字段），且审计里只有 policy_decision、没有 tool_execution 才是拦截证据——「返回了错误」不等于「拦住了执行」。'
+    },
+    {
+      type: 'choice',
+      concept: 'Prompt 与 Context 边界',
+      section: '4.1 一（复习 Q1 换形式）',
+      notesRef: '第四章笔记 4.1 一（行 154–196）',
+      question: '「不得修改现有测试」与「当前源码 return now <= expires_at」，在一次模型请求中分别属于什么？',
+      options: [
+        '前者是指令，后者是判断材料',
+        '前者是材料，后者是执行指令',
+        '两者都是指令，只是写法不同',
+        '两者都是材料，只是来源不同'
+      ],
+      answer: 0,
+      explanation: 'Prompt 规定怎样做（指令），Context Engineering 管理本轮实际给模型什么（指令+材料+历史+状态+工具）。限制是指令，源码是判断所需的材料；两者都进入请求，但角色不同。'
+    },
+    {
+      type: 'choice',
+      concept: '最近 N 条裁剪的风险',
+      section: '4.1 四（复习 Q2 换形式）',
+      notesRef: '第四章笔记 4.1 四（行 264–280）',
+      question: '只保留最近 N 条历史消息，登录修复任务中最可能先丢掉什么？',
+      options: [
+        '最早提出的不得修改测试',
+        '最近一轮工具返回的日志',
+        '当前正在排查的失败断言',
+        '最新读取到的当前源码段'
+      ],
+      answer: 0,
+      explanation: '重要限制通常只在最早的用户要求里说一次，后续消息不会重复它；按时间裁剪留下最新日志，却删掉约束。所以关键约束单独保留（必须项），再按有效性与相关性选其他历史。'
+    },
+    {
+      type: 'choice',
+      concept: '输出预留不可借',
+      section: '4.1 五（复习 Q3 换形式）',
+      notesRef: '第四章笔记 4.1 五（行 316–332）',
+      question: '输入预算公式 B = W − R − M 中，如果输出预留 R 被输入借走，最直接的后果是什么？',
+      options: [
+        '模型可能无法生成工具参数',
+        '模型会自动压缩历史来腾位',
+        '服务端会自动扩大窗口容量',
+        '计数误差会被安全余量吸收'
+      ],
+      answer: 0,
+      explanation: '模型读完输入还要生成回答或工具调用参数，输入占满窗口，后续动作可能无法正常产生。窗口不会自动扩大，模型也不会替你压缩；安全余量 M 覆盖的是计数误差，不是输出空间。'
+    },
+    {
+      type: 'choice',
+      concept: '完整请求计入预算',
+      section: '4.1 五（复习 Q4 换形式）',
+      notesRef: '第四章笔记 4.1 五（行 326）+ 4-1-5-Budget.py',
+      question: '窗口 16000、输出预留 3000、安全余量 1000；系统规则、用户要求、工具定义与消息格式开销共 3000。材料空间约多少？',
+      options: [
+        '九千，工具定义也计入输入',
+        '一万二，工具定义不算输入',
+        '一万三，只需扣除输出预留',
+        '一万六，窗口全部能给材料'
+      ],
+      answer: 0,
+      explanation: '16000 − 3000 − 1000 = 12000 输入预算；再扣固定开销 3000，材料约 9000。工具名称、描述、参数 Schema 都占 Token——预算检查覆盖完整请求，不能只算正文长度。'
+    },
+    {
+      type: 'choice',
+      concept: '必须项超限拒发',
+      section: '4.1 五 5.2（复习 Q5 换形式）',
+      notesRef: '第四章笔记 4.1 五 5.2（行 360–374）',
+      question: '必须项压缩后仍然超出输入预算，程序的正确处理是什么？',
+      options: [
+        '停止发送，缩小范围或拆步',
+        '静默删掉必须项，继续调用',
+        '借走输出预留，先发出请求',
+        '直接换更大窗口，跳过检查'
+      ],
+      answer: 0,
+      explanation: '处理顺序：精简重复规则/只给本轮工具 → 缩小读取范围或拆多步 → 必须项仍放不下就拒绝发送 → 换模型要重新检查装配。静默删关键限制会让模型在信息不足时自信判断，且事后无法发现信息缺过——fail closed 与 0008 门禁同构。'
+    },
+    {
+      type: 'choice',
+      concept: '两类压缩对象',
+      section: '4.1 六（复习 Q6 换形式）',
+      notesRef: '第四章笔记 4.1 六（行 382–452）',
+      question: '结构化测试日志与长任务历史，为什么采用不同的压缩方法？',
+      options: [
+        '前者程序提字段，后者摘要',
+        '前者模型写摘要，后者截断',
+        '两者都截前五百字符最稳妥',
+        '两者都请模型摘要最为准确'
+      ],
+      answer: 0,
+      explanation: '结构化结果有明确字段，程序提取确定性、可复现、零模型调用；长历史是语义对象（目标/尝试/决策/进度），只能归纳成交接摘要，且摘要要核对。只截开头可能留下启动信息、丢掉末尾的失败断言。'
+    },
+    {
+      type: 'choice',
+      concept: '证据绑定版本',
+      section: '4.1 六 6.1（复习 Q7 换形式）',
+      notesRef: '第四章笔记 4.1 六 6.1（行 422）+ 4-1-6-Compression.py',
+      question: '怎样证明一条「测试通过」记录对应当前代码？',
+      options: [
+        '记录受测版本哈希并先核对',
+        '看消息配对完整就可以采信',
+        '看时间戳最新即可直接采信',
+        '看模型说通过即可直接采信'
+      ],
+      answer: 0,
+      explanation: '测试时记录受测代码的版本或内容哈希（revision），使用结果前核对当前代码是否仍与被测内容一致。配对完整只证明协议结构；时间戳新不代表测的是这版代码；代码变化后旧通过不能证明新版本正确。'
+    },
+    {
+      type: 'choice',
+      concept: '配对检查：批次未齐',
+      section: '4.1 七 + 4-1-7-check.py',
+      notesRef: '第四章笔记 4.1 七（行 471–481）+ check() 源码',
+      question: '装配裁剪后的消息序列如下，check() 会报哪种错误？<pre>[assistant 提出 call_a, call_b]\n[tool 结果 call_a]\n[user「继续」]</pre>',
+      options: [
+        '批次未配齐就进入后续交互',
+        '结果找不到对应的调用编号',
+        '调用编号重复或者身份非法',
+        '调用提出后缺失对应的结果'
+      ],
+      answer: 0,
+      explanation: 'pending={b} 时遇到非 tool 消息 → INCOMPLETE_TOOL_BATCH（本机探针实测）。D 是 MISSING_TOOL_RESULT：序列结束时仍有 pending。区别在「过程中被打断」与「结束时还缺」——一批调用的结果配齐后，才能进入后续交互。'
+    },
+    {
+      type: 'choice',
+      concept: '补齐历史≠重放执行',
+      section: '4.1 七 + 4-1-7-check.py',
+      notesRef: '第四章笔记 4.1 七（行 481–489）+ normalize() 源码',
+      question: '工具在执行前被确认取消，normalize() 应该补什么样的结果？',
+      options: [
+        '保留原编号，标明中止未执行',
+        '保留原编号，补一条成功结果',
+        '换个新编号，重新执行该工具',
+        '删掉该调用，当它没有发生过'
+      ],
+      answer: 0,
+      explanation: '补 aborted、executed=false、保留原 ID：协议配对恢复完整，内容如实说明没执行。补成功是伪造证据；重新执行是新调用（新 ID），不是补齐；删掉调用会丢失「模型曾申请过」的事实。状态未知的调用连 aborted 都不能补——与 0012 恢复不重放副作用同构。'
+    },
+    {
+      type: 'choice',
+      concept: 'KV 缓存 vs 响应缓存',
+      section: '4.1 十一/十二（复习 Q9 换形式）',
+      notesRef: '第四章笔记 4.1 十一/十二（行 591–634）',
+      question: 'KV/前缀缓存与 Gateway 响应缓存，复用的分别是什么？',
+      options: [
+        '已完成的计算；已生成的回答',
+        '已生成的回答；已完成的计算',
+        '已存下的材料；已选中的工具',
+        '已压缩的历史；已核对的证据'
+      ],
+      answer: 0,
+      explanation: 'KV 缓存复用注意力计算（Key/Value），响应缓存复用此前生成的回答（命中可不再调模型）。两者都不保证内容仍适用：规则、代码、权限变化要进入请求或隔离规则；缓存命中的 usage 来自原响应，不算新消耗。'
+    },
+    {
+      type: 'choice',
+      concept: '单次压缩≠任务省钱',
+      section: '4.1 八/十（复习 Q10 换形式）',
+      notesRef: '第四章笔记 4.1 八 8.1（行 527–541）+ 十（行 579–587）',
+      question: '某次请求输入从 637 降到 262 Token（约 59%），能推出什么结论？',
+      options: [
+        '本次输入减少，任务账未可知',
+        '整个任务费用也减少了约六成',
+        '压缩没有成本，净省三成以上',
+        '后续请求不再增长，一劳永逸'
+      ],
+      answer: 0,
+      explanation: '59% 只是这次请求输入的减少：摘要调用本身花 848 Token，后续输入又从 677 涨到 1472（新工具结果继续累积）。整次任务是否省钱要看完成率、总 Token、总费用、首文字延迟、端到端耗时五件事，摘要/重试/探测都计入。'
+    },
+    {
+      type: 'short',
+      concept: '装配三去向与优先级三问',
+      section: '4.1 三/四',
+      notesRef: '第四章笔记 4.1 三/四（行 224–312）',
+      question: '登录边界排查阶段，「完整测试日志」「不得修改现有测试」「无关支付文档」分别应安排什么去向、为什么？选择材料时先问哪三件事？',
+      hint: '按「三去向 → 三问顺序 → 引用的边界」组织，讲清不这样安排的事故。',
+      modelAnswer: '<strong>关键得分点：</strong>① 三去向：规则/限制/当前源码/失败证据<strong>本轮直接提供</strong>（决定正确行为与修复边界）；完整日志<strong>外部保存 + 请求中给真实可读引用</strong>（保留核对依据，缺细节工具补读）；无关支付文档<strong>暂缓读取</strong>（当前动作不依赖）。② 三问按序：<strong>现在是否仍有效 → 是否与当前步骤相关 → 缺少它会不会选错动作或判断错进度</strong>；必须项优先于优先级数值，优先级随任务阶段变化。③ 引用的边界：路径必须真实存在且在允许访问范围，<strong>不能读取的引用承担不了恢复证据</strong>。④ 分配顺序≠发送顺序：工具调用仍在结果之前，配对不破坏。漏③或④算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '预算公式与拒发纪律',
+      section: '4.1 五',
+      notesRef: '第四章笔记 4.1 五（行 316–378）',
+      question: '写出输入预算公式并解释每一项为什么不可少；必须项压缩后仍超限时程序的正确处理顺序是什么？本轮预算与整次 Run 预算分别由谁管？',
+      hint: '公式三项 → 处理四步 → 两笔账的归属。',
+      modelAnswer: '<strong>关键得分点：</strong>① <strong>B_input = W_context − R_output − M_safety</strong>，同时满足模型与 Provider 各自输入输出限制；输出预留不可借（模型要生成回答/工具参数），安全余量覆盖计数误差但不能代替校准（发送前估算、发送后 usage 核对、多次运行再调）。② 处理顺序：精简重复规则/只给本轮工具并保持快照一致 → 缩小读取范围或拆多步 → <strong>必须项仍放不下拒绝发送，不静默删关键限制</strong> → 换更小窗口模型重新检查装配。③ 两笔账：本轮请求由<strong>装配入口</strong>检查；整次 Run 的 Token/费用/时间由 <strong>Harness 累计</strong>管理。④ 计数口径：统计完整请求（含工具定义与格式开销），不只算正文。漏②的拒发或③的归属算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '两类压缩与必须保留的证据',
+      section: '4.1 六',
+      notesRef: '第四章笔记 4.1 六（行 382–452）+ 4-1-6-Compression.py',
+      question: '工具结果与任务历史为什么用不同压缩方法？程序提取测试结果时必须保留哪些字段、遵守哪三条纪律？模型摘要为什么必须核对？',
+      hint: '对象性质 → 方法选择 → 字段与纪律 → 摘要失真风险。',
+      modelAnswer: '<strong>关键得分点：</strong>① 结构化结果有明确字段 → <strong>程序提取</strong>（确定性、可复现、零模型调用）；长历史含目标/尝试/决策/进度 → <strong>交接摘要</strong>（语义归纳，可能失真）。② 必须保留：revision（内容哈希）、status、tests_run、failure_count、error_count、errors、output_ref，外加至少一条失败证据与 omitted_failures。③ 三纪律：<strong>字段缺失报错不当通过；至少留一条失败证据；总失败数与省略数都在</strong>。④ 摘要核对：可能漏约束、把推断写成确认——关键约束程序保留、测试状态以执行记录为准、摘要本身计入成本、路径/版本/调用 ID 准确。⑤ 不能只截开头（失败断言可能在末尾）；短结果仍要过总预算。漏③任一纪律算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '四位置定位法与报告边界',
+      section: '4.1 八',
+      notesRef: '第四章笔记 4.1 八（行 493–563）+ 4-1-8-Report.py 产物',
+      question: '模型判断错了，按哪四个位置找信息变化？每个位置查什么？Context Debug Report 能证明什么、不能证明什么？',
+      hint: '四个文件名 → 各查什么 → 修复原则 → 报告的能力边界。',
+      modelAnswer: '<strong>关键得分点：</strong>① 四位置：<strong>original-history.json</strong>（原始结果是什么）→ <strong>summary.md</strong>（摘要有没有漏约束、改状态、把推断写成事实）→ 恢复后的 <strong>*-request.json</strong>（正确摘要与用户要求是否真正发送）→ <strong>对应响应</strong>（看到正确信息是否仍判断错误）。② 原则：先找第一个出错位置再修对应规则；请求哈希只核对身份，仍要打开实际内容。③ 报告能证明：程序发送了什么（材料来源/处理方式/选择排除原因/预算/usage 关联）；<strong>不能证明模型内部怎样理解，也不能单独证明最终答案正确</strong>。④ 接入位置：Harness 模型入口存请求、结束后关联响应与消耗。漏①任一位置或③的边界算部分对。'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>

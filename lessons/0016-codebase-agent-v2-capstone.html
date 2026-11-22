@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week03 主题课 7/7 · 项目三：Codebase Agent v2（结课课）</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 03 · 主题课 7 / 7 · 覆盖课程小节 3-7 · 结课课 · 版式：先讲后测，精讲与测验五五开</p>
+<h1>项目三：Codebase Agent v2——把七节能力装成一台能验收的机器</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：Week03 结课课。前六课把 Loop、Planning、State/Checkpoint、Sandbox、Harness、LangGraph 逐个装好；这一课不再学新机制，而是把它们<strong>组合成一台能执行、能检查、能说明结果的 Codebase Agent</strong>，用两类真实仓库任务（代码理解 / 测试修复）端到端验收。核心问题：<strong>怎么证明项目不是「碰巧跑通」——程序记录的状态，是否与实际执行事实一致。</strong><br>
+  <strong>材料定位</strong>：<a href="../course_code/week03/第三章-学习笔记.md"><code>第三章-学习笔记.md</code></a> 3.7 节（行 3108–3961，<strong>本课第一材料</strong>，术语以此为准）+「本章总结」（行 3964–4004）+「本章复习问题」（行 4006–4046，20 题带参考答案）+「附录：源码与工程阅读路线」（行 4048–4097）+ <a href="../course_code/week03/3-7/project3/README.md"><code>project3/README.md</code></a>（运行口径与复原步骤）+ 教师 PDF <a href="../course_materials/week03/3-7.pdf"><code>course_materials/week03/3-7.pdf</code></a>（补充）。<br>
+  <strong>代码定位</strong>：<code>course_code/week03/3-7/project3/</code>——TS 主体 <code>v2/src/</code>（cli / runtime / contract / context-budget / sandbox / loop-guard / deliverable / eval / store），Python 审批服务 <code>v2/hitl/</code>（graph.py / service.py），配置 <code>v2/config/</code>（platform.yaml / tasks.yaml / scripts/），样本 <code>samples/1_login_demo</code> 与 <code>samples/2_bug_fix/demo-app</code>。<strong>无 DEEPSEEK_API_KEY 也能跑</strong>：<code>--decider mock</code> 走离线脚本，本课全部实验离线可复现。<br>
+  <strong>预计用时</strong>：精讲 50 分钟 + 测验 30 分钟 + 第二层动手练习 90 分钟 + 结课复盘 30 分钟<br>
+  <strong>本课验收标准</strong>（笔记「本节重点与验收」）：能回答——十件工具各需要什么输入输出；为什么参数校验之后还要权限、Sandbox 与执行业务检查；长日志和多轮历史怎样既受控又不丢证据；审批人需要看到哪些信息；<strong>怎么证明项目不是「碰巧跑通」</strong>。结课另要求：不看稿 2 分钟讲清项目主链，并能复述本章六条判断。
+</div>
+
+<h2>怎么用这一课</h2>
+<p><strong>先讲后测，五五开</strong>：第一部分按「组合 → 契约 → 预算 → 审批 → 执行链 → 验收 → 复盘」建地图，每节回答「为什么这样组合、不这样会出什么事故」；第二部分 18 题 = <strong>14 选择 + 4 简述</strong>。Q1–Q3 换形式重测 0015 的三条核心不变量（0015 分数未报，按核心不变量兜底）；Q4 起进入本课，其中多道换形式取自笔记「本章复习问题」——结课课按规划<strong>集中复测全章</strong>。简述题按得分点严格自评，漏掉关键点就选「部分对」。</p>
+<p><strong>三层定位</strong>：第一层能默画三张图——按职责切分的架构（图 2）、四层检查漏斗（图 3）、审批与执行分离时序（图 4）；第二层跑通两类任务的离线闭环（实验①–④），再主动做契约探针与配置改造（实验⑤⑥）；第三层始终追问「这个检查拦在哪一层」「批准绑定的是什么」「压缩丢了什么」「验收看的是谁的账」。最后用笔记附录的六步阅读路线对 <code>project3/v2</code> 做一次工程复盘。</p>
+<p class="sidenote">就业面试视角：这是把前三章串成项目经验的一课。面试官不会问「你用了什么框架」，而是沿验收追问：模型说修好了，你凭什么信？参数错误在哪一层被拦、怎么证明 handler 没执行？审批通过后为什么还要再查一遍文件？中断恢复怎么避免重复写入？评估报告里「执行状态」和「验收结论」为什么要分开？能沿这条链给出有工程理由的回答，才说明项目是你把关的，不是 AI 碰巧跑通的。</p>
+
+<nav class="toc">
+<strong>本课目录</strong>
+<ul>
+  <li><a href="#sec0">0. 开篇：结课项目组装了什么</a></li>
+  <li><a href="#sec1">1. 两类任务与十件工具</a></li>
+  <li><a href="#sec2">2. 按职责切分：pi Loop × LangGraph 审批图</a></li>
+  <li><a href="#sec3">3. 任务差异放配置，新能力扩代码</a></li>
+  <li><a href="#sec4">4. 工具契约：两层定义、四层检查</a></li>
+  <li><a href="#sec5">5. 上下文与预算：两笔账分开记</a></li>
+  <li><a href="#sec6">6. HITL：审批与执行分离</a></li>
+  <li><a href="#sec7">7. 完整执行链：六步走一遍</a></li>
+  <li><a href="#sec8">8. 验收与评估：状态 ≠ 结论</a></li>
+  <li><a href="#sec9">9. 已知边界与工程复盘</a></li>
+  <li><a href="#sec10">10. 面试视角：两分钟主链 + 结课复习地图</a></li>
+  <li><a href="#part2">第二部分：检索式测验</a></li>
+  <li><a href="#part3">第三部分：第二层练习</a></li>
+</ul>
+</nav>
+
+<hr>
+
+<h2>第一部分：精讲（先读，测验在后）</h2>
+
+<h3 id="sec0">0. 开篇：结课项目组装了什么</h3>
+<p>笔记「本章总结」把全章主线压缩成七句话，项目三就是这七句话的落地（行 3970–3978）：</p>
+<pre>3.1 让任务能继续
+3.2 让系统知道做到哪一步
+3.3 让进度能跨进程恢复
+3.4 把真实执行限制在安全边界内
+3.5 把模型、工具、状态、上下文和环境装配成完整系统
+3.6 用显式图编排分支、并行、人工中断和循环
+3.7 用两类真实仓库任务完成项目闭环</pre>
+<figure class="diagram" id="fig1">
+<svg viewBox="0 0 760 480" role="img" aria-label="七节能力到 project3 模块的组装映射">
+  <defs><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">七节能力 → project3/v2 的模块落点</text>
+  <text class="dg-soft" x="20" y="46">左边是本章主线；右边是它在结课项目里住的地方。复用的是治理边界与工程原则，不是把旧代码原样搬来。</text>
+  <rect class="dg-zone" x="16" y="60" width="250" height="400" rx="8"/>
+  <text class="dg-label" x="141" y="82" text-anchor="middle">本章主线（笔记总结）</text>
+  <rect class="dg-zone" x="430" y="60" width="314" height="400" rx="8"/>
+  <text class="dg-label" x="587" y="82" text-anchor="middle">project3/v2 模块</text>
+
+  <rect class="dg-node" x="30" y="96" width="222" height="36" rx="6"/>
+  <text class="dg-label" x="141" y="119" text-anchor="middle">3.1 让任务能继续（Loop）</text>
+  <rect class="dg-node" x="444" y="96" width="286" height="36" rx="6"/>
+  <text class="dg-label" x="587" y="119" text-anchor="middle">pi/agent-runner.ts + loop-guard.ts</text>
+  <path class="dg-arrow" d="M252 114 L444 114" marker-end="url(#m1)"/>
+
+  <rect class="dg-node" x="30" y="146" width="222" height="36" rx="6"/>
+  <text class="dg-label" x="141" y="169" text-anchor="middle">3.2 知道做到哪一步（Planning）</text>
+  <rect class="dg-node" x="444" y="146" width="286" height="36" rx="6"/>
+  <text class="dg-label" x="587" y="169" text-anchor="middle">config/tasks.yaml brief + 决策脚本</text>
+  <path class="dg-arrow" d="M252 164 L444 164" marker-end="url(#m1)"/>
+
+  <rect class="dg-node" x="30" y="196" width="222" height="36" rx="6"/>
+  <text class="dg-label" x="141" y="219" text-anchor="middle">3.3 进度跨进程恢复（Checkpoint）</text>
+  <rect class="dg-node" x="444" y="196" width="286" height="36" rx="6"/>
+  <text class="dg-label" x="587" y="219" text-anchor="middle">store.ts 审批/审计 + hitl SQLite 存档</text>
+  <path class="dg-arrow" d="M252 214 L444 214" marker-end="url(#m1)"/>
+
+  <rect class="dg-node" x="30" y="246" width="222" height="36" rx="6"/>
+  <text class="dg-label" x="141" y="269" text-anchor="middle">3.4 执行限制在边界内（Sandbox）</text>
+  <rect class="dg-node" x="444" y="246" width="286" height="36" rx="6"/>
+  <text class="dg-label" x="587" y="269" text-anchor="middle">sandbox.ts（resolve / deny / 允许例外）</text>
+  <path class="dg-arrow" d="M252 264 L444 264" marker-end="url(#m1)"/>
+
+  <rect class="dg-node-accent" x="30" y="296" width="222" height="36" rx="6"/>
+  <text class="dg-label" x="141" y="319" text-anchor="middle">3.5 装配成完整系统（Harness）</text>
+  <rect class="dg-node-accent" x="444" y="296" width="286" height="36" rx="6"/>
+  <text class="dg-label" x="587" y="319" text-anchor="middle">runtime.ts + platform.ts + contract.ts</text>
+  <path class="dg-arrow-accent" d="M252 314 L444 314" marker-end="url(#m1)"/>
+
+  <rect class="dg-node" x="30" y="346" width="222" height="36" rx="6"/>
+  <text class="dg-label" x="141" y="369" text-anchor="middle">3.6 显式编排（LangGraph）</text>
+  <rect class="dg-node" x="444" y="346" width="286" height="36" rx="6"/>
+  <text class="dg-label" x="587" y="369" text-anchor="middle">hitl/graph.py（只编排审批这一段）</text>
+  <path class="dg-arrow" d="M252 364 L444 364" marker-end="url(#m1)"/>
+
+  <rect class="dg-node-ok" x="30" y="396" width="222" height="36" rx="6"/>
+  <text class="dg-label" x="141" y="419" text-anchor="middle">3.7 两类任务项目闭环</text>
+  <rect class="dg-node-ok" x="444" y="396" width="286" height="36" rx="6"/>
+  <text class="dg-label" x="587" y="419" text-anchor="middle">deliverable.ts + eval.ts（只认审计的账）</text>
+  <path class="dg-arrow" d="M252 414 L444 414" marker-end="url(#m1)"/>
+
+  <text class="dg-faint" x="587" y="452" text-anchor="middle">阶段二 Runtime 的治理边界被复用，客服项目代码没有搬过来</text>
+</svg>
+<figcaption>图 1 · 七节能力到结课项目的组装映射（笔记 3.7 一 1.2 + 本章总结）。注意 3.6 的落点：LangGraph <strong>只承担审批流程</strong>，主体 Agent 仍是 pi 循环——这正是 0015 结尾「按职责切分」的兑现。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么结课课不学新机制？</strong> 因为工程能力的标志不是「会多少机制」，而是「机制之间的连接是否真的有效」。笔记 3.7 八 8.2 的四类失败案例全部指向同一个问题：<strong>程序记录的状态，是否与实际执行事实一致</strong>。参数错了 handler 有没有提前跑？测试失败了状态有没有变成完成？审批中断后会不会错用旧授权？文件改了结果没保存怎么办？——每一问都不是单个模块的知识，而是连接处的验收。替代方案是「再做一个更大的 Demo」，代价是机制更多、断点更多；当前约束下选「两类小任务 + 逐项验收」，因为验收密度比功能数量更能证明掌握程度。
+</div>
+
+<h3 id="sec1">1. 两类任务与十件工具</h3>
+<p>项目用两类任务验收（笔记 3.7 一）：</p>
+<ul>
+  <li><strong>任务一 · 代码理解</strong>：「帮我找出该项目的登录逻辑，并生成 Markdown 说明文档。」——搜索认证代码、阅读模块、梳理调用链、输出文档并给出真实路径。样本：<code>samples/1_login_demo</code>。</li>
+  <li><strong>任务二 · 测试与修复</strong>：「读取登录会话模块的失败测试与日志，修复源码并复测，不修改现有测试。」——样本预置 <strong>7 条测试、4 过 3 红</strong>，缺陷在 <code>src/auth/session-policy.ts</code>（到期比较只比到「哪天」）。新增测试只能写 <code>tests/generated/</code>。样本：<code>samples/2_bug_fix/demo-app</code>。</li>
+</ul>
+<p>十件仓库工具：<code>list_files</code>、<code>search_code</code>、<code>read_file</code>、<code>read_directory</code>（读侧四件）；<code>write_file</code>、<code>apply_patch</code>（写侧两件）；<code>run_test</code>、<code>run_command</code>（执行侧两件）；<code>git_diff</code>、<code>git_status</code>（Git 两件）。容易混淆的三处（笔记 4.1）：<code>read_directory</code> 看一层目录、<code>list_files</code> 按范围找文件；<code>run_test</code> 优先用任务配置允许的测试目标，<code>run_command</code> 能力更宽要单独查命令与审批；<strong>搜索结果为空和搜索失败必须区分</strong>。</p>
+<p>阶段二 Runtime 的复用方式（笔记 1.2）：ToolRegistry 注册十件工具、JSON Schema 做参数校验、权限与风险分级区分读/写/执行、人工确认拦高风险、超时重试降级按错误类型决定、审计与 Trace 记录调用。<strong>复用的是治理边界和工程原则，不是把客服项目代码原样搬过来。</strong></p>
+<p>两个编号不能混（笔记 1.3，README 也专门强调）：<code>trace_id</code> 标识<strong>本次运行</strong>（给 <code>audit --trace-id</code> 用）；<code>pending_approval_id</code> 标识<strong>某一次待批准操作</strong>。一个任务可能产生多次审批——本机实测任务二一趟就有 3 张单。</p>
+<div class="why-box">
+<strong>为什么验收重点是系统行为而不是模型输出？</strong> 笔记 1.1 的十项可验收能力全部落在「运行了什么测试、收到什么结果、做了什么修改、最终验证证据是什么」。模型的自然语言总结可以编（README 记录了真实事故：pi 入口的模型在补丁被拦后<strong>自己宣布审批已通过</strong>，而文件没落盘）；审计是 Runtime 写的，模型改不动。所以交付判定只认审计——这条纪律会在第 8 节的 <code>deliverable.ts</code> 里变成代码。
+</div>
+
+<h3 id="sec2">2. 按职责切分：pi Loop × LangGraph 审批图</h3>
+<p>笔记 7.1 的模块职责表，对应到代码就是八个组件：任务装配（<code>platform.ts</code> + <code>tasks.ts</code>）、计划管理（任务 brief + 决策脚本）、模型与决策适配（<code>pi/provider.ts</code> + <code>pi/decider.ts</code>）、Tool Runtime（<code>runtime.ts</code>）、仓库工具（<code>tools/</code>）、上下文处理（<code>context-budget.ts</code>）、状态与 Checkpoint（<code>store.ts</code> + hitl 存档）、完成检查与评估（<code>deliverable.ts</code> + <code>eval.ts</code>）。</p>
+<figure class="diagram" id="fig2">
+<svg viewBox="0 0 760 560" role="img" aria-label="project3 按职责切分的架构">
+  <defs><marker id="m2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">主体 Agent 用 Loop，审批服务用图，账本在 SQLite</text>
+  <text class="dg-soft" x="20" y="46">两条入口共用同一套 Runtime 护栏；审批经 HTTP 交给 LangGraph，人不批就不执行。</text>
+
+  <rect class="dg-zone" x="16" y="60" width="430" height="380" rx="8"/>
+  <text class="dg-label" x="231" y="82" text-anchor="middle">TS 主体（v2/src）</text>
+  <rect class="dg-zone" x="470" y="60" width="274" height="380" rx="8"/>
+  <text class="dg-label" x="607" y="82" text-anchor="middle">Python 审批服务（v2/hitl）</text>
+
+  <rect class="dg-node" x="30" y="96" width="180" height="36" rx="6"/>
+  <text class="dg-label" x="120" y="119" text-anchor="middle">入口 A：cli.ts agent</text>
+  <rect class="dg-node" x="240" y="96" width="190" height="36" rx="6"/>
+  <text class="dg-label" x="335" y="119" text-anchor="middle">入口 B：pi 扩展点</text>
+
+  <rect class="dg-node" x="30" y="156" width="400" height="40" rx="6"/>
+  <text class="dg-label" x="230" y="181" text-anchor="middle">pi Loop：决策器（real: DeepSeek / mock: 离线脚本）</text>
+  <path class="dg-arrow" d="M120 132 L120 156" marker-end="url(#m2)"/>
+  <path class="dg-arrow" d="M335 132 L335 156" marker-end="url(#m2)"/>
+
+  <rect class="dg-node" x="30" y="216" width="185" height="36" rx="6"/>
+  <text class="dg-label" x="122" y="239" text-anchor="middle">context-budget 渲染</text>
+  <rect class="dg-node" x="245" y="216" width="185" height="36" rx="6"/>
+  <text class="dg-label" x="337" y="239" text-anchor="middle">loop-guard 预算护栏</text>
+  <path class="dg-arrow" d="M230 196 L230 216" marker-end="url(#m2)"/>
+
+  <rect class="dg-node-accent" x="30" y="272" width="400" height="40" rx="6"/>
+  <text class="dg-label" x="230" y="297" text-anchor="middle">ToolRuntime：Schema → 契约 → 策略/审批 → 执行</text>
+  <path class="dg-arrow-accent" d="M230 252 L230 272" marker-end="url(#m2)"/>
+
+  <rect class="dg-node" x="30" y="332" width="185" height="36" rx="6"/>
+  <text class="dg-label" x="122" y="355" text-anchor="middle">十件仓库工具</text>
+  <rect class="dg-node" x="245" y="332" width="185" height="36" rx="6"/>
+  <text class="dg-label" x="337" y="355" text-anchor="middle">Sandbox 边界</text>
+  <path class="dg-arrow" d="M230 312 L230 332" marker-end="url(#m2)"/>
+
+  <rect class="dg-node-muted" x="30" y="392" width="400" height="34" rx="6"/>
+  <text class="dg-label" x="230" y="414" text-anchor="middle">data/platform.db：approvals / audit / trace（SQLite）</text>
+  <path class="dg-arrow" d="M230 368 L230 392" marker-end="url(#m2)"/>
+
+  <rect class="dg-node" x="486" y="96" width="242" height="36" rx="6"/>
+  <text class="dg-label" x="607" y="119" text-anchor="middle">service.py（HTTP :8383）</text>
+  <rect class="dg-node" x="486" y="156" width="242" height="36" rx="6"/>
+  <text class="dg-label" x="607" y="179" text-anchor="middle">check_eligible：名单第一道门</text>
+  <rect class="dg-node-accent" x="486" y="216" width="242" height="36" rx="6"/>
+  <text class="dg-label" x="607" y="239" text-anchor="middle">request_human：interrupt()</text>
+  <rect class="dg-node" x="486" y="276" width="242" height="36" rx="6"/>
+  <text class="dg-label" x="607" y="299" text-anchor="middle">check_approver：第二道门</text>
+  <rect class="dg-node-muted" x="486" y="336" width="242" height="34" rx="6"/>
+  <text class="dg-label" x="607" y="358" text-anchor="middle">SqliteSaver：HITL_DB 存档</text>
+  <path class="dg-arrow" d="M607 132 L607 156" marker-end="url(#m2)"/>
+  <path class="dg-arrow" d="M607 192 L607 216" marker-end="url(#m2)"/>
+  <path class="dg-arrow" d="M607 252 L607 276" marker-end="url(#m2)"/>
+  <path class="dg-arrow" d="M607 312 L607 336" marker-end="url(#m2)"/>
+
+  <path class="dg-arrow-accent" d="M430 285 C455 285 455 114 486 114" marker-end="url(#m2)"/>
+  <text class="dg-soft" x="452" y="200" text-anchor="middle" transform="rotate(-90 452 200)">提单 / 轮询答复</text>
+
+  <rect class="dg-node" x="470" y="470" width="274" height="40" rx="6"/>
+  <text class="dg-label" x="607" y="495" text-anchor="middle">人：另一个终端 approvals decide</text>
+  <path class="dg-arrow-accent" d="M607 470 L607 376" marker-end="url(#m2)"/>
+  <text class="dg-faint" x="607" y="530" text-anchor="middle">Command(resume) 从存档恢复，跨进程可接</text>
+  <text class="dg-faint" x="231" y="452" text-anchor="middle">图不可达 / 没人有资格批 / 人工拒绝 → 一律停手，绝不当成「批过了」</text>
+</svg>
+<figcaption>图 2 · 按职责切分的架构（笔记 7.1 + <code>runtime.ts</code> gateForPi + <code>hitl/graph.py</code>）。开放探索留给 pi Loop；需要显式迁移、人工中断、跨进程恢复的<strong>审批这一段</strong>交给图。两边通过 Run 编号（trace_id）与审批编号连接。</figcaption>
+</figure>
+<p>决策器三档（README「切回离线」）：<code>--decider real</code>（默认，直连 DeepSeek；没设 <code>DEEPSEEK_API_KEY</code> 时按任务脚本降级并在开头说破）/ <code>auto</code>（离线优先）/ <code>mock</code>（只准离线，没脚本直接报 <code>SCRIPT_REQUIRED</code>）。三种口径都会把「这一趟是谁在决策」打在开头，并写进 <code>decider.selected</code> 这笔账。<strong>离线脚本可以检查工具与审批路径，但两类任务的模型能力验收要以真实模型运行结果为准</strong>（笔记 1.3）。</p>
+<div class="why-box">
+<strong>为什么不把整个系统画成一张大图？</strong> 0015 已经给过判断：图的价值在显式状态与迁移，代价是 State 契约与装配成本。代码任务的主体是「下一步依赖上一步真实结果」的开放探索——路径无法提前枚举，画图反而把灵活性锁死；审批则是「提单 → 资格门 → 等人 → 答复门 → 终局」的固定形状，且必须跨进程恢复，正是图的主场。按职责切分后，两边各自可独立测试：TS 侧 121 条单测不依赖 HTTP 服务，hitl 侧 25 条 pytest 不依赖 Node。替代方案「全图」的代价是每次模型决策都要过一遍 State 序列化；「全 Loop」的代价是审批恢复要自己写存储——当前约束下各取所长。
+</div>
+
+<h3 id="sec3">3. 任务差异放配置，新能力扩代码</h3>
+<p>真实岗位任务会增加。如果每加一个任务都要在 Loop、工具函数和审批模块里改一遍，成本会失控（笔记 3.7 三）。项目的回答是 <code>config/tasks.yaml</code>：<strong>任务目标、允许范围、检查范围、输出路径、预算和审批要求写进配置；具体读哪个文件、下一步做什么，仍由模型决定。</strong><code>src/</code> 下任何 TypeScript 文件都不出现任务名——<code>tasks.ts</code> 只是解释器。</p>
+<table>
+  <tr><th>任务条目</th><th>门口 gate</th><th>裁定 via</th><th>名单 approvers</th><th>关键约束</th></tr>
+  <tr><td><code>understand</code>（任务一）</td><td>auto（工具自带确认要求）</td><td>local（本地表）</td><td>maintainer</td><td>交付物 <code>artifacts/login-flow.md</code>；唯一写操作是文档</td></tr>
+  <tr><td><code>fix_tests</code>（任务二）</td><td>[run_test]（点名追加）</td><td>http（LangGraph 图）</td><td>maintainer、tech_lead</td><td><code>deny_write_extra: tests/**</code> + <code>allow_write_extra: tests/generated/**</code></td></tr>
+  <tr><td><code>debt_audit</code>（任务三）</td><td>none（一个都不拦）</td><td>local</td><td>—</td><td><strong>纯配置新增</strong>：一次检索、一份报告，TS 一行未改</td></tr>
+</table>
+<p>三个键是正交的（tasks.yaml 注释原话）：<strong>gate 管「要不要过人」，via 管「谁来裁定」，approvers 管「谁批算数」</strong>。关掉门口不等于放开审批，换成图也不等于门口开着。环境变量 <code>HITL_MODE</code> 这一层永远大过 tasks.yaml 的 via，但它<strong>只换裁定人，不动门口</strong>：<code>HITL_MODE=disabled</code> 退到本地表后，<code>审批门口=[run_test]</code> 照旧生效，第一次 run_test 仍被拦下（本机实测）。</p>
+<p>两处「失败关闭」值得记住：① 名单清空不是「谁都能批」，而是图在第一道门就把单子弹回（<code>NO_APPROVER_CONFIGURED</code>），连人都不会惊动；② gate=none 的任务每次放行都单独留一条 <code>APPROVAL_GATE_OFF</code> 审计——「没人看着」和「没记录」是两件事（<code>runtime.ts</code> prepare 里的专门分支）。</p>
+<div class="why-box">
+<strong>为什么 debt_audit 是这条原则的论据？</strong> 判断「任务差异写错位置还是引擎缺通用能力」的试金石：如果接新任务必须在多个模块追加 <code>if (taskType === "docs_audit")</code>，就要停下来检查。debt_audit 用「一次检索 + 一份新报告 + 一次 git_status」全部由已有工具完成，所以它只加了一个 YAML 条目和一份决策脚本。替代方案「每类任务一个专用 Agent」的代价是治理链分叉——0007 的 MCP 教训（治理不分叉）在这里同样适用：入口可以多个，护栏必须一套。
+</div>
+
+<h3 id="sec4">4. 工具契约：两层定义、四层检查</h3>
+<p>模型决定读取登录入口，却传来坏参数——应该在 handler 执行前被拦下，并把<strong>具体错误</strong>反馈给模型（笔记 3.7 四）。项目把契约分成两层（<code>contract.ts</code> 头注）：</p>
+<ul>
+  <li><strong>第一层 · 声明式边界</strong>：直接写在每件工具的 TypeBox 参数定义里（minimum / maximum / minLength / description）。<strong>模型只看得到这份 Schema</strong>——它既是说明书，也是上游校验器的依据，所以能写在这里的边界一定要写在这里。</li>
+  <li><strong>第二层 · 语义规则</strong>：Schema 表达不了、又注定办不成事的参数——绝对路径（<code>CONTRACT_PATH_MUST_BE_RELATIVE</code>）、目录当文件读（<code>CONTRACT_PATH_IS_DIRECTORY</code>）、以 / 开头的 glob（<code>CONTRACT_GLOB_NEVER_MATCHES</code>）、编译不出来的正则（<code>CONTRACT_PATTERN_NOT_REGEX</code>）、整批空操作补丁（<code>CONTRACT_PATCH_NO_CHANGES</code>）、空白命令（<code>CONTRACT_COMMAND_BLANK</code>）。统一 <code>CONTRACT_</code> 前缀，审计里一眼分得清是哪层拦的。</li>
+</ul>
+<figure class="diagram" id="fig3">
+<svg viewBox="0 0 760 500" role="img" aria-label="四层检查漏斗">
+  <defs><marker id="m3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">一次工具调用要过的检查层：每层回答不同的问题</text>
+  <text class="dg-soft" x="20" y="46">笔记 4.2 的四层表 + 执行业务事实。层级不能混：类型正确的越界路径不在 Schema 层拦。</text>
+
+  <rect class="dg-node" x="120" y="66" width="380" height="44" rx="6"/>
+  <text class="dg-label" x="310" y="85" text-anchor="middle">① 参数 Schema：字段、类型、范围符合契约吗？</text>
+  <text class="dg-faint" x="310" y="101" text-anchor="middle">上游 validateToolArguments（注意：先做 Value.Convert 类型折叠）</text>
+  <rect class="dg-node" x="140" y="136" width="340" height="44" rx="6"/>
+  <text class="dg-label" x="310" y="155" text-anchor="middle">② 语义契约：这次调用注定办不成事吗？</text>
+  <text class="dg-faint" x="310" y="171" text-anchor="middle">contract.ts：绝对路径 / 空补丁 / 坏正则 / 空白命令</text>
+  <rect class="dg-node" x="160" y="206" width="300" height="44" rx="6"/>
+  <text class="dg-label" x="310" y="225" text-anchor="middle">③ 权限与审批：当前任务和用户允许吗？</text>
+  <text class="dg-faint" x="310" y="241" text-anchor="middle">policy.ts + 任务门口 gate + 名单 approvers</text>
+  <rect class="dg-node" x="180" y="276" width="260" height="44" rx="6"/>
+  <text class="dg-label" x="310" y="295" text-anchor="middle">④ Sandbox：实际访问在边界内吗？</text>
+  <text class="dg-faint" x="310" y="311" text-anchor="middle">resolve 后校验 / deny_write / 允许例外 / 密钥剔除</text>
+  <rect class="dg-node-ok" x="200" y="346" width="220" height="44" rx="6"/>
+  <text class="dg-label" x="310" y="365" text-anchor="middle">⑤ 工具执行：业务事实成立吗？</text>
+  <text class="dg-faint" x="310" y="381" text-anchor="middle">文件存在？补丁匹配？命令能完成？</text>
+
+  <path class="dg-arrow" d="M310 110 L310 136" marker-end="url(#m3)"/>
+  <path class="dg-arrow" d="M310 180 L310 206" marker-end="url(#m3)"/>
+  <path class="dg-arrow" d="M310 250 L310 276" marker-end="url(#m3)"/>
+  <path class="dg-arrow" d="M310 320 L310 346" marker-end="url(#m3)"/>
+
+  <rect class="dg-node-warn" x="540" y="136" width="200" height="60" rx="6"/>
+  <text class="dg-label" x="640" y="158" text-anchor="middle">../../outside.txt</text>
+  <text class="dg-faint" x="640" y="174" text-anchor="middle">类型是字符串，过①②</text>
+  <text class="dg-faint" x="640" y="188" text-anchor="middle">在④被 PATH_OUT_OF_WORKSPACE 拒</text>
+  <path class="dg-arrow-warn" d="M500 290 L540 180" marker-end="url(#m3)"/>
+
+  <rect class="dg-node-warn" x="540" y="236" width="200" height="60" rx="6"/>
+  <text class="dg-label" x="640" y="258" text-anchor="middle">limit: 99999</text>
+  <text class="dg-faint" x="640" y="274" text-anchor="middle">在①被 INVALID_ARGUMENT 拒</text>
+  <text class="dg-faint" x="640" y="288" text-anchor="middle">账上只有 policy_decision，handler=0</text>
+  <path class="dg-arrow-warn" d="M500 92 L540 250" marker-end="url(#m3)"/>
+
+  <text class="dg-soft" x="310" y="424" text-anchor="middle">被①②③拦下的调用：一次文件系统都不触达（runtime.ts prepare 在策略与执行之前）</text>
+  <text class="dg-faint" x="310" y="448" text-anchor="middle">拒绝也要留痕：reject() 写 policy_decision 审计 + tool.denied Trace，错误带原 toolCallId 回喂模型</text>
+  <text class="dg-faint" x="310" y="470" text-anchor="middle">回喂文案 = 上游错误 + describeContractFor（合格长什么样）+「只改点名字段，重发会被判 REPEATED_TOOL_CALL」</text>
+</svg>
+<figcaption>图 3 · 四层检查漏斗（笔记 4.2 表 + <code>runtime.ts</code> prepare 顺序 + <code>sandbox.ts</code>）。参数校验回答「符不符合契约」，权限审批回答「许不允许」，Sandbox 回答「实际影响范围」，工具执行回答「业务事实成不成立」——<strong>层级不能混</strong>。</figcaption>
+</figure>
+<p><strong>参数错误怎样反馈</strong>（笔记 4.3）：返回结构化失败，保留原 <code>toolCallId</code>，并说清 <code>execution.started: false</code>——后续处理需要知道这次操作有没有实际发生。模型修正参数后重新提交，<strong>新调用再次经过参数、权限、预算和 Sandbox 完整检查</strong>。参数错误通常不能靠原样重试解决：path 传成数字，重复十次仍然是数字；连续提交相同无效参数会撞上循环预算与 <code>REPEATED_TOOL_CALL</code> 护栏。项目的回喂文案比笔记示例更进一步：把整份契约贴给模型（「合格长什么样」），并警告重发后果——<strong>被拒之后模型拿到的是下一步，不是一句不行</strong>（kg_contract.test.ts 原话）。</p>
+<div class="why-box">
+<strong>⚠️ 材料与实现不一致（本课核对发现，以代码和测试为准）</strong>：笔记 4.3 举例 <code>{"path": 42}</code> 应返回 <code>INVALID_ARGUMENT</code> 且 <code>started: false</code>。但本机实测：pi-ai 的 <code>validateToolArguments</code> 会先执行 <code>Value.Convert</code> 做<strong>类型折叠</strong>——42 被折成字符串 "42"，通过 Schema，handler 真的去读了文件（报 ENOENT）。这不是 bug 而是上游的设计，单测明确写着「<strong>类型写错由上游顺手纠正，我们不再造第二个校验器</strong>」（<code>limit: "2"</code> 折成 2 后成功读取）。所以「handler 调用次数为 0」的关键证据要用<strong>折叠不掉的错误</strong>来验证：缺必填字段（write_file 缺 content）、超范围（limit 99999）、多余字段（additionalProperties: false）——本机实测这三类都在 handler 前被拦，账上只有 policy_decision。延续 0014/0015 的纪律：设计文档与实现不一致时，以代码和测试为准。
+</div>
+<p>契约还要<strong>自检</strong>：<code>verifyContracts</code> 在装配阶段检查「每件工具的 Schema 有没有 description、limit 有没有上下界、additionalProperties 是否为 false、语义规则指向的工具与字段是否真实存在」。为什么不等模型跑到第 5 轮才发现？因为契约写错与规则失效都是「看起来一切正常、真要拦时一句都没拦住」的故障（contract.ts 注释）。<code>cli contract</code> 命令把模型视角摊开打印——交付前先对一遍「模型能看到什么」。</p>
+
+<h3 id="sec5">5. 上下文与预算：两笔账分开记</h3>
+<p>代码任务的特点：用户输入很短，工具输出却可能很长（笔记 3.7 五）。「帮我修复登录问题」一句话，后面跟着几十条搜索结果、几百行源码、多轮测试日志和 Diff。如果每轮都带全文，输入持续增长，<strong>旧日志还会淹没当前失败</strong>。预算分两层：</p>
+<ul>
+  <li><strong>单次上下文预算</strong>：这一轮最多给模型多少输入，还要为输出留空间；</li>
+  <li><strong>任务累计预算</strong>：整个任务最多消耗多少 Token、费用、工具调用和时间（<code>loop-guard.ts</code>：max_turns / max_tool_calls / max_total_tokens / max_cost_usd / max_duration_ms）。</li>
+</ul>
+<p><strong>压缩只减少后续请求输入，已经发生的消耗仍计入任务预算。</strong>系统提示词、工具定义和当前用户要求也占空间，检查时要一起算。</p>
+<figure class="diagram" id="fig5">
+<svg viewBox="0 0 760 440" role="img" aria-label="上下文两笔账">
+  <defs><marker id="m5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">渲染进模型的 与 写进审计的，是两笔账</text>
+  <text class="dg-soft" x="20" y="46">context-budget.ts 是单一出口：renderContext / summarizeStep / clipForAudit，别处不许各写一份。</text>
+
+  <rect class="dg-zone" x="16" y="60" width="350" height="290" rx="8"/>
+  <text class="dg-label" x="191" y="82" text-anchor="middle">模型这笔账：renderContext</text>
+  <rect class="dg-node" x="30" y="96" width="322" height="36" rx="6"/>
+  <text class="dg-label" x="191" y="119" text-anchor="middle">pinned：系统提示 / 用户目标 / 禁止事项（逐字保留）</text>
+  <rect class="dg-node-accent" x="30" y="146" width="322" height="52" rx="6"/>
+  <text class="dg-label" x="191" y="167" text-anchor="middle">旧步骤 → 一行确定性摘要（不请模型帮忙）</text>
+  <text class="dg-faint" x="191" y="185" text-anchor="middle">「第N步 read_file(path=…) → OK · 37 行 / 1204 字符」</text>
+  <rect class="dg-node" x="30" y="212" width="322" height="36" rx="6"/>
+  <text class="dg-label" x="191" y="235" text-anchor="middle">最近 keep_recent_turns=2 步：逐字保留</text>
+  <rect class="dg-node-muted" x="30" y="262" width="322" height="44" rx="6"/>
+  <text class="dg-label" x="191" y="281" text-anchor="middle">摘要不比原文短 → 宁可不压（applied=false）</text>
+  <text class="dg-faint" x="191" y="297" text-anchor="middle">stats：chars/tokens before→after + rendered_hash</text>
+  <text class="dg-faint" x="191" y="330" text-anchor="middle">摘要里参数照抄：模型可原样重发工具补查原文</text>
+
+  <rect class="dg-zone" x="396" y="60" width="348" height="290" rx="8"/>
+  <text class="dg-label" x="570" y="82" text-anchor="middle">审计这笔账：clipForAudit</text>
+  <rect class="dg-node" x="410" y="96" width="320" height="36" rx="6"/>
+  <text class="dg-label" x="570" y="119" text-anchor="middle">按行截断：≤30 行且 ≤4000 字符（绝不切半行）</text>
+  <rect class="dg-node" x="410" y="146" width="320" height="36" rx="6"/>
+  <text class="dg-label" x="570" y="169" text-anchor="middle">留 total_lines / total_chars / kept_lines</text>
+  <rect class="dg-node-accent" x="410" y="196" width="320" height="36" rx="6"/>
+  <text class="dg-label" x="570" y="219" text-anchor="middle">full_sha256：整份输出的全量哈希</text>
+  <rect class="dg-node-muted" x="410" y="246" width="320" height="60" rx="6"/>
+  <text class="dg-label" x="570" y="268" text-anchor="middle">事后对账：拿哈希对哈希，证明「模型当时</text>
+  <text class="dg-label" x="570" y="284" text-anchor="middle">看到的就是这一份」，不必把 12k 字符塞进库</text>
+  <text class="dg-faint" x="570" y="330" text-anchor="middle">模型拿整份输出，数据库拿截断版 + 哈希——两边不是一份文本，写在账上</text>
+
+  <rect class="dg-node-warn" x="16" y="368" width="728" height="44" rx="6"/>
+  <text class="dg-label" x="380" y="387" text-anchor="middle">任务累计预算（loop-guard）：压缩省下的只是后续输入，已发生的消耗照记</text>
+  <text class="dg-faint" x="380" y="403" text-anchor="middle">freshTokensOf 只算 input+output：pi 的 totalTokens 把同一批 prompt 在 input 与 cacheWrite 里算两遍，会提前撞线</text>
+</svg>
+<figcaption>图 5 · 上下文两笔账（笔记 5.1–5.3 + <code>context-budget.ts</code> + <code>loop-guard.ts</code>）。本机实测任务一第 6 轮：5 步中 3 步被摘要，chars 6652→2716、tokens 1362→371，<code>applied=true</code>，rendered_hash 可复现。</figcaption>
+</figure>
+<p><strong>为什么不用 pi 自带的 compact()？</strong>context-budget.ts 头注给了理由：它要调一次模型生成摘要，摘要文字每次跑都不一样；离线跑（脚本决策器）根本没有可用的摘要模型，课后复现和评估器对账都无从下手。这里的压缩<strong>纯按规则裁剪，同一份输入永远得到同一份输出</strong>。这是「确定性摘要先行，再考虑让模型参与」的工程化（笔记 5.2 末段）。</p>
+<p><strong>三类证据绝不能丢</strong>（笔记 5.2，复习问题 Q17）：① 尚未解决的失败——错误位置、表现、日志引用；② 操作是否真的发生——<strong>等待审批、已应用、结果不明是三种状态</strong>；③ 验证结果对应哪个版本——测试通过后代码又变了，旧结果只能说明修改前状态。其余完整源码、日志、Diff 保存引用，需要时再读回。压缩后的记录要回答四件事：做过什么、得到什么结果、依据在哪里、还有什么没确认；「已确认」和「当前判断」要分开，避免猜测下一轮变成结论。消息协议要求 Tool Call 与结果配对，压缩时<strong>不能删掉调用只留无编号结果</strong>。</p>
+<p>测试日志的截断顺序（笔记 5.1）：保留退出码和超时状态 → 提取可识别的失败信息 → 剩余空间展示片段 → 提取失败时保留有限首尾 → 提供完整日志位置。<strong>不能只留前几百行</strong>——真正的失败可能在中间或末尾。模型看到 <code>truncated: true</code> 就知道观察不完整，需要时按引用补查。</p>
+<div class="why-box">
+<strong>为什么审计要存哈希而不是全文？</strong> 审计回答「发生过什么」，不是「全文是什么」。全文塞进数据库会让账本膨胀、查询变慢，而且脱敏后的文本也未必适合长期保存；但只存截断版又无法证明完整性。截断 + 全量哈希是取舍后的中间态：平时翻账看头部，争议时拿哈希对哈希。替代方案「全文入库」的代价是存储与泄漏面，「只存摘要」的代价是不可对账——当前约束（课堂可复现、事后可复核）下选哈希。
+</div>
+
+<h3 id="sec6">6. HITL：审批与执行分离</h3>
+<p>审批机制在第二章已经存在，本节把它放进具体任务流程，回答三个问题（笔记 3.7 六）：<strong>哪里设确认点、确认时给人看什么、批准后由谁执行。</strong></p>
+<p><strong>哪里设确认点</strong>：代码理解任务里，list_files / read_directory / search_code / read_file 在授权范围内自动执行（仍要过参数校验、权限检查和沙箱）；在产物目录<strong新建</strong>报告满足预授权条件时自动执行；<strong覆盖已有</strong>文档要展示差异后确认；改动业务源码按任务权限拒绝或另行授权。<strong>不能仅按工具名放行所有 write_file</strong>——新建报告和覆盖源码影响完全不同，审批策略要结合任务类型、目标路径和写入方式。任务二把 <code>run_test</code> 点名进门口，因为它实际执行的是仓库里的 npm script——<strong>审批人要看最终解析出的命令</strong>，不是工具名。</p>
+<p><strong>给人看什么</strong>（笔记 6.3）：用户目标、失败证据、目标文件与补丁、当前验证状态、影响范围、操作编号与有效期。审批摘要要分清事实与推断：「三条测试失败」来自工具结果，「可能与日期粒度有关」是当前诊断，「补丁能修复」在复测前仍是未验证。<strong>批准只表示允许执行，执行后的验证才决定任务是否完成。</strong></p>
+<figure class="diagram" id="fig4">
+<svg viewBox="0 0 760 540" role="img" aria-label="审批与执行分离时序">
+  <defs><marker id="m4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">decide 只授权，execute 才落盘；一张单只能被领取一次</text>
+  <text class="dg-soft" x="20" y="46">本地路径（任务一）：CLI 收口返回 pending_approval_id，人批完后显式 execute。图路径（任务二）：Loop 原地轮询等答复。</text>
+
+  <rect class="dg-node" x="20" y="66" width="150" height="34" rx="6"/>
+  <text class="dg-label" x="95" y="88" text-anchor="middle">Loop / 模型</text>
+  <rect class="dg-node" x="210" y="66" width="150" height="34" rx="6"/>
+  <text class="dg-label" x="285" y="88" text-anchor="middle">Runtime + 本地表</text>
+  <rect class="dg-node" x="400" y="66" width="150" height="34" rx="6"/>
+  <text class="dg-label" x="475" y="88" text-anchor="middle">LangGraph 图</text>
+  <rect class="dg-node" x="590" y="66" width="150" height="34" rx="6"/>
+  <text class="dg-label" x="665" y="88" text-anchor="middle">人（终端 B）</text>
+  <path class="dg-line" d="M95 100 L95 500"/>
+  <path class="dg-line" d="M285 100 L285 500"/>
+  <path class="dg-line" d="M475 100 L475 500"/>
+  <path class="dg-line" d="M665 100 L665 500"/>
+
+  <path class="dg-arrow" d="M95 122 L285 122" marker-end="url(#m4)"/>
+  <text class="dg-soft" x="190" y="116" text-anchor="middle">apply_patch（高风险）</text>
+  <rect class="dg-node-accent" x="210" y="136" width="150" height="40" rx="6"/>
+  <text class="dg-label" x="285" y="153" text-anchor="middle">createApproval</text>
+  <text class="dg-faint" x="285" y="168" text-anchor="middle">绑定 args_digest 参数指纹</text>
+  <path class="dg-arrow" d="M285 190 L475 190" marker-end="url(#m4)"/>
+  <text class="dg-soft" x="380" y="184" text-anchor="middle">HTTP 提单（图路径）</text>
+  <rect class="dg-node" x="400" y="204" width="150" height="40" rx="6"/>
+  <text class="dg-label" x="475" y="221" text-anchor="middle">资格门 → interrupt</text>
+  <text class="dg-faint" x="475" y="236" text-anchor="middle">状态落 SQLite，进程可退</text>
+  <path class="dg-arrow" d="M475 258 L665 258" marker-end="url(#m4)"/>
+  <text class="dg-soft" x="570" y="252" text-anchor="middle">审批单：目标+补丁+证据</text>
+  <path class="dg-arrow-accent" d="M665 286 L475 286" marker-end="url(#m4)"/>
+  <text class="dg-soft" x="570" y="280" text-anchor="middle">decide approve（角色要在名单）</text>
+  <rect class="dg-node" x="400" y="300" width="150" height="40" rx="6"/>
+  <text class="dg-label" x="475" y="317" text-anchor="middle">答复门：禁自批 / 查角色</text>
+  <text class="dg-faint" x="475" y="332" text-anchor="middle">approved 才算数</text>
+  <path class="dg-arrow" d="M475 354 L285 354" marker-end="url(#m4)"/>
+  <text class="dg-soft" x="380" y="348" text-anchor="middle">轮询拿到终局 / 本地 decide</text>
+  <rect class="dg-node-accent" x="210" y="368" width="150" height="56" rx="6"/>
+  <text class="dg-label" x="285" y="386" text-anchor="middle">executeApproval 复核</text>
+  <text class="dg-faint" x="285" y="400" text-anchor="middle">指纹一致？一次性领取？</text>
+  <text class="dg-faint" x="285" y="414" text-anchor="middle">契约+策略重跑一遍</text>
+  <path class="dg-arrow" d="M285 438 L95 438" marker-end="url(#m4)"/>
+  <text class="dg-soft" x="190" y="432" text-anchor="middle">沙箱内执行 → 结果回写</text>
+  <rect class="dg-node-warn" x="210" y="456" width="340" height="40" rx="6"/>
+  <text class="dg-label" x="380" y="473" text-anchor="middle">第二次 execute 同一张单 → APPROVAL_NOT_EXECUTABLE</text>
+  <text class="dg-faint" x="380" y="488" text-anchor="middle">参数变了 → APPROVAL_BINDING_MISMATCH（旧审批失效）</text>
+</svg>
+<figcaption>图 4 · 审批与执行分离（笔记 6.2 + <code>runtime.ts</code> openApproval / executeApproval + <code>hitl/graph.py</code> 两道门）。本机实测：decide 批准后文件仍不存在；execute 才创建 login-flow.md（1562 字节）；重复 execute 被拒。</figcaption>
+</figure>
+<p><strong>批准后由谁执行</strong>（笔记 6.2）：本地审批路径由<strong>显式执行动作</strong>（<code>approvals execute</code>）领取并执行获批操作；HTTP 审批路径由<strong>等待中的任务</strong>收到批准后继续（Loop 每 250ms 轮询，最长等 120 秒）。<strong>同一张审批单只能被一条路径领取，重复点击不能重复写入。</strong>拒绝、过期、服务不可达也要有明确结果。</p>
+<p>图的两道门（<code>hitl/graph.py</code>）：<strong>check_eligible</strong> 在提单时判「这单有没有人够格批」——名单为空回 <code>NO_APPROVER_CONFIGURED</code>，发起人角色与名单无交集回 <code>NO_ELIGIBLE_APPROVER</code>，都不必打扰人；<strong>check_approver</strong> 在答复后判「批的人对不对」——action 必须是 approve/reject、<strong>审批人不能是发起人本人</strong>（<code>SELF_APPROVAL_DENIED</code>）、角色必须落在名单里（<code>APPROVER_ROLE_DENIED</code>）。本机实测：用名单外的 developer 角色批单，图回 rejected，跑 agent 的终端<strong>当场收口，收口码就是图给的那一个</strong>，样本仓库一字未动。</p>
+<p><strong>获有效批准后还要复核</strong>（笔记 7.3 + executeApproval 代码）：审批单里的参数是从数据库读回来的，没有任何上游校验器看过它——所以<strong>参数指纹比对、一次性领取（claimApproval）、契约与策略全部重跑一遍</strong>。批「往 src/a.ts 写」不等于批「往任何地方写」，也不等于批「这个参数本身合法」。等待期间文件被改、配置变化，旧批准就不能用于新现场（复习问题 Q18）。</p>
+<p><strong>中断恢复的五种情况</strong>（笔记 7.3 表）：等待审批 → 查询原审批状态，核对有效期和待执行内容；已批准未执行 → 重新检查执行条件再领取；操作可能已发出、结果未保存 → <strong>先核对文件或进程现场</strong>；结果已持久化、计划未更新 → 根据已有结果补齐状态，<strong>不再执行</strong>；补丁已应用未复测 → 继续验证当前内容。<strong>Checkpoint 保存任务状态，不能撤销已经写入的文件；审批通过也不代表补丁已经成功应用。</strong>LangGraph 审批自身的 Checkpoint 能恢复审批流程，但整个代码任务还需要计划、工具调用、工作区信息和验证证据——两者通过运行编号和审批编号连接。</p>
+<div class="why-box">
+<strong>为什么 decide 和 execute 必须是两个动作？</strong> 批准是一个<strong>授权决定</strong>，执行是一个<strong>副作用事实</strong>——两者之间隔着时间，现场可能变化。合成一个动作（批了就写）意味着授权时的快照就是执行时的现场，等待期间文件被改也照写不误；分开之后，execute 前才有机会重核指纹与策略。替代方案「审批即执行」省一条命令，代价是把 0012 的「恢复前核对现场」和 0008 的「allow ≠ 成功」全部推翻。图不可达时的两条失败路（<code>HITL_KEY_MISSING</code> / <code>HITL_UNREACHABLE</code>）也遵循同一原则：<strong>一律当成「没有人批准」，绝不能当成「批过了」</strong>——失败关闭。
+</div>
+
+<h3 id="sec7">7. 完整执行链：六步走一遍</h3>
+<p>笔记 7.2 把测试修复任务的完整执行链写成六步。对照代码逐步落点：</p>
+<ol>
+  <li><strong>接收任务并建立运行上下文</strong>：CLI 收目标、任务类型、工作目录，加载平台配置与任务配置，检查工作区，生成 Run ID，确认决策器来源（<code>cli.ts</code> → <code>platform.ts</code>）。平台和任务约束共同形成有效策略。</li>
+  <li><strong>建立计划并准备模型输入</strong>：计划层记录步骤和验收条件；上下文模块组装目标、限制、计划、近期观察和必要历史，检查输入预算再交给模型（<code>context-budget.ts</code> renderContext）。</li>
+  <li><strong>接收工具调用，进入 Runtime</strong>：按本轮工具定义校验参数，检查权限、预算和审批要求；需要审批时保存待执行操作并进入等待；获有效批准后还要确认操作内容和执行条件仍然一致（<code>runtime.ts</code> prepare / gateForPi）。</li>
+  <li><strong>在执行边界内调用工具</strong>：仓库工具在 Sandbox 范围内读取、打补丁或运行进程；结果保留退出码、错误类型、是否超时，以及文件或日志引用（<code>tools/</code> + <code>sandbox.ts</code>）。</li>
+  <li><strong>保存结果并更新进度</strong>：结果与原调用编号关联，记录审计，更新计划证据和任务状态，保存恢复所需信息；给模型的结果经过长度控制进入下一轮（<code>store.ts</code> + runtime success/reject）。<strong>测试命令执行结束可能只意味着「已取得失败基线」</strong>，是否代表「修复已通过」要看测试结果和当前阶段。</li>
+  <li><strong>检查继续还是结束</strong>：模型可以提出继续或结束；结束时由完成检查核对产物、当前测试结果和改动范围；证据不足时在剩余预算内继续，或停止并报告未完成（<code>loop-guard.ts</code> shouldStop + <code>deliverable.ts</code>）。</li>
+</ol>
+<figure class="diagram" id="fig6">
+<svg viewBox="0 0 760 560" role="img" aria-label="完整执行链流程">
+  <defs><marker id="m6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">测试修复任务的完整执行链（笔记 7.2 mermaid 的 SVG 版）</text>
+
+  <rect class="dg-node" x="280" y="44" width="200" height="34" rx="6"/>
+  <text class="dg-label" x="380" y="66" text-anchor="middle">任务进入（CLI / pi 入口）</text>
+  <rect class="dg-node" x="280" y="98" width="200" height="34" rx="6"/>
+  <text class="dg-label" x="380" y="120" text-anchor="middle">准备计划与上下文（预算内）</text>
+  <rect class="dg-node" x="280" y="152" width="200" height="34" rx="6"/>
+  <text class="dg-label" x="380" y="174" text-anchor="middle">pi 循环取得决策</text>
+  <path class="dg-arrow" d="M380 78 L380 98" marker-end="url(#m6)"/>
+  <path class="dg-arrow" d="M380 132 L380 152" marker-end="url(#m6)"/>
+
+  <path class="dg-arrow" d="M380 186 L380 212" marker-end="url(#m6)"/>
+  <rect class="dg-node-accent" x="280" y="212" width="200" height="36" rx="18"/>
+  <text class="dg-label" x="380" y="235" text-anchor="middle">工具调用 还是 结束建议？</text>
+
+  <path class="dg-arrow" d="M280 230 L160 230 L160 262" marker-end="url(#m6)"/>
+  <text class="dg-soft" x="215" y="224" text-anchor="middle">工具调用</text>
+  <rect class="dg-node" x="60" y="262" width="200" height="34" rx="6"/>
+  <text class="dg-label" x="160" y="284" text-anchor="middle">Runtime 校验与授权</text>
+  <rect class="dg-node-accent" x="60" y="316" width="200" height="36" rx="18"/>
+  <text class="dg-label" x="160" y="339" text-anchor="middle">需要审批？</text>
+  <path class="dg-arrow" d="M160 296 L160 316" marker-end="url(#m6)"/>
+  <rect class="dg-node" x="60" y="376" width="200" height="40" rx="6"/>
+  <text class="dg-label" x="160" y="393" text-anchor="middle">保存待执行操作并等待</text>
+  <text class="dg-faint" x="160" y="408" text-anchor="middle">有效批准并复核后才继续</text>
+  <path class="dg-arrow" d="M160 352 L160 376" marker-end="url(#m6)"/>
+  <text class="dg-soft" x="140" y="368" text-anchor="end">需要</text>
+  <rect class="dg-node-ok" x="60" y="440" width="200" height="34" rx="6"/>
+  <text class="dg-label" x="160" y="462" text-anchor="middle">沙箱内执行</text>
+  <path class="dg-arrow" d="M160 416 L160 440" marker-end="url(#m6)"/>
+  <path class="dg-arrow" d="M60 334 L36 334 L36 457 L60 457" marker-end="url(#m6)"/>
+  <text class="dg-soft" x="30" y="398" text-anchor="middle" transform="rotate(-90 30 398)">无需审批</text>
+
+  <rect class="dg-node" x="330" y="440" width="220" height="34" rx="6"/>
+  <text class="dg-label" x="440" y="462" text-anchor="middle">记录结果与更新状态（审计+证据）</text>
+  <path class="dg-arrow" d="M260 457 L330 457" marker-end="url(#m6)"/>
+  <path class="dg-arrow-warn" d="M260 284 L305 284 L305 440" marker-end="url(#m6)"/>
+  <text class="dg-faint" x="312" y="360" text-anchor="start" transform="rotate(-90 312 360)">校验/权限拒绝、审批拒绝或过期</text>
+  <rect class="dg-node-accent" x="330" y="496" width="220" height="36" rx="18"/>
+  <text class="dg-label" x="440" y="519" text-anchor="middle">继续条件满足？（预算+ pending）</text>
+  <path class="dg-arrow" d="M440 474 L440 496" marker-end="url(#m6)"/>
+  <path class="dg-arrow" d="M550 514 L600 514 L600 115 L480 115" marker-end="url(#m6)"/>
+  <text class="dg-soft" x="610" y="320" text-anchor="middle" transform="rotate(-90 610 320)">满足 → 回到计划与上下文</text>
+
+  <path class="dg-arrow" d="M480 230 L600 230 L600 262" marker-end="url(#m6)"/>
+  <text class="dg-soft" x="545" y="224" text-anchor="middle">结束建议</text>
+  <rect class="dg-node" x="500" y="262" width="200" height="34" rx="6"/>
+  <text class="dg-label" x="600" y="284" text-anchor="middle">核对产物与证据（完成检查）</text>
+  <rect class="dg-node-ok" x="500" y="316" width="95" height="34" rx="6"/>
+  <text class="dg-label" x="547" y="338" text-anchor="middle">交付结果</text>
+  <rect class="dg-node-warn" x="605" y="316" width="95" height="34" rx="6"/>
+  <text class="dg-label" x="652" y="338" text-anchor="middle">停止+原因</text>
+  <path class="dg-arrow" d="M575 296 L547 316" marker-end="url(#m6)"/>
+  <path class="dg-arrow" d="M625 296 L652 316" marker-end="url(#m6)"/>
+  <text class="dg-faint" x="547" y="366" text-anchor="middle">通过</text>
+  <text class="dg-faint" x="652" y="366" text-anchor="middle">无法继续</text>
+  <text class="dg-faint" x="600" y="390" text-anchor="middle">缺项且允许继续 → 回计划层</text>
+</svg>
+<figcaption>图 6 · 完整执行链（笔记 7.2）。注意两条容易被忽略的边：校验/权限拒绝也要「记录结果与更新状态」（拒绝留痕）；「继续条件」同时看预算和有没有挂着待审批单。</figcaption>
+</figure>
+<p><strong>四项能力怎样协作</strong>（笔记 7.3）：人工确认回答「这次具体操作是否获得授权」；Sandbox 回答「操作实际发生时能访问和影响什么」；Checkpoint 回答「暂停后继续执行需要哪些状态」；审计回答「提出、批准和执行了什么，结果如何」。以一次补丁为例：保存待修改路径、补丁内容、目标文件状态和审批编号 → 等待人工决定 → 批准后重新核对权限、补丁和目标文件状态 → 通过沙箱边界执行 → 结果写入审计，更新任务状态与 Checkpoint。统一关联信息四件套：<strong>Run ID 标识任务、调用编号标识动作、审批编号标识授权、产物引用指向日志或 Diff</strong>。</p>
+<div class="why-box">
+<strong>为什么「测试执行结束」不等于「修复完成」？</strong> 这是 0014「一个结果两个消费者」在结课项目里的再现：run_test 的退出码 1 对模型是「还有三条红用例要修」，对状态是「已取得失败基线」——同一个事实，两种解读，取决于当前阶段。如果程序把「进程正常结束」当成「任务完成」，就会在失败基线刚拿到时宣布修复成功。笔记 8.2 案例二给了排查顺序：模型没看到失败日志 → 查回写/截断/组装；看到了但计划标完成 → 查完成条件；模型提结束程序直接通过 → 查完成检查；修改后沿用旧通过结果 → 查证据与版本关联。<strong>先找断链，不先改 Prompt。</strong>
+</div>
+
+<h3 id="sec8">8. 验收与评估：状态 ≠ 结论</h3>
+<p>两类任务各跑一次，自动评估报告要回答的关键区分（笔记 6.4）：<strong>执行状态</strong>（完成 / 失败 / 待审批 / 取消 / 预算耗尽）与<strong>验收结果</strong>（交付条件是否通过）分开记：</p>
+<ul>
+  <li>Agent 正常结束但报告文件不存在 → 验收失败；</li>
+  <li>测试全通过但改了禁止改动的文件 → 不能通过；</li>
+  <li>代码理解文档非空 ≠ 解释准确，还要对照源码；</li>
+  <li>任务仍在等审批 → 不能计为完成。</li>
+</ul>
+<figure class="diagram" id="fig7">
+<svg viewBox="0 0 760 380" role="img" aria-label="执行状态与验收结论两维">
+  <text class="dg-title" x="20" y="24">执行状态 × 验收结论：本机 eval 实测的三个落点</text>
+  <text class="dg-soft" x="20" y="46">eval.ts 三条纪律：独立工作副本与账本；待审批就是待审批；报告只写证据，不采信模型自述。</text>
+  <path class="dg-line" d="M120 80 L120 320"/>
+  <path class="dg-line" d="M120 320 L720 320"/>
+  <text class="dg-soft" x="100" y="100" text-anchor="end">completed</text>
+  <text class="dg-soft" x="100" y="200" text-anchor="end">awaiting_approval</text>
+  <text class="dg-soft" x="100" y="290" text-anchor="end">stopped</text>
+  <text class="dg-soft" x="260" y="345" text-anchor="middle">交付物无账</text>
+  <text class="dg-soft" x="580" y="345" text-anchor="middle">交付物有账（审计可查）</text>
+
+  <rect class="dg-node-warn" x="170" y="170" width="200" height="56" rx="6"/>
+  <text class="dg-label" x="270" y="192" text-anchor="middle">任务一 / 任务二（eval 默认）</text>
+  <text class="dg-faint" x="270" y="208" text-anchor="middle">停在 AWAITING_APPROVAL</text>
+  <text class="dg-faint" x="270" y="220" text-anchor="middle">不计为完成，不代人批准</text>
+
+  <rect class="dg-node-ok" x="480" y="76" width="200" height="56" rx="6"/>
+  <text class="dg-label" x="580" y="98" text-anchor="middle">任务三 debt_audit</text>
+  <text class="dg-faint" x="580" y="114" text-anchor="middle">COMPLETED + 写入有账</text>
+  <text class="dg-faint" x="580" y="126" text-anchor="middle">gate=none 但 APPROVAL_GATE_OFF 留痕</text>
+
+  <rect class="dg-node-warn" x="170" y="76" width="200" height="56" rx="6"/>
+  <text class="dg-label" x="270" y="98" text-anchor="middle">模型自述「修好了」</text>
+  <text class="dg-faint" x="270" y="114" text-anchor="middle">审计无成功写入记录</text>
+  <text class="dg-faint" x="270" y="126" text-anchor="middle">claim_without_evidence = true</text>
+
+  <text class="dg-faint" x="420" y="368" text-anchor="middle">deliverable.ts：delivered 只看审计里最后一次成功写入；model_claims 单列，不参与 delivered</text>
+</svg>
+<figcaption>图 7 · 执行状态与验收结论是两维（笔记 6.4 + <code>eval.ts</code> + <code>deliverable.ts</code>）。本机 eval 实测：任务一 9 次调用停待审批、任务二 1 次调用停待审批（run_test 门口）、任务三 4 次调用完成且交付物有账。</figcaption>
+</figure>
+<p><code>deliverable.ts</code> 把这条纪律写成代码：<strong>delivered 只看审计</strong>——任务声明的交付物路径与审计里成功的写入对上账才算；<code>model_claims</code>（最终回答提到交付物路径）单列，<strong>不参与 delivered</strong>；两者不一致就是 <code>claim_without_evidence</code>（说了但没做）。注释里记录了真实事故：模型在 <code>PATCH_CONTEXT_NOT_FOUND</code> 之后写下「复跑全绿」。被门口拦下的尝试（等审批、被契约拒）也进 attempts——评估器要看「它试了几次、每次卡在哪」，只看跑成功的那次等于没看。</p>
+<p><code>eval.ts</code> 的三条纪律：① 每次评估用<strong>独立工作副本与独立账本</strong>（<code>.eval-runs/&lt;时间&gt;-&lt;任务&gt;/</code>）——上一趟修好的代码不能替下一趟背书；② <strong>待审批就是待审批</strong>：评估全程退到本地表裁定但绝不代人批准，自动生成报告不等于自动批准；③ <strong>报告只写证据</strong>：产物路径、审批次数、用量都取自审计与 Trace。报告落 <code>artifacts/eval_report.md</code> 与 <code>.json</code> 两份，工作副本、账本路径与 Trace 编号都写进去，便于逐条复核。</p>
+<p><strong>四类失败案例</strong>（笔记 8.2，验收必做）：① 参数错误——工具有没有提前执行？（handler=0 + 文件原样 + 修正后重新全检）② 测试失败——有没有把执行结束当成任务完成？③ 审批中断——恢复后会不会错用旧授权？（重复提交批准、批准后再次 execute 都不能重复写入）④ 文件已改、结果未保存——恢复逻辑读当前文件，区分「确认已应用 / 确认未应用 / 无法判断」，无法判断就保留现场转人工。<strong>重点证明系统没有盲目重放；即使不能自动恢复，也要说清不确定在哪里。</strong></p>
+<div class="why-box">
+<strong>为什么评估要「不代人批准」？</strong> 如果评估器自动 approve，报告里的「完成」就混进了一个不存在的人工授权——它证明的只是「脚本能跑完」，不是「治理链有效」。把待审批照实记为待审批，反而让报告能区分三种能力：工具路径通不通（调用次数与审计）、治理拦不拦得住（审批次数与停止码）、交付有没有账（delivered）。替代方案「全自动批完跑到底」适合演示，不适合验收——验收要看的恰恰是「该停的地方停没停」。
+</div>
+
+<h3 id="sec9">9. 已知边界与工程复盘</h3>
+<p>笔记 8.3 的已知边界，逐条都是面试时「结论范围」的表述训练：</p>
+<table>
+  <tr><th>边界</th><th>应怎样说明</th></tr>
+  <tr><td>样本覆盖</td><td>两类样本通过，只能证明对应任务与环境下的表现</td></tr>
+  <tr><td>新增测试</td><td>可写 tests/generated/；新用例是否有效仍需独立证据（eval 报告明确标「未覆盖」）</td></tr>
+  <tr><td>配置化</td><td>已有工具能完成的任务可复用配置；新能力仍需扩展代码</td></tr>
+  <tr><td>模型输出</td><td>同一目标可能产生不同操作顺序和消耗，按结果与约束验收</td></tr>
+  <tr><td>上下文压缩</td><td>可能省略细节，必须保留关键事实和补查入口</td></tr>
+  <tr><td>中断恢复</td><td>结果不明的写操作需核对现场，部分情况需人工接管</td></tr>
+  <tr><td>Sandbox</td><td>保护范围取决于实际执行机制，路径检查不能代替进程层隔离</td></tr>
+  <tr><td>自动评估</td><td>文件、测试、Diff 可自动核对；解释准确性仍需人工复核</td></tr>
+</table>
+<p><strong>真实模型的一次成功只是样本证据，不能推导稳定成功率。</strong>要讨论稳定性，需要固定任务集合、记录每次成败，再按数据判断（笔记 8.3 末段）——这正是你工作中 benchmark 的方法论。</p>
+<p><strong>AI 可以外包什么，工程师必须把关什么</strong>（笔记 8.4）：AI 可以整理流程、生成适配代码、编写 Schema、实现审批流、生成用例；工程师必须把关交付目标与完成条件、是否绕过关键检查、授权绑定什么与何时失效、状态是否符合现场、用例是否验证目标、修复是否处理真正原因。让 AI「加入断点恢复」，它可能生成一套能保存和读取 JSON 的代码——你还要追问：补丁执行后、结果保存前崩溃怎么办？审批过期怎么办？恢复时文件被别人改了怎么办？</p>
+<p><strong>一条连续三课的工程纪律</strong>：0014 发现作业设计文档与实现不一致（恢复范围、digest 口径），0015 发现 README 的 CLI 旧写法与固定 ticket 复用旧存档，本课发现笔记 4.3 的 <code>path: 42</code> 示例与上游类型折叠不一致。三课的处理方式相同：<strong>以代码和测试为准，把差异标出来，并用实验拿到现场证据</strong>。这不是「材料不可信」，而是工程世界的常态——文档会漂移，行为不会说谎。</p>
+<p>掌握程度三层（笔记 8.4）：<strong>能解释</strong>（Loop、Runtime、Harness、Sandbox、Checkpoint 各自负责什么）→ <strong>能追踪</strong>（沿一次任务找到输入、决策、校验、执行、回写和完成检查）→ <strong>能修复并验证</strong>（发现未校验执行、旧审批复用、错误结果丢失或写操作误重放，并用测试证明修复有效）。结课要求至少到第二层，第三层是工作里的持续修炼。</p>
+<div class="why-box">
+<strong>本章六条判断（笔记「本章总结」，结课必须能脱稿复述）</strong>：① Loop 成立的条件不是能循环，而是 <strong>Tool Result 能真实驱动下一轮</strong>；② Planning 的核心不是列步骤，而是<strong>子目标有完成标准、依赖和证据</strong>；③ Checkpoint 的核心不是保存聊天，而是<strong>恢复业务现场并能核对现实</strong>；④ Sandbox 的目标不是不犯错，而是<strong>把影响限制在可拦截、可审计、可恢复的范围内</strong>；⑤ Harness 的核心不是又多一层封装，而是<strong>保证同一事实能正确进入模型、状态、审批和完成检查</strong>；⑥ LangGraph 的价值在于<strong>把复杂流程的状态和迁移显式化</strong>，不在于所有 Agent 都必须画图。最终的项目验收不是看模型说「完成了」，而是看：参数是否经过校验、副作用是否在授权与边界内发生、测试结果是否对应当前版本、中断后能否找回进度并避免重复写入、<strong>交付物、Diff、Trace 和审批记录能否互相印证</strong>。
+</div>
+
+<h3 id="sec10">10. 面试视角：两分钟主链 + 结课复习地图</h3>
+<p>如果面试官问「介绍一下你的 Agent 项目」，不要从框架讲起，按这条链讲：</p>
+<ol>
+  <li><strong>目标与形状</strong>：两类真实仓库任务（代码理解 / 测试修复），十件仓库工具；主体是 pi Loop 的开放探索，审批这一段交给 LangGraph 图——按职责切分，不追求整系统一张大图。</li>
+  <li><strong>契约与检查</strong>：工具参数两层定义（Schema 声明式边界 + 语义规则），四层检查各答各的问题；参数错误在 handler 前拦下，错误带调用编号和「合格长什么样」回喂模型；handler=0 用审计证明。</li>
+  <li><strong>预算与证据</strong>：单次上下文与任务累计两笔账；确定性压缩不请模型帮忙，三类证据（未解决失败 / 操作是否发生 / 证据对应版本）绝不丢；审计存截断 + 全量哈希，可对账。</li>
+  <li><strong>审批与执行</strong>：decide 只授权、execute 才落盘；批准绑定参数指纹，执行前重核契约与策略，一次性领取防重复写入；图的两道门管资格与答复，失败关闭。</li>
+  <li><strong>验收</strong>：执行状态与验收结论分开；交付判定只认审计不认模型自述；评估用独立副本、不代人批准；四类失败案例逐一构造反例。</li>
+  <li><strong>边界</strong>：一次成功只是样本证据；新增测试能力标未覆盖；结果不明的写操作核对现场，必要时转人工。</li>
+</ol>
+<p><strong>常见追问与回答方向</strong>：</p>
+<ul>
+  <li>「模型说修好了，能信吗？」→ 不能；deliverable 只看审计里最后一次成功写入，model_claims 单列，claim_without_evidence 就是抓「说了没做」的。</li>
+  <li>「怎么防死循环？」→ loop-guard 的轮数/调用数/Token/费用/时长五道预算 + 相同工具与参数的重复护栏（canonicalJson 指纹）。</li>
+  <li>「审批通过后为什么还要再查文件？」→ 批准绑定的是那一次具体操作与当时现场；等待期间文件可能变了，executeApproval 重核指纹、重跑契约与策略。</li>
+  <li>「中断以后怎么恢复而不重放副作用？」→ 五种中断位置五种处理；结果不明先核对现场；Checkpoint 不能撤销已写入的文件。</li>
+  <li>「为什么不全用 LangGraph？」→ 开放探索路径无法提前枚举；图只用在状态迁移可枚举、需要跨进程恢复的审批段。</li>
+</ul>
+<p><strong>结课复习地图</strong>：笔记「本章复习问题」20 题（行 4006–4046）按小节分布——Q1–2 → 3-1（Loop 与完成契约）、Q3–4 → 3-2（计划字段与修订边界）、Q5–7 → 3-3（skipped / 会话恢复 / 结果不明）、Q8–10 → 3-4（resolve / 通用 Shell / 拒绝留痕）、Q11–12 与 Q18–19 → 3-5/3-7（两个消费者 / 旧证据 / 审批复核 / 两类产物）、Q13–15 → 3-6（interrupt / reducer / 预算）、Q16–17 与 Q20 → 3-7（handler=0 / 三类证据 / 第一个断开的连接）。参考答案在笔记行 4103 起。<strong>本课测验已把其中多道换形式纳入</strong>；结课后请对照原题做一次全量自测，每题不看答案先说 30 秒。</p>
+
+<hr>
+
+<h2 id="part2">第二部分：检索式测验（18 题 = 14 选择 + 4 简述）</h2>
+<p>Q1–Q3 换形式重测 0015 的三条核心不变量（0015 分数未报，按核心不变量兜底）；Q4–Q14 以本课为主，其中 Q4、Q5、Q9、Q10、Q12 换形式取自笔记「本章复习问题」（结课集中复测）；Q15–Q18 是简述题，覆盖契约链、上下文两笔账、审批执行分离与结课复盘。简述题先脱稿写，再展开参考答案，按得分点严格自评；漏掉关键点就选「部分对」。</p>
+<div id="quiz"></div>
+
+<hr>
+
+<h2 id="part3">第三部分：第二层练习——跑起来，再主动改造</h2>
+<p>本课全部实验<strong>不需要模型 API key</strong>：<code>--decider mock</code> 走离线脚本，确定性可复现。实验①–④是基线与两类任务闭环，⑤⑥是主动改造（先写预期再跑，完成后恢复现场）。除特别说明外，命令均从<strong>本课程仓库根目录</strong>开始；所有「本机实测」数字来自 2026-11-22 的验证运行。</p>
+
+<h3>实验 ①：基线——TS 与 Python 两侧测试先全绿</h3>
+<ul>
+  <li>TS 主体（依赖已装过可跳过 install；npm 报 EACCES 时用独立缓存兜底）：<pre>cd course_code/week03/3-7/project3/v2
+npm install            # 或 npm install --cache /tmp/npm-cache-agent
+npm test
+npm run check</pre><strong>先写预期</strong>：多少个测试文件、多少条测试？check 检查的是什么？<br>预期：<strong>14 个文件 / 121 passed</strong>（本机实测 1.82s）；<code>tsc --noEmit</code> 零报错。失败时先记录失败测试名与真实断言，不先改代码。</li>
+  <li>Python 审批服务（<strong>注意 Python 版本坑</strong>：langgraph 1.x 要求 ≥3.10，本机系统 python3 是 3.9，直接建 venv 会报「No matching distribution found for langgraph==1.2.11」；用 3.12 的解释器建）：<pre>cd course_code/week03/3-7/project3
+python3.12 -m venv .venv   # 或 conda 环境里的 3.12：~/miniconda3/envs/agentloop/bin/python -m venv .venv
+./.venv/bin/pip install -r requirements.txt -r requirements-dev.txt -r v2/hitl/requirements.txt
+cd v2
+../.venv/bin/python -m pytest hitl/ -q</pre>预期：<strong>25 passed</strong>（本机实测 0.45s，langgraph 1.2.11 / checkpoint-sqlite 3.1.1 按锁定版本安装）。这 25 条不依赖 Node 侧——两侧可独立测试正是按职责切分的收益。</li>
+  <li>样本二依赖与红基线（任务二的起点必须是 4 过 3 红）：<pre>cd course_code/week03/3-7/project3
+npm --prefix samples/2_bug_fix/demo-app install
+npm --prefix samples/2_bug_fix/demo-app test --silent | grep "ℹ tests\|ℹ pass\|ℹ fail"</pre>预期：<strong>tests 7 / pass 4 / fail 3</strong>（本机实测）。缺陷在 <code>src/auth/session-policy.ts</code>：到期比较只比到「哪天」。</li>
+</ul>
+
+<h3>实验 ②：一键评估——先学会读「状态 ≠ 结论」</h3>
+<ul>
+  <li>离线评估全部任务类型（用 --out 指到临时报告，不覆盖仓库里已提交的那份）：<pre>cd course_code/week03/3-7/project3/v2
+node --import tsx src/cli.ts eval --out artifacts/eval_verify.md
+cat artifacts/eval_verify.md</pre><strong>先写预期</strong>：三类任务各自的执行状态与验收结论？为什么任务一/二不是「已完成」？<br>预期（本机实测）：任务一 <strong>待审批</strong>（9 次调用、1 次审批）、任务二 <strong>待审批</strong>（1 次调用就停在 run_test 门口）、任务三 <strong>已完成且交付物有账</strong>（4 次调用、0 次审批，gate=none）。评估不代人批准，所以前两类绝不计为完成。</li>
+  <li>按报告的「复核路径」抽查一笔账：<pre>node --import tsx src/cli.ts audit --trace-id &lt;报告里任务三的 trace_id&gt;</pre>重点看：debt_audit 的每次放行是否都有 <code>APPROVAL_GATE_OFF</code> 的 policy_decision——「没人看着」和「没记录」是两件事。工作副本在 <code>../.eval-runs/&lt;时间&gt;-&lt;任务&gt;/repo</code>，确认原样本未被评估改动。</li>
+</ul>
+
+<h3>实验 ③：任务一闭环——批准 ≠ 执行，一张单只能领一次</h3>
+<ul>
+  <li>离线跑任务一，拿到两个编号：<pre>cd course_code/week03/3-7/project3/v2
+node --import tsx src/cli.ts agent "帮我找出该项目的登录逻辑，并生成 Markdown 说明文档。" \
+  --dir ../samples/1_login_demo --decider mock</pre><strong>先写预期</strong>：收口码是什么？<code>trace_id</code> 和 <code>pending_approval_id</code> 各用在哪里？<br>预期：<code>AWAITING_APPROVAL</code> + pending_approval_id（本机实测 6 轮 / 9 次调用；上下文压缩 applied=true，chars 6652→2716）。记下两个 id，下面用 <code>$A</code> 代指 pending_approval_id。</li>
+  <li>批准，然后<strong>先确认文件还不存在</strong>，再执行，再重复执行：<pre>node --import tsx src/cli.ts approvals decide $A --decision approve --actor trainer-1 --roles maintainer --task understand
+ls ../samples/1_login_demo/artifacts/        # 预期：不存在——批准只授权，不落盘
+node --import tsx src/cli.ts approvals execute $A --task understand
+ls -la ../samples/1_login_demo/artifacts/    # 预期：login-flow.md 已创建（本机 1562 字节）
+node --import tsx src/cli.ts approvals execute $A --task understand</pre>预期：第二次 execute 回 <strong>APPROVAL_NOT_EXECUTABLE</strong>（审批已被消费，本机实测）。这就是「重复点击不能重复写入」的现场证据。</li>
+  <li>查账并复原：<pre>node --import tsx src/cli.ts audit --trace-id &lt;trace_id&gt;
+rm -rf ../samples/1_login_demo/artifacts
+git -C ../samples/1_login_demo status --porcelain -uall   # 输出为空＝已复原</pre>审计里找：policy_decision:confirm → 批准 → tool_execution:OK 的完整链；文档内容对照源码抽查两条结论是否有文件与行号依据。</li>
+</ul>
+
+<h3>实验 ④：任务二跨进程审批——红线、三张单、全绿</h3>
+<ul>
+  <li>终端 1 起审批图（用干净存档，避免 0015 工程坑 8.2 的旧 thread 污染）：<pre>cd course_code/week03/3-7/project3/v2
+HITL_API_KEY=demo-key HITL_DB=/tmp/hitl-lab.db ../.venv/bin/python -u hitl/service.py
+# 另开一条命令确认存活：
+curl -s -H "Authorization: Bearer demo-key" http://127.0.0.1:8383/health</pre>预期：health 回 <code>{"status":"ok","graph":"approval",...}</code>。demo-key 是演示值，不是真实凭据。</li>
+  <li>终端 2 领任务（离线脚本），终端 3 先用<strong>名单外角色</strong>批第一张单：<pre># 终端 2
+HITL_API_KEY=demo-key node --import tsx src/cli.ts agent "给登录会话模块补充测试并修复失败用例" \
+  --task fix_tests --dir ../samples/2_bug_fix/demo-app --decider mock
+# 终端 3
+HITL_API_KEY=demo-key node --import tsx src/cli.ts approvals tickets --task fix_tests
+HITL_API_KEY=demo-key node --import tsx src/cli.ts approvals decide &lt;ticketId&gt; \
+  --decision approve --actor dev-9 --roles developer --task fix_tests</pre><strong>先写预期</strong>：图回什么码？跑 agent 的终端会怎样？样本仓库会变吗？<br>预期（本机实测）：图回 <code>APPROVER_ROLE_DENIED</code>，agent 终端<strong>当场收口且收口码相同</strong>，样本一字未动。「谁能批」不写在任何提示词里，改的是 tasks.yaml 的 approval.approvers。</li>
+  <li>重跑终端 2，这次用 tech_lead 逐单批（脚本共触发 <strong>3 次审批</strong>：run_test 基线、apply_patch、run_test 复跑）：<pre>HITL_API_KEY=demo-key node --import tsx src/cli.ts approvals decide &lt;ticketId&gt; \
+  --decision approve --actor lead-1 --roles tech_lead --task fix_tests
+# 每批一张，等 Loop 自己走到下一张；tickets 命令查队列</pre>预期：三张单都 approved 后，agent 收口 <code>COMPLETED</code>，交付物行显示「写入 有账可查」（本机实测）。注意：图路径不需要手动 execute——等待中的任务收到批准后自己继续。</li>
+  <li>独立复核（不信任 Agent 自述）并复原：<pre>npm --prefix ../samples/2_bug_fix/demo-app test --silent | grep "ℹ tests\|ℹ pass\|ℹ fail"
+git -C ../samples/2_bug_fix/demo-app diff --stat
+git -C ../samples/2_bug_fix/demo-app checkout -- src/auth/session-policy.ts
+git -C ../samples/2_bug_fix/demo-app status --porcelain -uall   # 空＝已复原
+pkill -f "hitl/service.py"</pre>预期：<strong>7/7 全绿</strong>；diff 只有 <code>src/auth/session-policy.ts | 4 +---（1 insertion, 3 deletions）</code>，tests/ 一行未动（本机实测与 README 一致）。日期串比较换成时间戳比较。</li>
+</ul>
+
+<h3>实验 ⑤：契约探针——用 invoke 绕过模型但不绕过 Runtime</h3>
+<ul>
+  <li>五发探针，每发先写预期再跑（都在 v2 目录）：<pre>node --import tsx src/cli.ts invoke read_file '{"path": "README.md", "limit": 99999}'
+node --import tsx src/cli.ts invoke write_file '{"path": "artifacts/probe.md"}' --task understand
+node --import tsx src/cli.ts invoke read_file '{"path": "/etc/passwd"}'
+node --import tsx src/cli.ts invoke read_file '{"path": "../../outside.txt"}'
+node --import tsx src/cli.ts invoke read_file '{"path": 42}'</pre>预期（本机实测）：① <code>INVALID_ARGUMENT</code>（超上界，回喂文案含「≤ 2000」与「只改点名字段」）；② <code>INVALID_ARGUMENT</code>（缺 content，文件未创建）；③ <code>CONTRACT_PATH_MUST_BE_RELATIVE</code>（语义契约层）；④ <code>PATH_OUT_OF_WORKSPACE</code>（类型正确但被 Sandbox 拒——层级不能混）；⑤ <strong>注意：不是 INVALID_ARGUMENT</strong>——上游 Value.Convert 把 42 折成 "42"，handler 真的去读文件并报 ENOENT（TOOL_EXECUTION_FAILED）。这是笔记 4.3 示例与实现的不一致处，以代码和单测为准。</li>
+  <li>用审计证明「handler=0」：<pre>node --import tsx src/cli.ts audit --trace-id &lt;探针①的 trace&gt;</pre>预期：账上<strong>只有 policy_decision:INVALID_ARGUMENT，没有 tool_execution</strong>——拦截发生在副作用之前；而探针⑤的账上有 tool_execution:error——它真的执行了。「返回了错误」不等于「拦住了执行」，差别就在这一条记录。</li>
+  <li>沙箱两条线（任务二口径）：<pre>node --import tsx src/cli.ts invoke write_file '{"path": "tests/login-flow.test.ts", "content": "x"}' --task fix_tests
+node --import tsx src/cli.ts invoke write_file '{"path": "tests/generated/probe.test.ts", "content": "x"}' --task fix_tests</pre>预期（本机实测）：前者 <code>PATH_DENY_WRITE</code>（已有测试禁写）；后者 <code>confirm · APPROVAL_REQUIRED</code>（allow_write_extra 单点放开，但仍要过人）——「允许例外」不是「免审批」。产生的待批单不用管，它留在本地账本里（v2/data/ 已 gitignore）。</li>
+</ul>
+
+<h3>实验 ⑥：主动改造——失败关闭与允许例外，各拆一次看反应</h3>
+<ul>
+  <li>改造 A：把 tasks.yaml 里 fix_tests 的 <code>approval.approvers</code> 改成空名单 <code>[]</code>，起图后重跑任务二。<strong>先写预期</strong>：空名单是「谁都能批」还是「谁批都不算」？会在哪一步停？<br>预期：图在第一道门弹回 <code>NO_APPROVER_CONFIGURED</code>，agent 当场收口，连人都不会惊动，样本未动（失败关闭）。跑完恢复名单。</li>
+  <li>改造 B：把 fix_tests 的 <code>allow_write_extra</code> 两行删掉，重发实验⑤的 tests/generated 探针。<strong>先写预期</strong>：这次回什么码？为什么和改造前不同？<br>预期：从 confirm 变成 <code>PATH_DENY_WRITE</code>——例外名单没了，tests/** 的禁写红线覆盖整个目录。跑完恢复配置，用 <code>git diff -- config/tasks.yaml</code> 确认只剩预期改动（应为空）。</li>
+  <li>可选加餐（有 DEEPSEEK_API_KEY 时）：把实验③的 <code>--decider mock</code> 换成默认 real 跑一次真模型。预期：操作顺序与消耗和脚本不同，可能烧满预算停在 MAX_TOOL_CALLS；验收仍按产物与约束，不按「像不像脚本」。一次成功只是样本证据，不能推导稳定成功率。</li>
+</ul>
+
+<h2>回读与验证指引</h2>
+<ul>
+  <li>primary source：<a href="../course_code/week03/第三章-学习笔记.md"><code>第三章-学习笔记.md</code></a> 3.7 节（行 3108–3961）——重点回读「阶段二 Runtime 怎样复用」「任务差异放配置」「十件工具的输入输出」「参数错误怎样反馈」「截断单次工具观察」「压缩历史步骤，保留关键证据」「审批时给人看什么」「四项能力怎样协作」「四类失败案例」「已知边界」「AI 可以外包什么」；结课再读「本章总结」（行 3964–4004）与「本章复习问题」（行 4006–4046，参考答案行 4103 起）。</li>
+  <li>代码回读顺序（对应笔记附录「源码与工程阅读路线」的 project3 条目）：<a href="../course_code/week03/3-7/project3/v2/src/runtime.ts"><code>runtime.ts</code></a>（参数契约、权限、预算、审批与执行；重点 prepare / gateForPi / executeApproval）→ <a href="../course_code/week03/3-7/project3/v2/src/contract.ts"><code>contract.ts</code></a>（两层契约与启动自检）→ <a href="../course_code/week03/3-7/project3/v2/src/context-budget.ts"><code>context-budget.ts</code></a>（截断、审计哈希、历史压缩）→ <a href="../course_code/week03/3-7/project3/v2/hitl/graph.py"><code>hitl/graph.py</code></a>（审批图、两道门、interrupt 与 Checkpoint）→ <a href="../course_code/week03/3-7/project3/v2/src/deliverable.ts"><code>deliverable.ts</code></a>（只认审计的交付判定）→ <a href="../course_code/week03/3-7/project3/v2/src/eval.ts"><code>eval.ts</code></a>（独立副本与两维报告）。</li>
+  <li>六步阅读顺序（笔记附录，工程复盘用）：① 任务从哪里进入（cli.ts / coding-agent-extension.ts）→ ② 模型决策在哪里产生（pi/decider.ts）→ ③ 工具调用在哪里校验和授权（runtime.ts prepare）→ ④ 结果怎样回到模型和状态（success/reject + store）→ ⑤ 完成、暂停、取消和恢复怎样判断（loop-guard + pendingApproval + executeApproval）→ ⑥ 用失败场景验证连接是否真的生效（实验⑤⑥与四类失败案例）。</li>
+  <li>版本口径提醒：笔记附录的阅读路线写的是 <code>pi-0.83.0</code> 源码，而 v2 实际依赖 <strong>pi 0.87.1</strong>（package.json）；读上游源码时以实际安装版本为准。模型默认 <code>deepseek-v4-flash</code>（platform.yaml，可用 GATEWAY_BASE_URL / GATEWAY_MODEL_ID 覆盖），provider 声明为 DeepSeek compat 且关闭思考。</li>
+  <li>官方文档（解释 API 语义时回查）：<a href="https://docs.langchain.com/oss/python/langgraph/interrupts" target="_blank" rel="noopener">LangGraph Interrupts</a>（审批图的 interrupt/Command(resume)）、<a href="https://docs.langchain.com/oss/python/langgraph/checkpointers" target="_blank" rel="noopener">Checkpointers</a>（HITL_DB 跨进程存档）。与课程材料冲突时以仓库代码与测试为准。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<ul>
+  <li><a href="../course_code/week03/第三章-学习笔记.md"><code>course_code/week03/第三章-学习笔记.md</code></a> 3.7 节 + 本章总结 + 复习问题 + 附录（学生版学习笔记，本课术语与验收的第一材料）</li>
+  <li><a href="../course_code/week03/3-7/project3/README.md"><code>project3/README.md</code></a>（两类任务运行口径、三终端审批、红线演示、离线切换、评估入口、复原步骤）</li>
+  <li><a href="../course_code/week03/README.md"><code>course_code/week03/README.md</code></a> 的 3-7 目录说明</li>
+  <li><a href="../course_materials/week03/3-7.pdf"><code>course_materials/week03/3-7.pdf</code></a>（教师 PDF，补充材料）</li>
+</ul>
+
+<div class="ask-reminder">
+  <strong>卡住了就问你的 agent。</strong>任何一处让你觉得「等等，为什么」——例如为什么 path:42 没有被 Schema 拦住、为什么批准了文件还不存在、为什么 execute 前要把契约和策略重跑一遍、为什么压缩不请模型帮忙、为什么审计存哈希不存全文、为什么评估不代人批准、为什么 run_test 也要过人、为什么空名单是失败关闭——直接回到对话里问。本课全部内容都在回答一个问题：<strong>程序记录的状态，是否与实际执行事实一致；拿什么证明。</strong>
+</div>
+
+<div class="lesson-footer">
+  Week03 主题课序列：<a href="./0010-agent-loop-pi-integration.html">1/7 从 Runtime 到 Agent Loop</a> · <a href="./0011-planning-and-task-decomposition.html">2/7 Planning 与任务拆解</a> · <a href="./0012-state-machine-checkpoint-recovery.html">3/7 State Machine 与 Checkpoint</a> · <a href="./0013-sandbox-execution-boundaries.html">4/7 Sandbox 与执行边界</a> · <a href="./0014-agent-harness-complete-code-change.html">5/7 Agent Harness</a> · <a href="./0015-langgraph-agent-orchestration.html">6/7 LangGraph 与 Agent 编排</a> · <strong>7/7 项目三：Codebase Agent v2</strong>（本课，3-7，结课课）<br>
+  前课回顾：0015 把审批流程显式画成图；本课把那张图装进 pi 循环的审批门口，用两类仓库任务验收全章能力。<br>
+  <strong>结课条件</strong>：① 前 3 题重测全对，本课部分（第 4 题起）正确率 85% 以上；② 完成实验①–④，并至少完成实验⑤或⑥中的一项（预期先写后验）；③ 不看稿 2 分钟讲清项目主链（目标形状 → 契约检查 → 预算证据 → 审批执行 → 验收边界），并脱稿复述本章六条判断；④ 对照笔记「本章复习问题」20 题做全量自测，错题回到对应主题课回读。四者都过，Week03 结课；下一步可与 agent 讨论更新 MISSION 进入 Week04（RAG 与评测侧）。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  questions: [
+    {
+      type: 'choice',
+      concept: '【重测·0015】interrupt 前无副作用',
+      section: '0015 间隔重测',
+      notesRef: '0015 精讲第 6 节 + 笔记 3.6 五 5.2',
+      question: '审批图里，为什么 interrupt() 调用之前不能放任何副作用？',
+      options: [
+        '恢复时节点从头重跑，副作用会再次发生',
+        '中断信号会清空掉状态，副作用失去依据',
+        '检查点仅保存消息，副作用不能够被存档',
+        '审批节点并行执行，副作用会引发写冲突'
+      ],
+      answer: 0,
+      explanation: 'LangGraph 保存的是 State 与检查点，不是 Python 调用栈；恢复时包含 interrupt() 的节点从头重跑，之前的写文件/部署/发请求每恢复一次就重做一次。副作用必须放到审批通过后的独立节点。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·0015】thread_id 不是权限',
+      section: '0015 间隔重测',
+      notesRef: '0015 精讲第 6 节 + 笔记 3.6 五 5.3',
+      question: '跨进程恢复审批时，thread_id 的作用是什么？',
+      options: [
+        '权限凭证，持有它就能够批准任何工单',
+        '存档查找键，不是权限；谁能批另校验',
+        '幂等键，保证同一工单全局只执行一次',
+        '会话令牌，审批超时后它随之自动失效'
+      ],
+      answer: 1,
+      explanation: 'Checkpointer 按 thread_id 查找存档，它只是查找键。project3 里「谁能批」由图的两道门校验（资格门 + 答复门，禁自批、查角色），不依赖 thread_id 的保密性。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·0015】业务预算正常收尾',
+      section: '0015 间隔重测',
+      notesRef: '0015 精讲第 7 节 + 笔记 3.6 六 6.2',
+      question: '修订循环达到业务上限（最多修订 2 次）时，图应该怎样收尾？',
+      options: [
+        '让框架递归上限抛异常，捕获之后记为失败',
+        '路由读取计数器主动收尾，返回未完成终态',
+        '继续循环下去，直到模型自己提出停止建议',
+        '清空检查点的存档，让人重新提交原始工单'
+      ],
+      answer: 1,
+      explanation: '业务预算是正常终止条件：路由函数读计数器，超限主动返回 finalize，终态 incomplete 进报告与审计。recursion_limit 触发是 GraphRecursionError 运行错误，不是业务收尾；重新提交原输入会创建新执行路径而非恢复。'
+    },
+    {
+      type: 'choice',
+      concept: '【复习·3-1】模型说完成凭什么交付',
+      section: '本章复习 Q2 换形式',
+      notesRef: '笔记复习问题 Q2 + 3.7 六 6.4',
+      question: '模型停止调用工具并说「完成了」，系统凭什么允许交付？',
+      options: [
+        '完成契约核对交付物、当前版本测试与证据',
+        '模型最终回答文本完整、而且语气足够确定',
+        '最后一次工具调用返回了成功的那个退出码',
+        '累计预算已经耗尽了，循环正常地停了下来'
+      ],
+      answer: 0,
+      explanation: '模型准备结束 ≠ 业务完成。deliverable.ts 只看审计里成功的写入；完成检查还要核对当前版本的测试结果与改动范围。退出码 0 只说明工具执行成功，预算耗尽更是未完成。'
+    },
+    {
+      type: 'choice',
+      concept: '【复习·3-7】两类任务的验收产物',
+      section: '本章复习 Q19 换形式',
+      notesRef: '笔记复习问题 Q19 + 3.7 七 7.4',
+      question: '代码理解任务与测试修复任务的验收产物，正确组合是？',
+      options: [
+        '前者核对测试退出码，后者核对文档是否落盘',
+        '两者都只核对最终回答有没有提到交付物路径',
+        '两者都只核对工具调用的次数有没有超出预算',
+        '前者核文档与引用，后者核失败、改动与复测'
+      ],
+      answer: 3,
+      explanation: '代码理解：入口/调用链/路径引用真实、文档落盘、只改允许的文档。测试修复：初始失败真实存在、Diff 针对根因、最终测试对应当前代码、审批与执行一致、变更说明准确。'
+    },
+    {
+      type: 'choice',
+      concept: '任务差异放配置',
+      section: '3-7 三',
+      notesRef: '笔记 3.7 三 + config/tasks.yaml 头注',
+      question: '新任务「技术债巡检」用已有工具就能完成，正确的接入方式是？',
+      options: [
+        '在循环和审批模块里面追加任务专用的判断分支',
+        '配置文件里加条目配脚本，工程代码一行都不改',
+        '另写一个独立智能体，复制十件工具的全部代码',
+        '修改工具的处理器，给它们都追加一个巡检模式'
+      ],
+      answer: 1,
+      explanation: 'debt_audit 就是论据：纯配置新增的任务类型。任务目标、范围、预算、审批口径进配置；具体读哪个文件仍由模型决定。多处 if 分支意味着治理链分叉或任务差异写错位置。'
+    },
+    {
+      type: 'choice',
+      concept: '四层检查各答各的问题',
+      section: '3-7 四 4.2',
+      notesRef: '笔记 3.7 四 4.2 + 实验⑤',
+      question: '{"path":"../../outside.txt"} 类型正确，它会在哪一层被拒绝？',
+      options: [
+        '参数校验层拒绝，因为字符串的内容不合法',
+        '语义契约层拒绝，因为路径的书写格式错误',
+        '沙箱层拒绝，因为路径解析后超出了工作区',
+        '工具执行层拒绝，因为目标文件根本不存在'
+      ],
+      answer: 2,
+      explanation: '它是合法字符串，过 Schema；不是绝对路径，过语义契约；resolve 后逃逸工作区，被 PATH_OUT_OF_WORKSPACE 拒（本机实测）。层级不能混：参数校验答「符合契约吗」，Sandbox 答「实际影响在边界内吗」。'
+    },
+    {
+      type: 'choice',
+      concept: '⚠️ 材料与实现不一致：类型折叠',
+      section: '3-7 四 4.3（以代码为准）',
+      notesRef: '笔记 4.3 示例 vs kg_contract.test.ts + 实验⑤',
+      question: '本项目里给 read_file 传 {"path": 42}，实际会发生什么？',
+      options: [
+        '返回参数错误，处理函数一次都没有被执行过',
+        '上游把数字折成字符串，处理函数真读了文件',
+        '语义契约层把它当成绝对路径，在执行前拒绝',
+        '沙箱层把它当成越界的路径，在执行之前拒绝'
+      ],
+      answer: 1,
+      explanation: 'pi-ai 的 validateToolArguments 先做 Value.Convert 类型折叠，42→"42" 通过 Schema（本机实测）。单测原话：「类型写错由上游顺手纠正，我们不再造第二个校验器」。笔记 4.3 的示例与实现不一致，以代码和测试为准；验证 handler=0 要用折叠不掉的错误（缺必填字段/超范围/多余字段）。'
+    },
+    {
+      type: 'choice',
+      concept: '【复习·3-7】handler=0 是关键证据',
+      section: '本章复习 Q16 换形式',
+      notesRef: '笔记复习问题 Q16 + 3.7 八 8.2 案例一',
+      question: '参数校验失败时，为什么「handler 调用次数为 0」才是关键证据？',
+      options: [
+        '它证明拦截发生在副作用之前，不是事后贴标签',
+        '它证明错误文案已经被完整地写进了审计日志里',
+        '它证明模型收到错误之后修正了参数并重新发送',
+        '它证明重试策略没有被触发因而消耗额外的预算'
+      ],
+      answer: 0,
+      explanation: '只验证「返回了参数错误」不够：handler 若已执行，文件可能已改、资源已耗，再报错只是事后贴标签。审计里只有 policy_decision 没有 tool_execution，才证明拦截在副作用之前（实验⑤）。'
+    },
+    {
+      type: 'choice',
+      concept: '【复习·3-7】压缩不能丢的三类证据',
+      section: '本章复习 Q17 换形式',
+      notesRef: '笔记复习问题 Q17 + 3.7 五 5.2',
+      question: '长历史压缩时，哪三类证据绝不能丢？',
+      options: [
+        '完整的源码、完整的日志、完整差异的全部文本',
+        '未解决的失败、操作是否发生、证据对应的版本',
+        '用户的原话、模型的推理过程、工具的描述全文',
+        '令牌的消耗量、费用统计、耗时记录这三项数据'
+      ],
+      answer: 1,
+      explanation: '① 尚未解决的失败（位置/表现/日志引用）；② 操作是否真的发生（等待审批/已应用/结果不明是三种状态）；③ 验证结果对应哪份代码版本。其余全文可存引用按需读回。'
+    },
+    {
+      type: 'choice',
+      concept: '批准 ≠ 执行',
+      section: '3-7 六 6.2',
+      notesRef: '笔记 3.7 六 6.2 + 实验③',
+      question: '本地审批路径里，approvals decide --decision approve 做了什么？',
+      options: [
+        '把单子标记为已批准，然后立即把文件写入到磁盘',
+        '把单子提交给那张审批图，然后等待审批人的答复',
+        '把单子标记为已批准，不碰文件；执行动作才落盘',
+        '直接执行那个工具，并且把执行结果写进了审计里'
+      ],
+      answer: 2,
+      explanation: 'decide 是授权决定，execute 是副作用事实，两者之间隔着时间，现场可能变化。本机实测：decide 后文件不存在，execute 才创建；重复 execute 回 APPROVAL_NOT_EXECUTABLE。'
+    },
+    {
+      type: 'choice',
+      concept: '【复习·3-7】批准后为什么要复核',
+      section: '本章复习 Q18 换形式',
+      notesRef: '笔记复习问题 Q18 + runtime.ts executeApproval',
+      question: '审批通过后，executeApproval 为什么还要比对参数指纹并重跑契约与策略？',
+      options: [
+        '批准绑定那一次操作与当时现场，等待期间现场可能变了',
+        '审批单的参数从数据库读回来，重跑一遍校验是为了提速',
+        '模型可能会重发不同的参数，重跑是为了重新格式化它',
+        '审计要求留下两条记录，重跑一遍是为了补齐缺失日志'
+      ],
+      answer: 0,
+      explanation: '批「往 src/a.ts 写」不等于批「往任何地方写」。审批单参数从数据库读回，没有上游校验器看过它；指纹不一致回 APPROVAL_BINDING_MISMATCH，一次性领取防重复写入，契约与策略重跑防旧批准用于新现场。'
+    },
+    {
+      type: 'choice',
+      concept: 'gate 与 via 正交',
+      section: '3-7 三 / 六',
+      notesRef: 'tasks.yaml 注释 + README §6 + 本机实测',
+      question: 'HITL_MODE=disabled 退到本地表后，任务二的第一次 run_test 会怎样？',
+      options: [
+        '直接执行，因为审批的服务已经被完全关闭掉了',
+        '仍被拦下，因为门口与裁定人是两个正交的维度',
+        '自动改走图的路径，继续等待人工审批给出答复',
+        '报服务不可达的错误，终止掉整个任务本次运行'
+      ],
+      answer: 1,
+      explanation: 'HITL_MODE 只换裁定人（图→本地表），不动门口：审批门口=[run_test] 照旧生效。区别是本地表不会等——Loop 当场收口，之后手动 decide/execute 一次推进一步。'
+    },
+    {
+      type: 'choice',
+      concept: '执行状态 ≠ 验收结论',
+      section: '3-7 六 6.4 / 八',
+      notesRef: '笔记 3.7 六 6.4 + eval.ts 三条纪律',
+      question: 'eval 报告里某任务停在 AWAITING_APPROVAL，应该怎么记？',
+      options: [
+        '执行状态待审批，验收未通过，绝不计为完成',
+        '执行状态已完成，因为循环已经正常地收口了',
+        '验收结论通过，因为工具的路径已验证畅通了',
+        '自动代人批准，然后再把状态改记为已经完成'
+      ],
+      answer: 0,
+      explanation: '执行状态答「这一趟怎么结束」，验收结论答「交付物有没有账」。评估不代人批准：自动生成报告不等于自动批准；待审批的任务照实记为待审批（本机 eval 实测任务一/二均如此）。'
+    },
+    {
+      type: 'short',
+      concept: '简述：契约链与四层检查',
+      section: '3-7 四',
+      notesRef: '笔记 3.7 四 4.1–4.4 + contract.ts + 实验⑤',
+      question: '讲清工具契约的两层定义与四层检查分工，说明参数错误怎样回喂、怎么证明拦截发生在副作用之前，并指出笔记 path:42 示例与实现的不一致及正确处理方式。',
+      hint: '按「两层定义 → 四层各答什么 → 回喂文案 → handler=0 的审计证据 → 材料不一致怎么办」五段回答。',
+      modelAnswer: '<strong>两层定义</strong>：第一层声明式边界写在 TypeBox Schema（minimum/maximum/minLength/description），模型只看得到它，能写这里的边界一定写这里；第二层语义规则在 contract.ts（绝对路径/目录当文件/坏 glob/坏正则/空补丁/空白命令），统一 CONTRACT_ 前缀，拦「Schema 全对但注定办不成事」的参数。<br><strong>四层检查</strong>：参数校验答「符合契约吗」，权限审批答「许不允许」，Sandbox 答「实际影响在边界内吗」，工具执行答「业务事实成立吗」；../../outside.txt 类型正确但被 Sandbox 拒——层级不能混。<br><strong>回喂</strong>：结构化失败保留原 toolCallId，说清 execution.started:false；文案 = 上游错误 + 契约（合格长什么样）+ 只改点名字段、重发会被判 REPEATED_TOOL_CALL；修正后的新调用重新过完整检查。<br><strong>handler=0 证据</strong>：审计里只有 policy_decision 没有 tool_execution（用缺 content/limit 超界/多余字段验证）；「返回了错误」不等于「拦住了执行」。<br><strong>材料不一致</strong>：pi-ai 先做 Value.Convert，42 折成 "42" 后 handler 真的执行（ENOENT）；单测明确「类型写错由上游顺手纠正，不再造第二个校验器」；以代码和测试为准，把差异标出来并用实验拿现场证据。'
+    },
+    {
+      type: 'short',
+      concept: '简述：上下文两笔账与三类证据',
+      section: '3-7 五',
+      notesRef: '笔记 3.7 五 5.1–5.3 + context-budget.ts + loop-guard.ts',
+      question: '说明单次上下文预算与任务累计预算的区别，项目怎样截断与压缩、为什么不用模型生成摘要，以及压缩时绝不能丢的三类证据。',
+      hint: '按「两笔账 → 截断/压缩机制 → 确定性取舍 → 三类证据 → 配对与补查入口」回答。',
+      modelAnswer: '<strong>两笔账</strong>：单次上下文预算管这一轮给模型多少输入（还要为输出留空间）；任务累计预算管整个任务的 Token/费用/调用数/时长（loop-guard 五道）。压缩只减后续输入，已发生消耗照记；系统提示词与工具定义也占空间。<br><strong>机制</strong>：renderContext 把旧步骤压成一行确定性摘要（工具名+参数+结果码+体量），最近 2 步逐字保留，目标/禁止事项永远 pinned；摘要不比原文短就不压。审计另走 clipForAudit：按行截断（≤30 行/4000 字符）+ 全量 sha256，事后拿哈希对哈希。<br><strong>为什么不用模型摘要</strong>：pi compact() 要调模型，每次输出不一样，离线跑没有摘要模型，复现与对账无从下手；纯规则裁剪同一输入永远同一输出。<br><strong>三类证据</strong>：未解决的失败（位置/表现/日志引用）；操作是否发生（等待审批/已应用/结果不明三态）；证据对应哪个版本（旧通过不能证明新版本）。<br><strong>纪律</strong>：Tool Call 与结果配对不能拆；截断要标 truncated 并留补查入口；测试日志不能只留前几百行，失败可能在中间或末尾。'
+    },
+    {
+      type: 'short',
+      concept: '简述：审批执行分离与恢复五情况',
+      section: '3-7 六 / 七 7.3',
+      notesRef: '笔记 3.7 六 6.2 + 七 7.3 + hitl/graph.py + runtime.ts',
+      question: '讲清审批与执行为什么分离、图的两道门各拦什么、批准后执行前还要复核什么，以及中断恢复的五种情况各怎么处理。',
+      hint: '按「分离的 why → 两道门 → 复核三件事 → 五种中断位置五种处理 → 两条边界句」回答。',
+      modelAnswer: '<strong>分离</strong>：decide 是授权决定，execute 是副作用事实，两者之间隔着时间、现场可能变；本地路径由显式 execute 领取，图路径由等待中的任务收到批准后继续；同一张单只能被一条路径领取，重复点击不能重复写入。<br><strong>两道门</strong>：check_eligible 提单时判资格（名单空→NO_APPROVER_CONFIGURED，发起人角色无交集→NO_ELIGIBLE_APPROVER，失败关闭不惊动人）；check_approver 答复后判人（action 合法、禁自批 SELF_APPROVAL_DENIED、角色在名单 APPROVER_ROLE_DENIED）。<br><strong>复核三件事</strong>：参数指纹一致（不一致 APPROVAL_BINDING_MISMATCH）、一次性领取 claimApproval、契约与策略重跑（数据库读回的参数没有上游校验器看过）。<br><strong>五种恢复</strong>：等待审批→查原审批状态核有效期与内容；已批未执行→重查条件再领取；结果不明→先核对文件/进程现场；结果已持久化计划未更新→补齐状态不再执行；补丁已应用未复测→继续验证当前内容。<br><strong>边界句</strong>：Checkpoint 保存任务状态，不能撤销已写入的文件；审批通过不代表补丁已成功应用。图的 Checkpoint 只恢复审批流程，代码任务还需计划/调用/工作区/证据，两者靠 Run 编号与审批编号连接。'
+    },
+    {
+      type: 'short',
+      concept: '简述：结课复盘——六条判断与「不是碰巧跑通」',
+      section: '本章总结 / 3-7 八',
+      notesRef: '笔记本章总结 + 3.7 八 8.2/8.4 + 复习 Q20',
+      question: '脱稿复述本章六条判断，并说明怎么用四类失败案例与「第一个断开的连接」方法证明项目不是碰巧跑通。',
+      hint: '六条判断逐条一句；再按「四类案例各构造什么反例、看什么证据 → 断链排查顺序 → 修复后怎么验证」回答。',
+      modelAnswer: '<strong>六条判断</strong>：① Loop 成立的条件不是能循环，而是 Tool Result 能真实驱动下一轮；② Planning 的核心不是列步骤，而是子目标有完成标准、依赖和证据；③ Checkpoint 的核心不是保存聊天，而是恢复业务现场并能核对现实；④ Sandbox 的目标不是不犯错，而是把影响限制在可拦截、可审计、可恢复的范围内；⑤ Harness 的核心不是又多一层封装，而是保证同一事实正确进入模型、状态、审批和完成检查；⑥ LangGraph 的价值在把复杂流程的状态与迁移显式化，不在所有 Agent 都必须画图。<br><strong>四类失败案例</strong>：参数错误→证 handler=0、文件原样、修正后重新全检；测试失败→证失败退出码进下一轮、状态不变完成；审批中断→证重复批准/重复 execute 不重复写入、旧授权不用于新现场；结果未保存→证恢复先核现场、不盲目重放，无法判断就保留现场转人工。<br><strong>断链方法</strong>：沿主链逐段查（输入→组装→决策→校验→授权→Sandbox→执行→回写→状态→完成检查→恢复），找「预期事实第一次没有正确传递」的位置，不先改 Prompt；构造确定性反例，用真实副作用（handler 次数/文件字节/退出码/轮数）作证据；修复后重跑该场景再验证相邻路径。<br><strong>验收观</strong>：交付物、Diff、Trace、审批记录互相印证；一次成功只是样本证据，稳定性要固定任务集按数据判断。'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>

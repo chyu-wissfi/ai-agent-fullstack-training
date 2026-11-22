@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week04 主题课 2/6 · Working Memory：状态必须符合执行事实</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 04 · 主题课 2 / 6 · 覆盖课程小节 4-2 · 版式：先讲后测，精讲与测验五五开</p>
+<h1>Working Memory——建议不是完成，旧测试不是当前验证</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：Week04 第二课，4-1 装配器的<strong>上游</strong>。上一课解决「本轮信息怎样装进请求」；但装配器负责选择信息，它首先要有一份<strong>准确的任务记录</strong>。本课回答：这份记录保存什么、凭什么更新、怎样失效、怎样恢复——核心一句话：<strong>状态必须符合执行事实</strong>。<br>
+  <strong>材料定位</strong>：<a href="../course_code/week04/第四章 学习笔记.md"><code>第四章 学习笔记.md</code></a> 4.2 节（行 668–905，<strong>本课第一材料</strong>，术语以此为准）+「本章复习问题」Q11–Q12（行 2584–2586，参考答案行 2664–2668，本课测验换形式覆盖）+ <a href="../course_code/week04/README.md"><code>week04/README.md</code></a> 4-2 目录说明 + 教师 PDF <a href="../course_materials/week04/4-2.pdf"><code>4-2.pdf</code></a>（补充）。<br>
+  <strong>代码定位</strong>：<code>course_code/week04/4-2/</code>——四个演示脚本：<code>4-2-2.py</code>（结构化记录+装配）、<code>4-2-3.py</code>（取一条事实）、<code>4-2-4.py</code>（Scratchpad）、<code>4-2-6.py</code>（JSONL 保存与恢复）。<strong>全部纯标准库、离线可跑</strong>，复用 0017 建的 <code>4-1/.venv</code>（Python 3.12），不需要 tokenizers，也不需要 API key。<br>
+  <strong>预计用时</strong>：精讲 40 分钟 + 测验 25 分钟 + 第二层动手练习 45 分钟<br>
+  <strong>本课验收标准</strong>（笔记「本节重点与验收」行 893–903，五条）：① 仅提出方案时，状态仍为未修改、未验证；② 补丁失败或被拒绝后，不会记录修改成功；③ 修改版本后，旧通过记录不再支持完成；④ 新进程能读取进度，核对现场后继续未完成步骤；⑤ 工具执行成功与业务断言通过分别记录。<strong>第三部分六个实验与这五条一一对应。</strong>
+</div>
+
+<h2>怎么用这一课</h2>
+<p><strong>先讲后测，五五开</strong>：第一部分按「三层分工 → 三阶段 → 约束链路 → 临时事实 → 便签 → 生命周期 → State 边界」建地图，每节回答「为什么这样设计、不这样会出什么事故」；第二部分<strong>题型从本课起缩减为 10 题 = 4 选择 + 6 简述</strong>（2026-11-22 确认的新节奏，简述为主，突出核心思路）。Q1–Q2 换形式重测 0017 的两条核心不变量（0017 分数未报，按核心不变量兜底）；Q3–Q4 考本课核心判断，换形式覆盖章复习题 Q12；简述 Q5–Q10 覆盖六条应能脱稿复述的主链（含复习 Q11），按得分点严格自评，漏关键点就选「部分对」。</p>
+<p><strong>三层定位</strong>：第一层能默画三张图——三层信息分工（图 1）、三阶段闸门（图 2）、约束四步链路（图 3）；第二层跑通四个离线脚本（实验①②），再主动改造四种失真（实验③–⑥）；第三层始终追问「这条状态凭什么写进记录」「这份证据对应当前哪个版本」「恢复时现场还是不是存档时那个现场」。</p>
+<p class="sidenote">就业面试视角：面试官问「Agent 说修复完成了，你怎么确认」，最想听到的不是「再问模型一遍」，而是状态依据链：建议只是候选方案，修改要工具回执，验证要当前版本的测试执行——三者缺一不可。本课与 0014「完成契约只认最新事实」、0016「状态≠结论」是同一根主线：<strong>结论只认执行证据，不认模型自述</strong>。</p>
+
+<nav class="toc">
+<strong>本课目录</strong>
+<ul>
+  <li><a href="#sec0">0. 开篇：「继续」两个字的事故</a></li>
+  <li><a href="#sec1">1. 历史、工作记忆、本轮 Context</a></li>
+  <li><a href="#sec2">2. 最少保存什么：三阶段状态依据</a></li>
+  <li><a href="#sec3">3. 约束、风险、计划与四步链路</a></li>
+  <li><a href="#sec4">4. 临时事实：来源、版本与失效</a></li>
+  <li><a href="#sec5">5. Scratchpad：计划接到事实后面</a></li>
+  <li><a href="#sec6">6. 生命周期与保存/发送分离</a></li>
+  <li><a href="#sec7">7. State 边界与 JSONL 演示解剖</a></li>
+  <li><a href="#sec8">8. 面试视角：两分钟主链</a></li>
+  <li><a href="#part2">第二部分：检索式测验（10 题）</a></li>
+  <li><a href="#part3">第三部分：第二层练习</a></li>
+</ul>
+</nav>
+
+<hr>
+
+<h2>第一部分：精讲（先读，测验在后）</h2>
+
+<h3 id="sec0">0. 开篇：「继续」两个字的事故</h3>
+<p>登录修复进行到一半：Agent 已经读源码、取得边界失败，建议把 <code>&lt;=</code> 改成 <code>&lt;</code>。此时真正的进度是<strong>「已定位，未修改，未验证」</strong>（笔记行 674）。下一轮用户只说「继续」。如果输入没有明确进度，模型可能重新搜索，也可能<strong>误把修复建议当作代码已经修改</strong>（行 678）。</p>
+<p>完整历史能帮助判断，但其中同时有计划、失败尝试和后来的结果。<strong>历史越长、压缩越多，每轮重新推断进度越容易出错</strong>（行 680）。这正是 0017 开篇事故一（「明明运行了失败测试，下一轮却说测试已经通过」）的上游原因之一：装配器再能干，也没有一份准确的当前状态可选。</p>
+<p>所以本课的位置在 4-1 的上游：<strong>工作记忆，就是围绕当前任务保存目标、约束、执行事实和未完成事项的记录</strong>（行 684）。它有两个消费者——装配器直接取出当前进度；程序用它检查当前版本是否真的完成验证。</p>
+
+<h3 id="sec1">1. 历史、工作记忆、本轮 Context：三层各回答一个问题</h3>
+<figure class="diagram" id="fig1">
+<svg viewBox="0 0 760 300" role="img" aria-label="三层信息分工">
+  <defs><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">三层信息分工：过程、状态、本轮输入</text>
+  <text class="dg-soft" x="20" y="46">笔记行 686–690 的三行表，画成一条提取链。</text>
+  <rect class="dg-node" x="20" y="66" width="500" height="52" rx="6"/>
+  <text class="dg-label" x="270" y="88" text-anchor="middle">聊天历史 / 执行记录</text>
+  <text class="dg-soft" x="270" y="106" text-anchor="middle">每一步发生过什么？——含计划、失败尝试与后来结果</text>
+  <rect class="dg-node-accent" x="20" y="150" width="500" height="52" rx="6"/>
+  <text class="dg-label" x="270" y="172" text-anchor="middle">工作记忆（本课）</text>
+  <text class="dg-soft" x="270" y="190" text-anchor="middle">现在什么已完成、什么失败、什么还没做？——程序维护</text>
+  <rect class="dg-node" x="20" y="234" width="500" height="52" rx="6"/>
+  <text class="dg-label" x="270" y="256" text-anchor="middle">本轮 Context（4-1 装配）</text>
+  <text class="dg-soft" x="270" y="274" text-anchor="middle">这次决策需要看到其中哪些？——足够、适用、可核对</text>
+  <path class="dg-arrow-accent" d="M270 118 L270 150" marker-end="url(#m1)"/>
+  <path class="dg-arrow-accent" d="M270 202 L270 234" marker-end="url(#m1)"/>
+  <text class="dg-soft" x="285" y="138">提取：每次工具结果驱动更新</text>
+  <text class="dg-soft" x="285" y="222">装配：选择 · 预算 · 配对</text>
+  <text class="dg-faint" x="560" y="92">消费者：复盘与核对</text>
+  <text class="dg-faint" x="560" y="176">消费者：装配器 + 程序检查</text>
+  <text class="dg-faint" x="560" y="260">消费者：模型本轮判断</text>
+</svg>
+<figcaption>图 1 · 三层分工（笔记行 686–692）。工作记忆是从历史中<strong>提取</strong>出的当前状态，再经 4-1 装配器<strong>选择</strong>进入本轮请求。它可以包含在已有 State 中，不要求另建一套数据库。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么不让模型每轮从全量历史自己重推进度？</strong> 替代方案确实存在：全量历史直发、或最近 N 条、或让模型自己总结。代价是：历史里计划与事实混杂，长度和压缩都在放大推断错误率（行 680）；「最近 N 条」会丢掉最早的用户约束（0017 复习 Q2）；模型总结可能把推断写成确认（0017 两类压缩）。当前约束下选「程序维护的派生状态」：取出即用、可核对、可检查。代价是要遵守更新纪律——<strong>记录本身也会失真，本课后面五节全是这条纪律</strong>。
+</div>
+
+<h3 id="sec2">2. 最少保存什么：字段不重要，状态依据才重要</h3>
+<p>先从四类开始：<strong>目标、已完成步骤、关键工具结果、未解决问题</strong>；再补充约束、风险、来源和版本（行 698）。登录修复的当前记录（行 700–708）：目标「恰好到期时返回 False」；已完成「读源码、跑边界测试、定位比较条件」；关键结果「test_at 预期 False 实际 True」；未完成「补丁未应用、修改后未测试」；约束「不得修改现有测试、不得延长有效期」；风险「改变边界可能影响调用方，待搜索和测试」。</p>
+<p>笔记强调：<strong>这里最重要的不是字段名，而是状态依据</strong>（行 710）——</p>
+<figure class="diagram" id="fig2">
+<svg viewBox="0 0 760 270" role="img" aria-label="三阶段闸门">
+  <defs><marker id="m2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">三阶段闸门：每一阶段凭什么证据才能写</text>
+  <rect class="dg-node" x="20" y="70" width="210" height="54" rx="6"/>
+  <text class="dg-label" x="125" y="92" text-anchor="middle">① 提出方案</text>
+  <text class="dg-soft" x="125" y="110" text-anchor="middle">模型建议 &lt;= 改 &lt;</text>
+  <rect class="dg-node" x="300" y="70" width="210" height="54" rx="6"/>
+  <text class="dg-label" x="405" y="92" text-anchor="middle">② 修改成功</text>
+  <text class="dg-soft" x="405" y="110" text-anchor="middle">补丁工具确认应用</text>
+  <rect class="dg-node-ok" x="580" y="70" width="160" height="54" rx="6"/>
+  <text class="dg-label" x="660" y="92" text-anchor="middle">③ 测试通过</text>
+  <text class="dg-soft" x="660" y="110" text-anchor="middle">当前版本实际通过</text>
+  <path class="dg-arrow-accent" d="M230 97 L300 97" marker-end="url(#m2)"/>
+  <path class="dg-arrow-accent" d="M510 97 L580 97" marker-end="url(#m2)"/>
+  <text class="dg-soft" x="265" y="145" text-anchor="middle">闸门：修改工具的成功回执</text>
+  <text class="dg-soft" x="545" y="145" text-anchor="middle">闸门：当前版本的测试执行</text>
+  <text class="dg-faint" x="125" y="172" text-anchor="middle">只能存：候选方案（待验证）</text>
+  <text class="dg-faint" x="405" y="172" text-anchor="middle">才能写：已修改，尚未测试</text>
+  <text class="dg-faint" x="660" y="172" text-anchor="middle">才能存：该版本通过结果</text>
+  <path class="dg-arrow-warn" d="M125 124 L125 205 L660 205 L660 124" marker-end="url(#m2)"/>
+  <text class="dg-soft" x="390" y="197" text-anchor="middle">跳闸：把建议直接当完成</text>
+  <text class="dg-soft" x="380" y="240" text-anchor="middle">事故：代码未修改却被报成「已修复」，后续每轮都建立在谎报的进度上</text>
+</svg>
+<figcaption>图 2 · 三阶段（笔记行 714–716）。模型建议只能保存候选方案；修改工具确认成功，才能写「已修改」；测试实际通过，才能保存对应版本的通过结果。与 0014 完成契约、0016 状态≠结论同构。</figcaption>
+</figure>
+<p><strong>工具结果保存摘要，原文保留核对入口</strong>（行 720–737）。几千行日志不必全部复制进工作记忆：当前记录保存失败用例、输入、预期、实际、版本和原文位置。笔记给的完整教学示例是六个字段：<code>summary</code> / <code>source</code> / <code>execution_id</code> / <code>code_version</code> / <code>status</code> / <code>reference</code>。</p>
+<p class="sidenote">材料与代码的口径差（实验①会现场核对）：4-2-2.py 里的简化字典只有四个字段（summary / code_version / source / reference），<strong>缺 execution_id 和 status</strong>。笔记行 735 自己声明了这一点：「原稿前面的简化字典未列出所有字段，正式实现要补齐后再引用」。摘要让模型快速知道边界问题；原文与执行 ID 让程序能够核对。<strong>不能删掉失败断言，也不能把未测试写成通过</strong>（行 737）。</p>
+<div class="why-box">
+<strong>为什么摘要+引用，而不是全文或纯摘要？</strong> 全文进记忆：每轮装配预算爆炸，噪声稀释关键断言（0017 预算与污染两课的直接后果）。纯摘要不留原文：失去核对入口，摘要错了无法回查。当前方案是取舍后的中间点——摘要服务模型判断，<code>execution_id + reference</code> 服务程序核对，与 0017「程序提取 + output_ref 补读」同一条设计线。
+</div>
+
+<h3 id="sec3">3. 约束、风险、计划：三种东西，以及约束的四步链路</h3>
+<p><strong>约束是必须遵守的要求，风险是需要检查的影响</strong>（行 743）。「不得修改测试」是约束；「修改后是否影响调用方」是风险；「我准备只改一个文件」是 Agent 的计划，<strong>不能冒充用户要求</strong>（行 747）。记录方式也不同（行 749–752）：约束至少保存内容、来源、适用范围，用户或有效项目规则调整后更新，无法判断冲突时澄清；风险至少保存可能的问题、依据、具体检查动作，搜索或测试后记录已排除、已确认或仍待核对。</p>
+<p>关键一句：<strong>约束写进工作记忆，只能帮助模型准备方案。违规方案仍要在执行前拦住</strong>（行 754）。「不得修改现有测试」的完整链路是四步（行 758–766）：</p>
+<figure class="diagram" id="fig3">
+<svg viewBox="0 0 760 310" role="img" aria-label="约束四步链路与拒绝回写">
+  <defs><marker id="m3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">「不得修改现有测试」的四步链路：记录 ≠ 执行</text>
+  <rect class="dg-node-accent" x="20" y="70" width="160" height="64" rx="6"/>
+  <text class="dg-label" x="100" y="94" text-anchor="middle">① 工作记忆</text>
+  <text class="dg-soft" x="100" y="112" text-anchor="middle">保存要求及来源</text>
+  <rect class="dg-node" x="215" y="70" width="160" height="64" rx="6"/>
+  <text class="dg-label" x="295" y="94" text-anchor="middle">② 装配器</text>
+  <text class="dg-soft" x="295" y="112" text-anchor="middle">要求放进模型输入</text>
+  <rect class="dg-node" x="410" y="70" width="160" height="64" rx="6"/>
+  <text class="dg-label" x="490" y="94" text-anchor="middle">③ Runtime</text>
+  <text class="dg-soft" x="490" y="112" text-anchor="middle">写入前检查补丁目标</text>
+  <rect class="dg-node" x="605" y="70" width="135" height="64" rx="6"/>
+  <text class="dg-label" x="672" y="94" text-anchor="middle">④ Harness</text>
+  <text class="dg-soft" x="672" y="112" text-anchor="middle">按真实结果更新</text>
+  <path class="dg-arrow" d="M180 102 L215 102" marker-end="url(#m3)"/>
+  <path class="dg-arrow" d="M375 102 L410 102" marker-end="url(#m3)"/>
+  <path class="dg-arrow" d="M570 102 L605 102" marker-end="url(#m3)"/>
+  <text class="dg-faint" x="590" y="92">允许 / 执行结果</text>
+  <rect class="dg-node-warn" x="410" y="196" width="160" height="56" rx="6"/>
+  <text class="dg-label" x="490" y="218" text-anchor="middle">拒绝</text>
+  <text class="dg-soft" x="490" y="236" text-anchor="middle">补丁目标含 tests/</text>
+  <path class="dg-arrow-warn" d="M490 134 L490 196" marker-end="url(#m3)"/>
+  <path class="dg-arrow-warn" d="M410 224 L100 224 L100 134" marker-end="url(#m3)"/>
+  <text class="dg-soft" x="255" y="216" text-anchor="middle">回写：补丁被拒绝，代码未修改</text>
+  <text class="dg-soft" x="255" y="246" text-anchor="middle">下一步：重新准备符合约束的补丁</text>
+  <text class="dg-faint" x="380" y="290" text-anchor="middle">不能沿原计划直接进入「修改后验证」——记录只帮助准备方案，拦截靠 Runtime（提示词不是边界）</text>
+</svg>
+<figcaption>图 3 · 四步链路（笔记行 758–770）。拒绝分支必须回写工作记忆：「补丁被拒绝，代码未修改」，下一步重新准备补丁——与 0008 门禁「拒绝压过放行」、0010 停止原因不可覆盖同构。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么约束写进了记忆，还要 Runtime 再拦一道？</strong> 因为记录与提示词一样，只能「劝」模型，不能「强制」模型。替代方案「只靠 prompt 写约束」的代价：模型一旦提出违规方案，没有任何东西在执行前拦住它，事故直接落盘。当前约束下选「记录 + 装配 + 执行前拦截 + 结果回写」四层：每一层回答上一层失效后还剩什么（与 0008 的递推防线同一思路）。拒绝后的回写同样不可省——否则记录说「已修改」、事实是没改，后续每轮都建立在分叉的状态上。
+</div>
+
+<h3 id="sec4">4. 临时事实：有来源，也要能失效</h3>
+<p>工具读到的源码、测试结果和修改状态，都是<strong>某个现场下的执行事实</strong>。「临时」不是说它们不可信，而是说它们对应当时的代码和环境，可能随代码或环境变化失效（行 776；PDF p5 同口径）。五类内容要分开（行 780–786）：</p>
+<table>
+  <tr><th>内容</th><th>性质</th><th>可以证明什么</th></tr>
+  <tr><td>工具返回 <code>&lt;=</code></td><td>源码观察</td><td>当时读取的版本使用这个表达式</td></tr>
+  <tr><td>工具返回边界失败</td><td>执行事实</td><td>对应版本该用例未通过</td></tr>
+  <tr><td>模型说改成 <code>&lt;</code> 应该有效</td><td>候选判断</td><td>有一个待验证方案</td></tr>
+  <tr><td>工具确认补丁应用</td><td>修改结果</td><td>文件已发生对应变更</td></tr>
+  <tr><td>新版本测试通过</td><td>验证结果</td><td>本次覆盖的测试在该版本通过</td></tr>
+</table>
+<figure class="diagram" id="fig4">
+<svg viewBox="0 0 760 290" role="img" aria-label="证据版本绑定与失效">
+  <defs><marker id="m4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">证据绑定版本：v1 的证据不能证明 v2</text>
+  <rect class="dg-node" x="20" y="70" width="220" height="60" rx="6"/>
+  <text class="dg-label" x="130" y="94" text-anchor="middle">T0：v1 测试失败</text>
+  <text class="dg-soft" x="130" y="112" text-anchor="middle">真实历史，证据 current</text>
+  <rect class="dg-node" x="290" y="70" width="220" height="60" rx="6"/>
+  <text class="dg-label" x="400" y="94" text-anchor="middle">T1：补丁应用，v1→v2</text>
+  <text class="dg-soft" x="400" y="112" text-anchor="middle">v1 证据按规则标 stale</text>
+  <rect class="dg-node-ok" x="560" y="70" width="180" height="60" rx="6"/>
+  <text class="dg-label" x="650" y="94" text-anchor="middle">T2：对 v2 重新测试</text>
+  <text class="dg-soft" x="650" y="112" text-anchor="middle">新证据才 current</text>
+  <path class="dg-arrow" d="M240 100 L290 100" marker-end="url(#m4)"/>
+  <path class="dg-arrow" d="M510 100 L560 100" marker-end="url(#m4)"/>
+  <path class="dg-arrow-warn" d="M130 130 L130 168 L650 168 L650 130" marker-end="url(#m4)"/>
+  <text class="dg-soft" x="390" y="160" text-anchor="middle">不能直接沿用：v1 失败不证明 v2 仍失败，v1 通过不证明 v2 正确</text>
+  <rect class="dg-zone" x="20" y="200" width="720" height="56" rx="8"/>
+  <text class="dg-label" x="380" y="224" text-anchor="middle">分支也要隔离：方案 A 与 B 的代码不同</text>
+  <text class="dg-soft" x="380" y="244" text-anchor="middle">不能用 B 的通过记录证明 A 完成；status=current 需要程序维护，写标签不会永久有效</text>
+</svg>
+<figcaption>图 4 · 失效规则（笔记行 788–794）。源码、任务要求和运行环境变化都可能触发失效；相关旧证据标 stale，当前版本重新测试。与 0017 的 revision 绑定同一条线：证据必须绑定被测内容。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么按规则标 stale，而不是「全部重测」或「继续沿用」？</strong> 全部重测最安全但最贵——每次代码变化都重跑全部测试，长任务里成本不可接受；继续沿用最便宜但失真——旧证据对新版本没有证明力。当前方案是精准失效：只有「相关」旧证据标 stale、只重测受影响范围。代价是要维护失效规则本身（什么变化触发哪些证据失效），这就是「<code>status=current</code> 需要程序维护」的含义——标签不是写完就永远有效的护身符。
+</div>
+
+<h3 id="sec5">5. Scratchpad：把计划和下一步接到执行事实后面</h3>
+<p>失败事实说明发生了什么，但不一定说明准备怎样处理（行 800）。<strong>Scratchpad 是工作记忆中的任务便签</strong>，保存计划、观察、简短决策和下一步；<strong>它不要求保存模型内部的隐式思维链</strong>（行 802）。看结构，重点看证据引用与状态（行 808–817）：</p>
+<figure class="diagram" id="fig5">
+<svg viewBox="0 0 760 300" role="img" aria-label="Scratchpad 结构与证据接线">
+  <defs><marker id="m5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">Scratchpad：每个判断都接得到证据</text>
+  <rect class="dg-node-accent" x="20" y="60" width="360" height="190" rx="6"/>
+  <text class="dg-label" x="200" y="84" text-anchor="middle">Scratchpad（任务便签）</text>
+  <text class="dg-soft" x="36" y="110">plan：修改比较条件 → 运行边界测试</text>
+  <text class="dg-soft" x="36" y="132">observation：恰好到期仍返回 True</text>
+  <text class="dg-soft" x="36" y="154">evidence_id：test-001</text>
+  <text class="dg-soft" x="36" y="176">status：已定位，尚未修改</text>
+  <text class="dg-soft" x="36" y="198">decision_summary：拟 &lt;= 改 &lt;，效果尚未验证</text>
+  <text class="dg-soft" x="36" y="220">next_step：应用补丁</text>
+  <rect class="dg-node" x="470" y="60" width="270" height="70" rx="6"/>
+  <text class="dg-label" x="605" y="84" text-anchor="middle">执行记录 test-001</text>
+  <text class="dg-soft" x="605" y="104" text-anchor="middle">test_at 失败：预期 False，实际 True</text>
+  <path class="dg-arrow-accent" d="M380 105 L470 105" marker-end="url(#m5)"/>
+  <text class="dg-faint" x="425" y="96" text-anchor="middle">为什么提这方案</text>
+  <rect class="dg-node" x="470" y="170" width="270" height="80" rx="6"/>
+  <text class="dg-label" x="605" y="194" text-anchor="middle">每次工具执行后</text>
+  <text class="dg-soft" x="605" y="214" text-anchor="middle">按真实结果更新 status / next_step</text>
+  <text class="dg-soft" x="605" y="232" text-anchor="middle">失败→记失败查原因；通过→核对覆盖</text>
+  <path class="dg-arrow" d="M605 130 L605 170" marker-end="url(#m5)"/>
+  <path class="dg-arrow-accent" d="M470 210 L380 210" marker-end="url(#m5)"/>
+  <text class="dg-faint" x="380" y="282" text-anchor="middle">计划可以由模型提出，执行状态必须根据真实结果更新（行 823）</text>
+</svg>
+<figcaption>图 5 · 便签接线（笔记行 806–823）。<code>evidence_id</code> 对应失败执行记录，说明为什么提出这个方案；下一轮知道准备做什么，同时知道还没执行。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么不保存模型的隐式思维链？</strong> 思维链是模型内部过程，冗长且不可核对——存下来也无法验证它说的推理是否真实发生。便签只存「可核对的决策摘要 + 证据引用」：丢失推理细节，换来可审计、可装配、可恢复的进度。这是取舍不是偷懒：恢复任务需要的是「准备做什么、凭什么、做到哪」，不是「当时怎么想的」。补丁失败就记录失败并检查原因；测试通过就核对是否覆盖全部要求，再决定能否完成（行 821）——<strong>便签跟着实际结果变化，不能一直保留最初的计划</strong>（PDF p6）。
+</div>
+
+<h3 id="sec6">6. 生命周期：创建、更新、保存、恢复、归档</h3>
+<table>
+  <tr><th>阶段</th><th>输入与动作</th><th>结果</th></tr>
+  <tr><td>创建</td><td>读取目标、约束和初始现场</td><td>建立当前任务记录</td></tr>
+  <tr><td>更新</td><td>收到每次工具结果</td><td>调整已完成、失败、风险和下一步</td></tr>
+  <tr><td>保存</td><td>到达暂停或恢复边界</td><td>记录不随进程退出而丢失</td></tr>
+  <tr><td>恢复</td><td>读取记录并核对当前代码</td><td>确定从哪一步继续，哪些证据需重做</td></tr>
+  <tr><td>归档</td><td>核对完成条件</td><td>保留执行记录，筛选后续有用知识</td></tr>
+</table>
+<figure class="diagram" id="fig6">
+<svg viewBox="0 0 760 310" role="img" aria-label="工作记忆生命周期与保存发送分离">
+  <defs><marker id="m6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">生命周期五阶段，以及「保存 ≠ 发送」</text>
+  <rect class="dg-node" x="20" y="70" width="130" height="54" rx="6"/>
+  <text class="dg-label" x="85" y="92" text-anchor="middle">创建</text>
+  <text class="dg-soft" x="85" y="110" text-anchor="middle">目标·约束·现场</text>
+  <rect class="dg-node-accent" x="170" y="70" width="130" height="54" rx="6"/>
+  <text class="dg-label" x="235" y="92" text-anchor="middle">更新</text>
+  <text class="dg-soft" x="235" y="110" text-anchor="middle">每次工具结果</text>
+  <rect class="dg-node" x="320" y="70" width="130" height="54" rx="6"/>
+  <text class="dg-label" x="385" y="92" text-anchor="middle">保存</text>
+  <text class="dg-soft" x="385" y="110" text-anchor="middle">暂停/恢复边界</text>
+  <rect class="dg-node" x="470" y="70" width="130" height="54" rx="6"/>
+  <text class="dg-label" x="535" y="92" text-anchor="middle">恢复</text>
+  <text class="dg-soft" x="535" y="110" text-anchor="middle">读记录+核对现场</text>
+  <rect class="dg-node" x="620" y="70" width="120" height="54" rx="6"/>
+  <text class="dg-label" x="680" y="92" text-anchor="middle">归档</text>
+  <text class="dg-soft" x="680" y="110" text-anchor="middle">核对完成条件</text>
+  <path class="dg-arrow" d="M150 97 L170 97" marker-end="url(#m6)"/>
+  <path class="dg-arrow" d="M300 97 L320 97" marker-end="url(#m6)"/>
+  <path class="dg-arrow" d="M450 97 L470 97" marker-end="url(#m6)"/>
+  <path class="dg-arrow" d="M600 97 L620 97" marker-end="url(#m6)"/>
+  <path class="dg-arrow-accent" d="M235 70 L235 48 L175 48 L175 64" marker-end="url(#m6)"/>
+  <text class="dg-faint" x="205" y="44" text-anchor="middle">循环：结果驱动</text>
+  <rect class="dg-zone" x="20" y="170" width="340" height="80" rx="8"/>
+  <text class="dg-label" x="190" y="196" text-anchor="middle">保存＝持久化</text>
+  <text class="dg-soft" x="190" y="216" text-anchor="middle">完整日志、多个风险都可存</text>
+  <text class="dg-soft" x="190" y="234" text-anchor="middle">目的：记录能再读、能核对</text>
+  <rect class="dg-zone" x="400" y="170" width="340" height="80" rx="8"/>
+  <text class="dg-label" x="570" y="196" text-anchor="middle">发送＝装配（4-1）</text>
+  <text class="dg-soft" x="570" y="216" text-anchor="middle">本轮只发失败断言+引用、当前风险</text>
+  <text class="dg-soft" x="570" y="234" text-anchor="middle">目的：预算内给模型相关部分</text>
+  <text class="dg-faint" x="380" y="288" text-anchor="middle">存档说明上次做到哪里，不能证明外部文件一直没变——恢复先核对，再继续（行 837–839）</text>
+</svg>
+<figcaption>图 6 · 生命周期（笔记行 829–845）。补丁成功后暂停，要保存新版本、修改结果和「尚未测试」；恢复时确认当前文件仍匹配，再继续测试。归档时「筛选后续有用知识」是通往 4-3 长期记忆的接口。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么恢复必须先核对现场？</strong> 存档是「上次做到哪里」的证据，不是「外部世界没变」的证据。暂停期间别人改了代码，就要先检查差异、重新决定验证范围（行 839）——与 0012 恢复五步「存档→工作区→任务状态→业务对象→最后启动模型」同构：现场不可信时继续执行，等于在别人的代码上沿用你的旧验证范围。<strong>为什么保存与发送分离？</strong> 两个动作服务两个目的：持久化保证记录能再读；上下文装配决定模型这次实际看到什么（行 845）。全量保存不妨碍本轮只发相关部分——这正是 4-1 三去向里「外部保存+引用」在记录侧的落点。
+</div>
+
+<h3 id="sec7">7. 与 Agent State 的边界，以及 JSONL 演示到底证明了什么</h3>
+<p>Agent State 可以保存消息、模型、工具和运行标记，也可以包含业务字段；单独讲工作记忆，是为了明确<strong>目标、证据和进度怎样更新</strong>（行 851）。三个保存位置语义要区分（行 853–859）：</p>
+<table>
+  <tr><th>保存位置</th><th>主要职责</th></tr>
+  <tr><td>执行记录</td><td>原始工具返回、调用关联、退出码和日志</td></tr>
+  <tr><td>工作记忆</td><td>提取后的关键结果、当前目标和进度</td></tr>
+  <tr><td>模型请求</td><td>本轮选中的信息</td></tr>
+</table>
+<p>它们可以存于同一个文件或数据库，但语义要能区分。4-2-6.py 的 JSONL 演示就是这个结构：依次写入用户要求、预设工具调用、真实边界表达式结果，再写入 <code>customType=working_memory</code> 记录；恢复时重新读取，取出最新工作记忆，装配进下一轮消息（行 865）。这种 <code>message</code> / <code>custom</code> 分型与 pi 会话存档同构（见 pi-agent-core 的 <code>session/types.d.ts</code>：<code>type:"message"</code> 与 <code>type:"custom" + customType</code>）。</p>
+<figure class="diagram" id="fig7">
+<svg viewBox="0 0 760 330" role="img" aria-label="JSONL 写入与恢复装配时序">
+  <defs><marker id="m7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">JSONL 演示：custom 记录不自动成为模型消息</text>
+  <rect class="dg-zone" x="20" y="60" width="260" height="220" rx="8"/>
+  <text class="dg-label" x="150" y="84" text-anchor="middle">session.jsonl（4 条 entry）</text>
+  <text class="dg-soft" x="36" y="112">1 message：user 要求+约束</text>
+  <text class="dg-soft" x="36" y="140">2 message：assistant toolCall</text>
+  <text class="dg-faint" x="52" y="158">id = test-001</text>
+  <text class="dg-soft" x="36" y="186">3 message：toolResult</text>
+  <text class="dg-faint" x="52" y="204">toolCallId = test-001，isError=false</text>
+  <text class="dg-soft" x="36" y="232">4 custom：working_memory</text>
+  <text class="dg-faint" x="52" y="250">code_version=v1，尚未修改</text>
+  <rect class="dg-node" x="340" y="80" width="170" height="60" rx="6"/>
+  <text class="dg-label" x="425" y="104" text-anchor="middle">恢复：重读文件</text>
+  <text class="dg-soft" x="425" y="122" text-anchor="middle">按 type 分流</text>
+  <path class="dg-arrow" d="M280 110 L340 110" marker-end="url(#m7)"/>
+  <rect class="dg-node" x="570" y="60" width="170" height="56" rx="6"/>
+  <text class="dg-label" x="655" y="82" text-anchor="middle">messages（3 条）</text>
+  <text class="dg-soft" x="655" y="100" text-anchor="middle">只滤 type=message</text>
+  <rect class="dg-node-accent" x="570" y="150" width="170" height="56" rx="6"/>
+  <text class="dg-label" x="655" y="172" text-anchor="middle">最新 working_memory</text>
+  <text class="dg-soft" x="655" y="190" text-anchor="middle">reversed 找最新 custom</text>
+  <path class="dg-arrow" d="M510 95 L570 88" marker-end="url(#m7)"/>
+  <path class="dg-arrow" d="M510 125 L570 170" marker-end="url(#m7)"/>
+  <rect class="dg-node-accent" x="340" y="240" width="400" height="56" rx="6"/>
+  <text class="dg-label" x="540" y="262" text-anchor="middle">装配器：把 memory 装进下一轮 user 消息（第 4 条）</text>
+  <text class="dg-soft" x="540" y="280" text-anchor="middle">保存下来 ≠ 模型看到——还需要装配器读取并加入请求（行 873）</text>
+  <path class="dg-arrow-accent" d="M655 206 L655 240" marker-end="url(#m7)"/>
+  <path class="dg-arrow" d="M655 116 L700 116 L700 240" marker-end="url(#m7)"/>
+</svg>
+<figcaption>图 7 · 演示解剖（4-2-6.py；笔记行 863–881）。两个关注点：调用 id 与结果 toolCallId 相同，说明结果对应哪次执行；自定义工作记忆保存后不自动成为模型消息。</figcaption>
+</figure>
+<p>演示里还有一个容易误读的字段：<code>isError=False</code> 表示计算工具<strong>正常获得结果</strong>；结果为 True、与预期 False 不符，<strong>业务验证仍然失败</strong>（行 875）。一句话：<strong>工具正常返回，不等于任务验证通过</strong>（行 879）——执行状态与业务断言要分别记录（验收第 5 条）。</p>
+<div class="why-box">
+<strong>这段演示证明了什么、不能证明什么？</strong> 它证明：记录写入、重新读取和装配路径成立（行 881）。它<strong>没有</strong>调用模型、没有修复源码、也没有核对恢复后的版本；临时目录退出后删除。正式工程仍需持久存储与现场核对。这与 0017 的口径意识一致：演示数字与演示路径是「那次运行的证据」，不是普适结论——你的 benchmark 工作里，单次跑批的指标同样不能外推成系统结论。<strong>为什么不另建一套数据库？</strong> 物理分离不是重点，语义区分才是：同一 JSONL 里 message 与 custom 各有消费者；另建存储反而引入「两处记录谁同步谁」的一致性问题。当前约束下「State 内含工作记忆」更便宜（行 692）。
+</div>
+<p class="sidenote">工作对应点：结构化任务记录（目标/约束/事实/下一步分性质保存）与你熟悉的 de-test fact 族输出协议同构——都是「先定性质与来源，再谈检索与使用」。工作记忆与长期记忆的边界（当前会话 vs 跨会话复用）是下一课 4-3 的主题，也是 OpenViking 记忆系统的核心问题之一。</p>
+
+<h3 id="sec8">8. 面试视角：两分钟主链 + 追问链</h3>
+<p><strong>两分钟主链</strong>（不看稿讲清）：历史回答「发生过什么」，工作记忆回答「现在什么状态」，本轮 Context 回答「这次看哪些」→ 记录最少保存目标、已完成、关键结果、未完成，再补约束、风险、来源、版本 → 状态依据是三阶段：建议只存候选、工具确认才写已修改、当前版本测试通过才存验证结果 → 约束走四步链路，Runtime 执行前拦截，拒绝必须回写 → 事实绑定版本，旧证据标 stale、分支隔离 → 便签接 evidence_id，结果驱动更新 → 保存与发送分离，恢复取最新记录并核对现场 → 工具正常返回≠业务验证通过。</p>
+<pre>工作记忆
+├── 为什么：历史≠当前状态（长+压缩 → 重推易错）
+├── 存什么：目标 / 已完成 / 关键结果 / 未完成 + 约束 / 风险 / 来源 / 版本
+├── 凭什么写：三阶段（方案→修改→验证），只认执行证据
+├── 怎样拦：约束四步链（记忆→装配→Runtime→Harness），拒绝回写
+├── 怎样失效：code_version 绑定 + stale 程序维护 + 分支隔离
+├── 怎样继续：Scratchpad 接 evidence_id；恢复取最新 + 核对现场
+└── 边界：保存≠发送；执行成功≠业务通过；演示≠正式工程</pre>
+<p><strong>面试官追问链</strong>：</p>
+<ul>
+  <li>「模型说改完了，你怎么确认？」→ 三阶段：只认修改工具回执与当前版本测试执行，不认模型自述。</li>
+  <li>「约束写在 prompt 里不就行了？」→ 四步链路：记录只帮助准备方案，违规方案靠 Runtime 执行前拦截；拒绝后还要回写状态。</li>
+  <li>「旧测试通过记录为什么不能用了？」→ 证据绑定版本：v1 通过不证明 v2 正确；stale 要程序维护，分支也要隔离。</li>
+  <li>「恢复会话就恢复进度了吗？」→ 存档≠现场没变：先核对当前代码，再决定从哪继续、哪些证据重做。</li>
+  <li>「工具返回正常，为什么任务还失败？」→ 执行状态与业务断言分开：isError=False 只说明拿到了结果，不说明结果符合预期。</li>
+</ul>
+
+<hr>
+
+<h2 id="part2">第二部分：检索式测验（10 题 = 4 选择 + 6 简述）</h2>
+<p>Q1–Q2 换形式重测 0017 的两条核心不变量（0017 分数未报，按核心不变量兜底）；Q3–Q4 考本课核心判断（Q4 换形式覆盖章复习 Q12）；Q5–Q10 简述覆盖六条主链（Q5 换形式覆盖章复习 Q11），为结课课 0022 的集中复测铺垫。简述题先脱稿写，再展开参考答案，按得分点严格自评；漏掉关键点就选「部分对」。</p>
+<div id="quiz"></div>
+
+<hr>
+
+<h2 id="part3">第三部分：第二层练习——跑起来，再主动改造</h2>
+<p>本课实验①–⑥<strong>全部离线可跑：四个脚本纯标准库，不需要 tokenizers，也不需要模型 API key</strong>。复用 0017 建好的 <code>4-1/.venv</code>（Python 3.12；用系统 python3 也能跑，但统一环境少踩坑）。实验①②是基线观察，③–⑥是主动改造探针（heredoc 实现，<strong>不改课程原文件，无需复原</strong>）。每个实验标注它证明的验收条款。命令均从<strong>本课程仓库根目录</strong>开始；所有「本机实测」来自 2026-11-22 的验证运行。</p>
+
+<h3>实验 ①：基线装配 + 字段缺口——简化字典缺了哪两个字段</h3>
+<ul>
+  <li>跑前三个脚本：<pre>cd course_code/week04/4-2
+../4-1/.venv/bin/python 4-2-2.py
+../4-1/.venv/bin/python 4-2-3.py
+../4-1/.venv/bin/python 4-2-4.py</pre><strong>先写预期</strong>：4-2-2 的请求里工作记忆有几块？4-2-3 取出的事实记录，对照笔记行 724–735 的完整示例缺哪两个字段？<br>预期（本机实测）：4-2-2 输出 system + user 两条消息，user 内五块（goal / constraints / completed_steps / tool_results / unresolved），状态是「已定位，未修改，未验证」；4-2-3 只有 <strong>summary / code_version / source / reference 四个字段</strong>——缺 <code>execution_id</code> 与 <code>status</code>，笔记行 735 明说「简化字典未列出所有字段，正式实现要补齐后再引用」；4-2-4 只装配 scratchpad 一块。</li>
+</ul>
+
+<h3>实验 ②：JSONL 恢复——三个观察点（证明验收⑤：执行成功≠业务通过）</h3>
+<ul>
+  <li>跑恢复演示：<pre>../4-1/.venv/bin/python 4-2-6.py</pre><strong>先写预期</strong>：输出几条消息？工作记忆是自动出现在消息里吗？isError=False 能说明业务验证通过吗？<br>预期（本机实测）：输出 <strong>4 条</strong>消息——3 条历史 + 第 4 条装配器补的「当前任务记录」；第 2 条 <code>id</code> 与第 3 条 <code>toolCallId</code> 都是 test-001；<code>isError=false</code> 但文本「预期 False，实际 True」——<strong>工具链路正常，业务验证失败</strong>。</li>
+  <li>探针：把 JSONL 留在眼前，看 custom 怎样被过滤（在 4-2 目录执行）：<pre>../4-1/.venv/bin/python - &lt;&lt;'EOF'
+import json
+from pathlib import Path
+p = Path("/tmp/wm-session-demo.jsonl")
+entries = [
+  {"type":"message","message":{"role":"user","content":"修复会话到期判断，不得修改测试。"}},
+  {"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"test-001","name":"run_test","arguments":{}}]}},
+  {"type":"message","message":{"role":"toolResult","toolCallId":"test-001","toolName":"run_test","content":[{"type":"text","text":"预期 False，实际 True"}],"isError":False}},
+  {"type":"custom","customType":"working_memory","data":{"goal":"到期立即失效","code_version":"v1","status":"已获得失败证据，尚未修改","evidence":"test-001","next_step":"定位并修改比较条件"}},
+]
+p.write_text("".join(json.dumps(e, ensure_ascii=False)+"\n" for e in entries), encoding="utf-8")
+loaded = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines()]
+print("entry 类型序列:", [e["type"] for e in loaded])
+msgs = [e["message"] for e in loaded if e["type"]=="message"]
+print("只过滤 message 的条数:", len(msgs))
+print("工作记忆在消息里吗:", any("working_memory" in json.dumps(x, ensure_ascii=False) for x in msgs))
+EOF</pre>预期（本机实测）：类型序列 message×3 + custom×1；过滤后 <strong>3 条</strong>；工作记忆<strong>不在</strong>消息里。文件留在 <code>/tmp/wm-session-demo.jsonl</code>，可 <code>cat</code> 逐行看。<strong>保存下来 ≠ 模型看到</strong>，装配器读取加入才进请求。</li>
+</ul>
+
+<h3>实验 ③：主动改造 A——把建议写成完成（证明验收①）</h3>
+<ul>
+  <li>探针：伪造「已应用补丁」，看装配器会不会拦（在 4-2 目录执行）：<pre>../4-1/.venv/bin/python - &lt;&lt;'EOF'
+import importlib.util, copy
+spec = importlib.util.spec_from_file_location("wm", "4-2-2.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+mem = copy.deepcopy(m.working_memory)
+mem["completed_steps"].append("应用补丁")   # 改造点：没有任何执行证据
+mem["unresolved"] = []
+ctx = m.assemble_context(m.system_prompt, m.user_prompt, mem)
+print("已完成含补丁:", "应用补丁" in mem["completed_steps"])
+print("未完成已清空:", mem["unresolved"] == [])
+print("tool_results 有执行ID吗:", [r.get("execution_id") for r in mem["tool_results"]])
+print("请求里还有「尚未应用补丁」吗:", "尚未应用补丁" in ctx["messages"][1]["content"])
+EOF</pre><strong>先写预期</strong>：装配器会检查「应用补丁」有没有执行证据吗？请求里的进度变成什么？<br>预期（本机实测）：已完成含补丁 True、未完成清空 True、执行 ID 全是 None、「尚未应用补丁」从请求消失——<strong>装配器照单全收</strong>。它只管选择与预算，不管状态真假；状态依据要靠更新纪律（三阶段）保证。这就是开篇事故的上游现场：记录失真，装配再正确也是在传播失真。</li>
+</ul>
+
+<h3>实验 ④：主动改造 B——恢复取错记录（证明验收④）</h3>
+<ul>
+  <li>探针：两次保存后，reversed 取最新 vs 正序取最早（在 4-2 目录执行）：<pre>../4-1/.venv/bin/python - &lt;&lt;'EOF'
+entries = [
+  {"type":"message","message":{"role":"user","content":"修复会话到期判断，不得修改测试。"}},
+  {"type":"custom","customType":"working_memory","data":{"code_version":"v1","status":"已获得失败证据，尚未修改","next_step":"定位并修改比较条件"}},
+  {"type":"custom","customType":"working_memory","data":{"code_version":"v2","status":"补丁已应用，尚未测试","next_step":"运行修改后的边界测试"}},
+]
+pick = lambda es: next(e["data"] for e in es if e["type"]=="custom" and e["customType"]=="working_memory")
+latest = pick(reversed(entries)); first = pick(entries)
+print("reversed 取到:", latest["code_version"], "|", latest["status"])
+print("正序取到:  ", first["code_version"], "|", first["status"])
+EOF</pre><strong>先写预期</strong>：去掉 4-2-6 里的 <code>reversed()</code> 会取到哪条？模型恢复后可能做什么危险动作？<br>预期（本机实测）：reversed → <strong>v2「补丁已应用，尚未测试」</strong>；正序 → <strong>v1「尚未修改」</strong>。取到旧记录，模型以为还没改过，可能<strong>重复应用补丁</strong>。注意演示只做到「取最新」，还没做「核对现场」——恢复时确认当前文件仍匹配 v2，是正式工程要补的另一半（验收④的完整含义）。</li>
+</ul>
+
+<h3>实验 ⑤：主动改造 C——版本变了，旧证据还标 current（证明验收③）</h3>
+<ul>
+  <li>探针：代码已到 v2，对比「原样沿用」与「标 stale + 要求重测」两种记录（在 4-2 目录执行）：<pre>../4-1/.venv/bin/python - &lt;&lt;'EOF'
+import importlib.util, copy
+spec = importlib.util.spec_from_file_location("wm", "4-2-2.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+bad = copy.deepcopy(m.working_memory)   # 错误版：v1 失败记录原样进 v2 的请求
+bad_text = m.assemble_context(m.system_prompt, m.user_prompt, bad)["messages"][1]["content"]
+good = copy.deepcopy(m.working_memory)  # 正确版：标 stale + 对 v2 重测
+good["tool_results"][0]["status"] = "stale"
+good["unresolved"].append("代码已变为 v2：对 v2 重新运行边界测试")
+good_text = m.assemble_context(m.system_prompt, m.user_prompt, good)["messages"][1]["content"]
+print("错误版 含stale:", "stale" in bad_text, "| 含重测要求:", "重新运行" in bad_text)
+print("正确版 含stale:", "stale" in good_text, "| 含重测要求:", "重新运行" in good_text)
+EOF</pre><strong>先写预期</strong>：错误版的请求里，模型能看出「这条失败证据测的是旧版本」吗？<br>预期（本机实测）：错误版 stale=False、重测要求=False；正确版两者 True。错误版里 v1 失败摘要原样出现，模型可能误判当前代码仍失败、或把旧失败当成已验证的现状。<strong>失效标记与重测要求必须显式写进记录</strong>——与 0017 实验⑥「预算拦不住污染，有效性检查才能」同构：这里装配器同样拦不住，要靠记录侧的版本纪律。</li>
+</ul>
+
+<h3>实验 ⑥：主动改造 D——拒绝分支不回写（证明验收②）</h3>
+<ul>
+  <li>探针：给一个「只看计划、不看结果」的更新函数，补上拒绝分支（在 4-2 目录执行）：<pre>../4-1/.venv/bin/python - &lt;&lt;'EOF'
+import json
+def update_bad(mem, result):
+    mem["completed_steps"].append("应用补丁")
+    mem["next_step"] = "运行修改后的测试"
+def update_good(mem, result):
+    if result["status"] == "applied":
+        mem["completed_steps"].append("应用补丁")
+        mem["status"] = "已修改，尚未测试"
+        mem["next_step"] = "运行修改后的测试"
+    else:
+        mem["status"] = "补丁被拒绝，代码未修改"
+        mem["next_step"] = "重新准备符合约束的补丁"
+rejected = {"status":"rejected","reason":"补丁目标含 tests/，违反约束"}
+a = {"completed_steps": ["读取源码", "运行边界测试"]}
+b = {"completed_steps": ["读取源码", "运行边界测试"]}
+update_bad(a, rejected); update_good(b, rejected)
+print("错误版:", json.dumps(a, ensure_ascii=False))
+print("正确版:", json.dumps(b, ensure_ascii=False))
+c = {"completed_steps": ["读取源码", "运行边界测试"]}
+update_good(c, {"status":"applied"})
+print("正确版·成功分支:", json.dumps(c, ensure_ascii=False))
+EOF</pre><strong>先写预期</strong>：Runtime 拒绝后，错误版的 completed_steps 和 next_step 变成什么？为什么「沿原计划进入修改后验证」是事故？<br>预期（本机实测）：错误版 completed_steps 多出「应用补丁」、next_step 指向「运行修改后的测试」——<strong>代码根本没改</strong>；正确版「补丁被拒绝，代码未修改」+ 重新准备补丁；成功分支才写「已修改，尚未测试」。拒绝不回写，状态与事实分叉，后续每轮都建立在谎报上（图 3 的拒绝分支）。</li>
+</ul>
+
+<h2>回读与验证指引</h2>
+<ul>
+  <li>primary source：<a href="../course_code/week04/第四章 学习笔记.md"><code>第四章 学习笔记.md</code></a> 4.2 节（行 668–905）——重点回读「一、为什么还要工作记忆」「二、三阶段与完整字段」「三、约束四步链路」「四、五性质与失效」「五、Scratchpad」「六、生命周期与保存/发送」「七、State 边界与演示证明边界」；章复习问题 Q11–Q12（行 2584–2586，参考答案行 2664–2668）本课已换形式覆盖，结课前再对照原题自测。</li>
+  <li>代码回读顺序：<a href="../course_code/week04/4-2/4-2-2.py"><code>4-2-2.py</code></a>（记录结构+装配）→ <a href="../course_code/week04/4-2/4-2-3.py"><code>4-2-3.py</code></a>（一条事实的字段缺口）→ <a href="../course_code/week04/4-2/4-2-4.py"><code>4-2-4.py</code></a>（Scratchpad 接线）→ <a href="../course_code/week04/4-2/4-2-6.py"><code>4-2-6.py</code></a>（JSONL 写入/恢复/装配，注意 reversed 与 custom 过滤）。延伸阅读：pi-agent-core 的 <code>session/types.d.ts</code>（message/custom 分型的真实工程版，week03 的 node_modules 里可读）。</li>
+  <li>跨课连线：0017（装配器是本课记录的下游消费者；revision 绑定 ↔ 本课 code_version/stale）；0012（恢复五步 ↔ 本课恢复核对现场）；0014/0016（完成契约只认最新事实 ↔ 本课三阶段）；0008（门禁 fail closed ↔ 本课约束四步链路）。</li>
+  <li>口径提醒：4-2-2 的简化字典缺 execution_id/status 是<strong>教材明示的教学简化</strong>（行 735），不是 bug；引用字段时以完整示例为准。演示「证明记录写入、重读、装配路径成立」，不证明模型行为与修复正确性。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<ul>
+  <li><a href="../course_code/week04/第四章 学习笔记.md"><code>course_code/week04/第四章 学习笔记.md</code></a> 4.2 节 + 本章复习问题 Q11–Q12（学生版学习笔记，本课术语与验收的第一材料）</li>
+  <li><a href="../course_code/week04/README.md"><code>course_code/week04/README.md</code></a> 的 4-2 目录说明</li>
+  <li><a href="../course_materials/week04/4-2.pdf"><code>course_materials/week04/4-2.pdf</code></a>（教师 PDF，补充材料；p5「临时不是不可信，而是对应当时现场」、p6「便签跟着实际结果变化」与笔记同口径）</li>
+</ul>
+
+<div class="ask-reminder">
+  <strong>卡住了就问你的 agent。</strong>任何一处让你觉得「等等，为什么」——例如为什么约束写进记忆还要 Runtime 拦、为什么 v1 的失败不能证明 v2 仍失败、为什么便签不存思维链、为什么恢复取最新还不够还要核对现场、为什么 isError=False 业务仍失败、为什么工作记忆不另建数据库——直接回到对话里问。本课全部内容都在回答一个问题：<strong>这条状态，凭什么写进记录。</strong>
+</div>
+
+<div class="lesson-footer">
+  Week04 主题课序列：<a href="./0017-context-engineering.html">1/6 Context Engineering</a>（0017，4-1）· <strong>2/6 Working Memory（本课，4-2）</strong>· 3/6 Memory 体系与 OKF（0019，待生成）· 4/6 RAG（0020，待生成）· 5/6 LLM Wiki（0021，待生成）· 6/6 项目四（0022，结课课，待生成）<br>
+  前课回顾：<a href="./0017-context-engineering.html">0017</a> 解决「本轮信息怎样装进请求」；本课向上游走一步，保证装配器选的那份任务记录本身符合执行事实。<br>
+  <strong>本课通过条件</strong>：① Q1–Q2 重测全对，本课部分（第 3 题起）正确率 85% 以上；② 完成实验①②，并至少完成实验③–⑥中的两项（预期先写后验）；③ 不看稿 2 分钟讲清主链（三层分工 → 三阶段 → 约束链路 → 版本失效 → 恢复核对）。通过后进入 0019 Memory 体系与 OKF。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  questions: [
+    {
+      type: 'choice',
+      concept: '【重测·0017】必须项超限拒发',
+      section: '0017 间隔重测',
+      notesRef: '0017 精讲第 4 节 + 第四章笔记 4.1 五（行 316–378）',
+      question: '装配到一半，必须项压缩后仍超输入预算 30 Token，而输出预留还剩 128。程序应该怎么做？',
+      options: [
+        '拒绝发送，缩小范围或拆成多步',
+        '借用输出预留，先把请求发出去',
+        '删掉一条约束，腾出空间再发送',
+        '截断失败证据，保留开头就发送'
+      ],
+      answer: 0,
+      explanation: '输出预留不可借——模型还要空间生成回答与工具参数；必须项放不下就拒绝发送，缩小读取范围或拆多步后重新检查完整请求。静默删约束/截断证据都是让模型在信息不足时继续判断，与 0008 门禁 fail closed 同构。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·0017】有效性检查先于预算',
+      section: '0017 间隔重测',
+      notesRef: '0017 实验⑥ + 第四章笔记 4.1 四/七',
+      question: '一条「旧版本全部通过」的记录：很短、优先级高、预算放得下。装配器靠什么拦住它？',
+      options: [
+        '有效性检查：失效证据不进请求',
+        '预算检查：超限时自动丢弃材料',
+        '优先级排序：低优先级先被裁掉',
+        '压缩检查：摘要太长就再压一遍'
+      ],
+      answer: 0,
+      explanation: '它短、优先级高、预算放得下——预算、排序、压缩三道都拦不住。失效证据不是「占地方」，是「会误导」：只有有效性检查（valid/stale）能把它排除。0017 实验⑥实测：valid 改 True 后旧记录进入请求，估算 222→236。'
+    },
+    {
+      type: 'choice',
+      concept: '三阶段状态依据',
+      section: '4.2 二',
+      notesRef: '第四章笔记 4.2 二（行 710–716）',
+      question: '上一轮模型只说了「建议把 <= 改成 <」，之后没有任何工具执行。这一轮工作记忆的状态应该是？',
+      options: [
+        '已定位，尚未修改，尚未验证',
+        '已修改，尚未验证，等待测试',
+        '已定位，已修改，验证待进行',
+        '方案可行，视为完成，可交付'
+      ],
+      answer: 0,
+      explanation: '提出方案、修改成功、测试通过是三个阶段：建议只能存候选方案；修改工具确认成功才写「已修改」；测试实际通过才存对应版本通过结果。没有任何执行，状态就停在「已定位，未修改，未验证」。'
+    },
+    {
+      type: 'choice',
+      concept: '执行成功≠业务通过（复习 Q12 换形式）',
+      section: '4.2 七（复习 Q12）',
+      notesRef: '第四章笔记 4.2 七（行 875–879）+ 复习 Q12（行 2586/2668）',
+      question: 'run_test 正常返回，isError=False，文本是「预期 False，实际 True」。这条记录说明什么？',
+      options: [
+        '工具链路正常，业务验证失败',
+        '工具链路正常，业务验证通过',
+        '工具执行失败，需要立刻重试',
+        '结果文本有误，应当丢弃重跑'
+      ],
+      answer: 0,
+      explanation: 'isError=False 只说明工具执行完成并取得了结果；结果与预期不符，被测功能仍然错误。工具执行状态与业务验证结果要分别记录——这是验收第 5 条，也是 4-2-6 演示特意保留的字段口径。'
+    },
+    {
+      type: 'short',
+      concept: '三层分工与 State/Checkpoint 协作',
+      section: '4.2 一/七（复习 Q11 换形式）',
+      notesRef: '第四章笔记 4.2 一/七（行 670–692、849–859）+ 复习 Q11（行 2584/2664）',
+      question: '为什么有了完整对话历史，还要单独维护工作记忆？历史、工作记忆、本轮 Context 各回答什么问题？它与 Agent State、Checkpoint 怎样协作？',
+      hint: '三层各答一问 → 历史重推的风险 → State/Checkpoint 的归属与恢复动作。',
+      modelAnswer: '<strong>关键得分点：</strong>① 三层：历史＝每一步发生过什么；工作记忆＝现在什么已完成、什么失败、什么还没做；本轮 Context＝这次决策需要看到其中哪些。② 为什么：历史同时含计划、失败尝试与后来结果，越长、压缩越多，每轮重推进度越容易出错（重新搜索／把建议当已修改）；工作记忆让装配器直接取进度、让程序检查当前版本是否真完成验证。③ 协作：Agent State 承载运行状态（消息/模型/工具/运行标记），<strong>可直接包含工作记忆，不要求另建数据库</strong>；Checkpoint 保存恢复所需状态，恢复时再核对文件与执行现场，决定从哪一步继续。④ 语义区分比物理分离重要：执行记录（原始返回）、工作记忆（提取后的当前记录）、模型请求（本轮选中）可同存一处但语义要分清。漏③算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '三阶段与工具结果的摘要/核对入口',
+      section: '4.2 二',
+      notesRef: '第四章笔记 4.2 二（行 710–737）',
+      question: '「提出方案、修改成功、测试通过」为什么必须分成三个阶段记录？工具结果为什么保存摘要+引用而不是全文？一条完整的工具结果记录至少有哪些字段？',
+      hint: '三阶段各凭什么证据 → 摘要/原文各自服务谁 → 六个字段。',
+      modelAnswer: '<strong>关键得分点：</strong>① 三阶段：模型建议只能存<strong>候选方案</strong>；修改工具确认成功才能写「已修改」；测试实际通过才能存<strong>对应版本</strong>的通过结果。把建议当完成 → 未修改的代码被报成已修复。② 摘要+引用：几千行日志全文进记忆会挤占预算、稀释关键断言；摘要让模型快速知道问题，<strong>原文位置+执行 ID 让程序能核对</strong>；不能删失败断言、不能把未测试写成通过。③ 六字段：summary、source、<strong>execution_id</strong>、<strong>code_version</strong>、status、reference（笔记完整示例；4-2 脚本简化字典缺 execution_id/status，教材明示正式实现要补齐）。漏①任一阶段或③的 execution_id/code_version 算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '约束/风险/计划三分与四步链路',
+      section: '4.2 三',
+      notesRef: '第四章笔记 4.2 三（行 741–770）',
+      question: '约束、风险、Agent 计划三者怎样区分？「不得修改现有测试」从记录到执行的完整链路是哪四步？Runtime 拒绝后工作记忆必须怎样更新、为什么？',
+      hint: '三分定义与记录字段 → 四步链路 → 拒绝后的状态与下一步。',
+      modelAnswer: '<strong>关键得分点：</strong>① 约束＝必须遵守的要求（记内容/来源/适用范围，规则调整后更新，冲突无法判断时澄清）；风险＝需要检查的影响（记可能问题/依据/具体检查动作，检查后记已排除/已确认/仍待核对）；「我准备只改一个文件」是 <strong>Agent 计划，不能冒充用户要求</strong>。② 四步：工作记忆保存要求及来源 → 装配器放进模型输入 → <strong>Runtime 写入前检查补丁目标</strong> → Harness 按允许/拒绝/执行结果更新进度。③ 拒绝后：记录必须变「补丁被拒绝，代码未修改」，下一步重新准备补丁；<strong>不能沿原计划进入「修改后验证」</strong>——否则状态与事实分叉。④ why：记录只帮助准备方案，违规方案仍要执行前拦住（提示词不是边界，与 0008 门禁同构）。漏③算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '临时事实五性质与失效规则',
+      section: '4.2 四',
+      notesRef: '第四章笔记 4.2 四（行 774–794）',
+      question: '工具读到 <=、边界测试失败、模型说改 < 有效、补丁应用确认、新版本测试通过——这五类内容各能证明什么？代码 v1→v2 后旧证据怎样处理？为什么分支也要隔离？',
+      hint: '五性质各一句 → 失效规则与 stale 的维护者 → 分支隔离的理由。',
+      modelAnswer: '<strong>关键得分点：</strong>① 五性质：源码观察＝当时读取的版本用这个表达式；执行事实＝对应版本该用例未通过；候选判断＝有一个待验证方案；修改结果＝文件已发生对应变更；验证结果＝本次覆盖的测试在该版本通过。② v1 失败仍是真实历史，但<strong>不能证明 v2 仍失败；v1 通过不能证明 v2 正确</strong>；相关旧证据按规则标 <strong>stale</strong>，当前版本重测；源码/任务要求/运行环境变化都可触发失效；<strong>status=current 要程序维护</strong>，写标签不会永久有效。③ 分支隔离：方案 A 与 B 代码不同，不能用 B 的通过记录证明 A 完成。漏②的 stale 或③算部分对。'
+    },
+    {
+      type: 'short',
+      concept: 'Scratchpad 与保存/发送分离',
+      section: '4.2 五/六',
+      notesRef: '第四章笔记 4.2 五（行 798–823）+ 六（行 841–845）',
+      question: 'Scratchpad 保存什么、不保存什么？evidence_id 起什么作用？「保存」与「发送」为什么是两个动作？',
+      hint: '便签六字段 → 接线作用与更新纪律 → 两个动作各自的目的。',
+      modelAnswer: '<strong>关键得分点：</strong>① 保存计划、观察、简短决策和下一步（plan/observation/evidence_id/status/decision_summary/next_step）；<strong>不要求保存模型内部的隐式思维链</strong>。② evidence_id 对应失败执行记录，说明为什么提出这个方案；下一轮知道准备做什么、同时知道还没执行；<strong>计划可模型提出，执行状态必须按真实结果更新</strong>（失败→记失败查原因；通过→核对覆盖全部要求再决定能否完成）。③ 保存＝持久化保证记录能再读（完整日志、多个风险都可存）；发送＝装配决定模型本轮实际看到什么（只发失败断言+引用、影响当前动作的风险）。漏②或③算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '生命周期、恢复核对与演示的证明边界',
+      section: '4.2 六/七',
+      notesRef: '第四章笔记 4.2 六/七（行 827–881）',
+      question: '工作记忆生命周期五阶段各做什么？恢复时为什么必须先核对现场？4-2-6 的 JSONL 演示证明了什么、没证明什么？',
+      hint: '五阶段各一句 → 存档的证明边界 → 演示的三个「没有」。',
+      modelAnswer: '<strong>关键得分点：</strong>① 创建（读目标/约束/初始现场）→ 更新（每次工具结果调整已完成/失败/风险/下一步）→ 保存（暂停或恢复边界，记录不随进程丢失）→ 恢复（读记录并核对当前代码，定从哪继续、哪些证据重做）→ 归档（核对完成条件，留执行记录、筛选后续有用知识）。② <strong>存档说明上次做到哪里，不能证明外部文件一直没变</strong>；暂停期间别人改了代码要先查差异、重新决定验证范围（与 0012 恢复五步同构）。③ 演示证明：记录写入、重新读取、装配路径成立（id==toolCallId 配对、custom 需装配才进请求、取最新记录）；没证明：<strong>没调模型、没修源码、没核对恢复后版本</strong>，临时目录退出即删——正式工程仍需持久存储与现场核对。漏②或③任一「没有」算部分对。'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>
