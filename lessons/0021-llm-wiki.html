@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week04 主题课 5/6 · LLM Wiki：整理结果怎么变成可维护的知识资产</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 04 · 主题课 5 / 6 · 覆盖课程小节 4-5 · 版式：先讲后测，精讲与测验五五开</p>
+<h1>LLM Wiki——整理出来只是起点，来源追得到、更新传得动、边界标得如实，才算知识资产</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：Week04 第五课。0020 RAG 管「为本次问题怎么找证据、查回答」；本课退后一步管<strong>证据语料本身怎么治理</strong>——把反复整理的结论做成知识页，来源可追踪、草稿与发布分离、原文变化沿依赖传播、权限贯穿读取到导出、四维验收如实标注。这是「整理结果怎么变成可维护的知识资产」的一课。<br>
+  <strong>材料定位</strong>：<a href="../course_code/week04/第四章 学习笔记.md"><code>第四章 学习笔记.md</code></a> 4.5 节（行 1933–2252，<strong>本课第一材料</strong>，术语以此为准）+「本章复习问题」Q28–Q31（行 2618–2624，参考答案行 2715–2725，本课测验换形式覆盖）+ <a href="../course_code/week04/README.md"><code>week04/README.md</code></a> 4-5 目录说明 + 教师 PDF <a href="../course_materials/week04/4-5.pdf"><code>4-5.pdf</code></a>（补充）。<br>
+  <strong>代码定位</strong>：<code>course_code/week04/4-5/</code>——<code>corpus/</code> 与 4-4 同源语料；<code>llm-wiki-demo5-step/</code>（28 文件，发布四页后的阶段快照）与 <code>llm-wiki-demo-step9/</code>（35 文件，含 v2 更新、问答归档、巡检、权限审查与最终验收的完整终态）。<strong>纯文件快照，无任何可执行脚本</strong>，本课以快照对照阅读 + /tmp 标准库模拟为主，不改课程原文件。<br>
+  <strong>预计用时</strong>：精讲 45 分钟 + 测验 25 分钟 + 第二层动手练习 50 分钟<br>
+  <strong>本课验收标准</strong>（笔记行 2238–2250，六条）：① 原文没被模型修改，未核对内容仍为草稿；② 关键结论能定位到原文版本和位置；③ 60 分钟规则、30 分钟源码和 90 分钟建议不混成一个当前事实；④ 来源变化能找到直接和间接依赖，更新失败有明确状态；⑤ 有权限机制就测试真实拒绝，没有就标未实现；⑥ 当前测试结果缺失时不写「测试已经通过」。<strong>实验②落地①，实验④落地②③⑥，实验③落地④，实验⑥落地⑤，实验①⑤提供阶段与检索现场。</strong>
+</div>
+
+<h2>怎么用这一课</h2>
+<p><strong>先讲后测，五五开</strong>：第一部分按「分工定位 → 最小结构 → 知识页三问 → 生成发布分离 → 来源追踪与更新传播 → 三种地位与冲突 → 权限边界 → 四维验收」建地图；第二部分 10 题 = <strong>4 选择 + 6 简述</strong>。Q1–Q2 换形式重测 0020 的两条核心不变量（0020 分数未报，按核心不变量兜底）；Q3–Q4 考本课核心判断（Q4 换形式覆盖章复习 Q28）；简述 Q5–Q10 覆盖主链（Q6/Q7/Q8 分别换形式覆盖复习 Q29/Q30/Q31），按得分点严格自评。</p>
+<p><strong>三层定位</strong>：第一层能默画三张图——目录分工（图 2）、生成发布分离时序（图 4）、更新传播依赖图（图 5）；第二层读透两个快照的阶段差异并复核哈希与依赖（实验①②③），再逐条判定 60/30/90 的地位（实验④）；第三层始终追问「这条结论凭什么可信」「原文变了哪些页必须跟着变」「这个能力是真实现了还是只是声明」。</p>
+<p class="sidenote">就业面试视角：面试官问「你们团队的知识库怎么治理」，最想听到的不是「让模型总结文档」，而是一条资产治理链：来源快照只读 → 草稿先检查再发布 → 结论到证据具体位置 → 原文变化沿依赖传播 → 权限贯穿所有入口 → 验收如实标注未验证项。模型整理内容只是其中一环，程序管理发布与边界才是工程责任。这与第三章 Harness「模型建议、程序把关」完全同构。</p>
+
+<nav class="toc">
+<strong>本课目录</strong>
+<ul>
+  <li><a href="#sec0">0. 开篇：RAG 能查资料，为什么还要 Wiki</a></li>
+  <li><a href="#sec1">1. 分工定位：Wiki、RAG、Memory 各管什么</a></li>
+  <li><a href="#sec2">2. 最小结构：依据、草稿、发布和维护记录分开</a></li>
+  <li><a href="#sec3">3. 知识页三问与五类表达</a></li>
+  <li><a href="#sec4">4. 生成与发布分开：模型整理内容，程序管理发布</a></li>
+  <li><a href="#sec5">5. 来源追踪与更新传播</a></li>
+  <li><a href="#sec6">6. 60/30/90：三种地位，不是一场投票</a></li>
+  <li><a href="#sec7">7. 权限边界：贯穿读取、生成、发布和使用</a></li>
+  <li><a href="#sec8">8. 四维验收：检查什么，才敢比较收益</a></li>
+  <li><a href="#sec9">9. 面试视角：两分钟主链</a></li>
+  <li><a href="#part2">第二部分：检索式测验（10 题）</a></li>
+  <li><a href="#part3">第三部分：第二层练习</a></li>
+</ul>
+</nav>
+
+<hr>
+
+<h2>第一部分：精讲（先读，测验在后）</h2>
+
+<h3 id="sec0">0. 开篇：RAG 已经能查资料，为什么还要 Wiki</h3>
+<p>新人问登录模块，往往要同时读规则、源码和测试指南，再整理出：有效期多少、到期怎样判断、实现在哪里、怎样验证。每次问都重新建立这些关系，重复工作就会增加（笔记行 1937–1939）。<strong>LLM Wiki 让模型根据原始资料生成、组织和维护知识页，把可复用的总结、关联和分析保存下来，并随着来源变化更新</strong>（行 1941）。</p>
+<p>但保存后的页面会被重复使用，<strong>错误、过期和受限内容也可能重复传播</strong>（行 1945）。所以知识资产治理要回答四件事：结论有没有依据，来源变化能不能同步，冲突有没有隐藏，谁可以生成、发布和阅读（行 1947）。还要记住：LLM Wiki 是<strong>工作模式，不是装上就自动成立的系统</strong>——维护方式变了，版本、审核、来源与权限要求仍要由工程师规定，不能因为目录叫 Wiki 就认为它会自动保持最新（行 1951–1955）。</p>
+
+<h3 id="sec1">1. 分工定位：Wiki、RAG、Memory 各管什么</h3>
+<figure class="diagram" id="fig1">
+<svg viewBox="0 0 760 300" role="img" aria-label="Wiki RAG Memory 分工">
+  <defs><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">同一个登录问题，四种能力各管一段（笔记行 1963–1968）</text>
+  <rect class="dg-node" x="20" y="60" width="165" height="64" rx="6"/>
+  <text class="dg-label" x="102" y="84" text-anchor="middle">工作记忆 + Checkpoint</text>
+  <text class="dg-soft" x="102" y="102" text-anchor="middle">接着完成当前</text>
+  <text class="dg-soft" x="102" y="116" text-anchor="middle">退出登录任务（0018）</text>
+  <rect class="dg-node" x="215" y="60" width="165" height="64" rx="6"/>
+  <text class="dg-label" x="297" y="84" text-anchor="middle">长期记忆</text>
+  <text class="dg-soft" x="297" y="102" text-anchor="middle">召回过去定位的模块</text>
+  <text class="dg-soft" x="297" y="116" text-anchor="middle">和核验经验（0019）</text>
+  <rect class="dg-node-accent" x="410" y="60" width="165" height="64" rx="6"/>
+  <text class="dg-label" x="492" y="84" text-anchor="middle">Wiki（本课）</text>
+  <text class="dg-soft" x="492" y="102" text-anchor="middle">阅读整理后的规则、</text>
+  <text class="dg-soft" x="492" y="116" text-anchor="middle">实现和验证关系</text>
+  <rect class="dg-node-accent" x="605" y="60" width="135" height="64" rx="6"/>
+  <text class="dg-label" x="672" y="84" text-anchor="middle">RAG（0020）</text>
+  <text class="dg-soft" x="672" y="102" text-anchor="middle">为当前问题寻找</text>
+  <text class="dg-soft" x="672" y="116" text-anchor="middle">相关原文或知识页</text>
+  <rect class="dg-zone" x="20" y="160" width="720" height="60" rx="8"/>
+  <text class="dg-label" x="380" y="184" text-anchor="middle">Wiki 维护知识，RAG 为本次问题找到知识（行 1972）</text>
+  <text class="dg-soft" x="380" y="204" text-anchor="middle">可以先检索 Wiki，再沿引用核对原文——知识页是 RAG 的优质语料，不是替代证据</text>
+  <path class="dg-arrow-accent" d="M575 190 L605 190" marker-end="url(#m1)"/>
+  <text class="dg-faint" x="380" y="260" text-anchor="middle">测试入口可以同时出现在记忆与 Wiki，区别是组织、维护和使用方式（行 1970）</text>
+  <text class="dg-faint" x="380" y="280" text-anchor="middle">同一条信息按用途分入口——与 0019「短期长期按用途分」同构</text>
+</svg>
+<figcaption>图 1 · 分工定位（笔记行 1961–1972）。四者不是竞争关系：工作记忆管当前任务进度，长期记忆管 Agent 自己的经验，Wiki 管团队可复用的知识资产，RAG 管本次问题的证据取用。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么有了 RAG 还要 Wiki？</strong> RAG 每次都为「这一个问题」找证据，关系整理（规则↔实现↔验证）做完就丢；Wiki 把这份整理<strong>沉淀成可维护的资产</strong>，下次直接复用。不这样的事故：每个新人都让 Agent 重读一遍全部资料，重复开销之外，每次整理还可能得出互相矛盾的结论。取舍：Wiki 省了重复整理，但背上<strong>维护责任</strong>——页面会过期、会传播错误，所以才有后面整套治理。与 0019 同构：OKF 是 Agent 自己的经验记忆，Wiki 是团队知识资产，写入筛选、来源、失效三问完全一样，只是维护对象从「我的经验」变成「大家的知识」。
+</div>
+
+<h3 id="sec2">2. 最小结构：依据、草稿、发布内容和维护记录分开</h3>
+<figure class="diagram" id="fig2">
+<svg viewBox="0 0 760 330" role="img" aria-label="Wiki 最小目录结构">
+  <defs><marker id="m2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">七个位置各管一段，修改规则各不相同（笔记行 1978–1986）</text>
+  <rect class="dg-node-warn" x="20" y="60" width="200" height="64" rx="6"/>
+  <text class="dg-label" x="120" y="84" text-anchor="middle">raw/ 来源快照</text>
+  <text class="dg-soft" x="120" y="102" text-anchor="middle">不由模型改写</text>
+  <text class="dg-soft" x="120" y="116" text-anchor="middle">新来源新增快照 v1→v2</text>
+  <rect class="dg-node" x="280" y="60" width="200" height="64" rx="6"/>
+  <text class="dg-label" x="380" y="84" text-anchor="middle">staging/ 草稿</text>
+  <text class="dg-soft" x="380" y="102" text-anchor="middle">可修改，不能默认</text>
+  <text class="dg-soft" x="380" y="116" text-anchor="middle">作为现行依据</text>
+  <rect class="dg-node-ok" x="540" y="60" width="200" height="64" rx="6"/>
+  <text class="dg-label" x="640" y="84" text-anchor="middle">wiki/ 已发布知识页</text>
+  <text class="dg-soft" x="640" y="102" text-anchor="middle">检查通过后进入</text>
+  <text class="dg-soft" x="640" y="116" text-anchor="middle">按发布规则更新</text>
+  <path class="dg-arrow" d="M220 92 L280 92" marker-end="url(#m2)"/>
+  <path class="dg-arrow-accent" d="M480 92 L540 92" marker-end="url(#m2)"/>
+  <text class="dg-soft" x="510" y="84" text-anchor="middle">检查</text>
+  <rect class="dg-zone" x="20" y="160" width="720" height="76" rx="8"/>
+  <text class="dg-label" x="380" y="184" text-anchor="middle">治理配套：规则、登记、留痕、报告</text>
+  <text class="dg-soft" x="120" y="210" text-anchor="middle">schema.md 工程师定规则</text>
+  <text class="dg-soft" x="300" y="210" text-anchor="middle">manifests/ 来源哈希与依赖</text>
+  <text class="dg-soft" x="480" y="210" text-anchor="middle">logs/ 实际操作事实</text>
+  <text class="dg-soft" x="650" y="210" text-anchor="middle">reports/ 证据与未验证项</text>
+  <text class="dg-faint" x="380" y="270" text-anchor="middle">来源清单登记 source ID、相对路径、实际 SHA-256、资料类型与原文声明的日期状态（行 1992）</text>
+  <text class="dg-faint" x="380" y="290" text-anchor="middle">原文没写的记未知；导入快照号 ≠ 资料业务版本；先准备规则来源空索引 ≠ 已生成发布知识页（行 1992–1994）</text>
+</svg>
+<figcaption>图 2 · 最小目录结构（笔记行 1976–1994）。快照 step9 里这七个位置全部真实存在：raw/v1 十二份 + raw/v2 一份 + discussions 一份，staging 四草稿 + dependencies.json，wiki 五页 + index + log，manifests 两份清单，reports 五份报告。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么依据、草稿、发布必须分开放？</strong> 混在一起的事故：模型「顺手修正」了原文错别字，从此所有结论的依据都被污染且无法察觉；未检查的草稿被当成现行规则引用。分开后每段有明确的<strong>修改规则</strong>：raw 只读（新来源新增快照，不覆盖）、staging 可推翻、wiki 按发布规则更新。快照的 schema.md 第 1 条就是「来源快照只读」，连看起来过时、重复、冲突的文件也不删。取舍：目录与登记变多，换来的是<strong>任何结论都能回到一份未被改动的原文</strong>。与 0019 OKF「index/log/概念分文件」同构，但多了 staging 这道发布闸口——因为 Wiki 页会被别人当依据用。
+</div>
+
+<h3 id="sec3">3. 知识页三问与五类表达</h3>
+<p>知识页至少回答三个问题：<strong>适用于哪里，结论是什么，依据在哪里</strong>（行 2000）。页头管理身份、版本、状态和来源；正文组织规则、实现与核对入口（行 2002）。正文引用了 <code>app/auth.py</code>，页头和依赖清单也要登记它，<strong>不能只登记部分来源</strong>（行 2017）——快照 lint 报告恰好抓到这个真实缺陷：login-session 页正文引用 11 个来源，登记只有 8 个。</p>
+<figure class="diagram" id="fig3">
+<svg viewBox="0 0 760 330" role="img" aria-label="知识页三问与五类表达">
+  <defs><marker id="m3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">一页知识 = 三问 + 页头治理字段 + 五类表达分开</text>
+  <rect class="dg-node-accent" x="20" y="60" width="220" height="50" rx="6"/>
+  <text class="dg-label" x="130" y="82" text-anchor="middle">问1：适用于哪里？</text>
+  <text class="dg-soft" x="130" y="99" text-anchor="middle">项目、范围、版本</text>
+  <rect class="dg-node-accent" x="270" y="60" width="220" height="50" rx="6"/>
+  <text class="dg-label" x="380" y="82" text-anchor="middle">问2：结论是什么？</text>
+  <text class="dg-soft" x="380" y="99" text-anchor="middle">规则、实现、核对入口</text>
+  <rect class="dg-node-accent" x="520" y="60" width="220" height="50" rx="6"/>
+  <text class="dg-label" x="630" y="82" text-anchor="middle">问3：依据在哪里？</text>
+  <text class="dg-soft" x="630" y="99" text-anchor="middle">来源 ID、版本、实际哈希</text>
+  <rect class="dg-zone" x="20" y="140" width="720" height="70" rx="8"/>
+  <text class="dg-label" x="380" y="164" text-anchor="middle">五类表达不得混为一谈（schema 第 4 条）</text>
+  <text class="dg-soft" x="100" y="190" text-anchor="middle">原文事实</text>
+  <text class="dg-soft" x="240" y="190" text-anchor="middle">源码观察</text>
+  <text class="dg-soft" x="380" y="190" text-anchor="middle">历史记录</text>
+  <text class="dg-soft" x="520" y="190" text-anchor="middle">需求草稿</text>
+  <text class="dg-soft" x="660" y="190" text-anchor="middle">推导（标依据）</text>
+  <rect class="dg-node-warn" x="20" y="240" width="720" height="60" rx="6"/>
+  <text class="dg-label" x="380" y="262" text-anchor="middle">没有本次执行回执 → 写「资料未提供本次测试结果」（行 2019）</text>
+  <text class="dg-soft" x="380" y="282" text-anchor="middle">测试指南说明怎么验收，历史记录说明过去通过，都不能替代当前测试；待核对事项保留缺资料、实现差异和冲突</text>
+</svg>
+<figcaption>图 3 · 知识页三问（笔记行 1998–2019）。登录会话页可以包括 30 分钟、到期无效、请求触发续期、时间判断位置、令牌生命周期入口、测试入口——但这是目标结构，<strong>实际值必须来自对应来源</strong>（行 2013–2015）。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么三问缺一不可？</strong> 缺「适用于哪里」：支付会话的规则被当成登录规则；缺「结论是什么」：页面变成资料堆砌，读者还要自己整理；缺「依据在哪里」：结论无法核对，错了也不知道错在哪一步。五类表达混存的事故正是本章贯穿案例：PRD 提出退出登录，<code>logout()</code> 却仍抛 <code>NotImplementedError</code>——把「希望实现」写成「已经上线」（行 1957）。这与 0019 四性质（要求/事实/推断/证据）、0018 三阶段（建议/修改/验证）同构：<strong>先定性质与来源，再谈使用</strong>。快照 acceptance 的可信度抽查专门核对「全绿/通过」字样全部位于验收要求或否定语境，没有一处把要求写成结果。
+</div>
+
+<h3 id="sec4">4. 生成与发布分开：模型整理内容，程序管理发布</h3>
+<figure class="diagram" id="fig4">
+<svg viewBox="0 0 760 360" role="img" aria-label="生成与发布分离时序">
+  <defs><marker id="m4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">模型整理内容，程序管理草稿、有效条件与发布（行 2076）</text>
+  <text class="dg-label" x="120" y="56" text-anchor="middle">宿主程序</text>
+  <text class="dg-label" x="390" y="56" text-anchor="middle">模型</text>
+  <text class="dg-label" x="650" y="56" text-anchor="middle">检查与发布</text>
+  <line class="dg-line" x1="120" y1="66" x2="120" y2="320"/>
+  <line class="dg-line" x1="390" y1="66" x2="390" y2="320"/>
+  <line class="dg-line" x1="650" y1="66" x2="650" y2="320"/>
+  <rect class="dg-node" x="30" y="76" width="180" height="44" rx="6"/>
+  <text class="dg-soft" x="120" y="94" text-anchor="middle">固定合法输入：身份、来源</text>
+  <text class="dg-soft" x="120" y="110" text-anchor="middle">读取权限、版本与哈希</text>
+  <path class="dg-arrow-accent" d="M210 130 L380 130" marker-end="url(#m4)"/>
+  <text class="dg-soft" x="295" y="122" text-anchor="middle">只给已授权来源</text>
+  <rect class="dg-node-accent" x="300" y="146" width="180" height="44" rx="6"/>
+  <text class="dg-soft" x="390" y="164" text-anchor="middle">输出正文 + 结论到证据映射</text>
+  <text class="dg-soft" x="390" y="180" text-anchor="middle">+ 待核对事项 → staging 草稿</text>
+  <path class="dg-arrow" d="M480 200 L640 200" marker-end="url(#m4)"/>
+  <text class="dg-soft" x="560" y="192" text-anchor="middle">结构 / 内容 / 发布策略</text>
+  <rect class="dg-node" x="560" y="216" width="180" height="44" rx="6"/>
+  <text class="dg-soft" x="650" y="234" text-anchor="middle">validator.check 通过</text>
+  <text class="dg-soft" x="650" y="250" text-anchor="middle">才进入 commit_if_current</text>
+  <path class="dg-arrow-accent" d="M560 276 L220 276" marker-end="url(#m4)"/>
+  <text class="dg-soft" x="390" y="268" text-anchor="middle">提交前再核：来源哈希、权限、页面基线</text>
+  <rect class="dg-node-ok" x="30" y="290" width="700" height="34" rx="6"/>
+  <text class="dg-soft" x="380" y="312" text-anchor="middle">变化时停止覆盖，重新读取核对；页面正文、依赖清单、导航索引协同生效，日志记录实际发布结果（行 2072–2074）</text>
+  <text class="dg-faint" x="380" y="348" text-anchor="middle">生成期间三种变化：原文更新、身份撤权、别人修改同一页（行 2068）；commit_if_current 是职责示意，不是完整生产程序（行 2062）</text>
+</svg>
+<figcaption>图 4 · 生成发布分离（笔记行 2023–2076）。检查分三层：结构（来源存在、实际哈希、页面 ID、路径边界、引用位置、发布后链接）、内容（引用支持结论、否定与条件完整、需求与执行分开、配置与生效分开）、发布策略（哪些可自动发布、哪些需负责人确认、可见范围）。检查失败保留草稿和原因，<strong>可以按原文修正草稿，不能改原文迎合结论</strong>（行 2060）。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么提交前还要再查一次？</strong> 生成需要时间，期间原文可能更新、身份可能撤权、别人可能改了同一页（行 2068）。草稿仍写「退出未实现」，开发者却已提交实现——按旧源码发布就是把过期结论广播出去。所以提交前再核来源哈希、权限和页面基线，变化就停止覆盖。这与第三章 Harness「模型建议、程序把关」、0018「拒绝必须回写」同构：<strong>模型输出永远是候选，落盘生效必须过程序闸口</strong>。快照的 prepublish 报告是现成现场：内容核对抓出 2 处伪引文、3 处遗漏否定词、2 处行数错误、1 处省略号章节引用——结构检查全过也拦不住这些，必须逐条读含义。另注意口径：本地复制文件不等于已实现事务或原子发布（行 2074），快照 log 自述「逐文件 cp，非事务性」。
+</div>
+
+<h3 id="sec5">5. 来源追踪与更新传播</h3>
+<p>「读过哪些文档」与「这句话由哪一段支持」不同（行 2082）：30 分钟引用有效期长度，到期无效引用到期边界，实现位置引用函数，测试入口引用测试指南。派生页沿「对比页 → 知识页 → 原文」追到底（行 2094）；问答归档先核对来源、范围和重复，结论直接回查原文，<strong>不把模型输出自动变成事实</strong>（行 2098–2104）。</p>
+<figure class="diagram" id="fig5">
+<svg viewBox="0 0 760 360" role="img" aria-label="来源更新沿依赖传播">
+  <defs><marker id="m5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">SRC-013（v2 规则 60 分钟）替代 SRC-006（v1 规则 30 分钟）后的影响传播</text>
+  <rect class="dg-node-muted" x="20" y="60" width="200" height="54" rx="6"/>
+  <text class="dg-label" x="120" y="82" text-anchor="middle">raw/v1 保留不动</text>
+  <text class="dg-soft" x="120" y="100" text-anchor="middle">SRC-006 登记 superseded_by</text>
+  <rect class="dg-node-ok" x="20" y="150" width="200" height="54" rx="6"/>
+  <text class="dg-label" x="120" y="172" text-anchor="middle">raw/v2 新快照登记</text>
+  <text class="dg-soft" x="120" y="190" text-anchor="middle">哈希、替代关系、激活时间</text>
+  <rect class="dg-node-accent" x="300" y="60" width="200" height="54" rx="6"/>
+  <text class="dg-label" x="400" y="82" text-anchor="middle">login-session（直接）</text>
+  <text class="dg-soft" x="400" y="100" text-anchor="middle">session-types（直接）</text>
+  <rect class="dg-node-accent" x="300" y="150" width="200" height="54" rx="6"/>
+  <text class="dg-label" x="400" y="172" text-anchor="middle">login-onboarding（直接）</text>
+  <text class="dg-soft" x="400" y="190" text-anchor="middle">问答页 Q1/Q3 答过 30 分钟</text>
+  <rect class="dg-node" x="560" y="60" width="180" height="54" rx="6"/>
+  <text class="dg-label" x="650" y="82" text-anchor="middle">token-lifecycle（间接）</text>
+  <text class="dg-soft" x="650" y="100" text-anchor="middle">depends_on login-session</text>
+  <rect class="dg-node" x="560" y="150" width="180" height="54" rx="6"/>
+  <text class="dg-label" x="650" y="172" text-anchor="middle">logout-plan（间接二级）</text>
+  <text class="dg-soft" x="650" y="190" text-anchor="middle">depends_on token-lifecycle</text>
+  <path class="dg-arrow-accent" d="M220 177 L300 177" marker-end="url(#m5)"/>
+  <path class="dg-arrow-accent" d="M220 160 L300 90" marker-end="url(#m5)"/>
+  <path class="dg-arrow" d="M500 87 L560 87" marker-end="url(#m5)"/>
+  <path class="dg-arrow" d="M650 114 L650 150" marker-end="url(#m5)"/>
+  <text class="dg-faint" x="380" y="240" text-anchor="middle">直接 3 页 + 间接 2 页 = 受影响全集 5 页；沿 depends_on 反向传播到不动点，cross_reference 不传播（update-impact.md §二）</text>
+  <rect class="dg-node-warn" x="20" y="260" width="720" height="70" rx="6"/>
+  <text class="dg-label" x="380" y="284" text-anchor="middle">按结论含义改，不能全局替换 30 或 1800（行 2138）</text>
+  <text class="dg-soft" x="380" y="304" text-anchor="middle">源码仍 30*60 就写实现还是 30 分钟；FAQ/表格未改原文标尚未同步；历史保留当时 30 分钟；退出状态不因时长变化变成已实现</text>
+  <text class="dg-faint" x="380" y="348" text-anchor="middle">页面更新后索引、分块、摘要、缓存同步传播；没接向量索引或缓存就标未接入，不能声称已同步（行 2142–2146）</text>
+</svg>
+<figcaption>图 5 · 更新传播（笔记行 2108–2148；快照 reports/update-impact.md）。新快照先登记再找影响：先标待复核、输出影响报告，再重读与更新；未同步期间当前规则查询回到新原文并说明 Wiki 待更新，不能继续无提示使用旧页（行 2122）。版本、生效时间、导入时间分别记录，Git 提交时间不能替代业务生效时间（行 2148）。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么不能全局替换数字？</strong> 「30」在库里至少有五种身份：v1 历史规则、当前源码常量、FAQ/CSV 未同步原文、历史故障与发布说明、续期用例描述。全局替换会把源码事实改成假的、把历史改成篡改的——<strong>必须能分别回答当前批准规则、当前源码行为与 v1 历史规则</strong>（行 2138）。为什么间接依赖也要找？logout-plan 没直接引用规则来源，但它依赖 token-lifecycle 的续期描述，漏掉它就会出现「规则 60、方案还按 30 等」的隐性过期。这与 0020「换 Embedding 须重建文档向量」同构：<strong>上游变了，所有下游派生物都要沿依赖找齐</strong>，只改源头等于没改。快照 log 还如实记录「无向量索引、无缓存层、未失效任何缓存（因不存在）」——未接入就标未接入，这本身就是验收点。
+</div>
+
+<h3 id="sec6">6. 60/30/90：三种地位，不是一场投票</h3>
+<figure class="diagram" id="fig6">
+<svg viewBox="0 0 760 320" role="img" aria-label="三个值的地位分类">
+  <defs><marker id="m6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">三个值状态各不相同，不是三个同地位的规则投票（行 2160–2162）</text>
+  <rect class="dg-node-ok" x="20" y="60" width="225" height="80" rx="6"/>
+  <text class="dg-label" x="132" y="84" text-anchor="middle">60 分钟</text>
+  <text class="dg-soft" x="132" y="102" text-anchor="middle">当前已批准教学规则</text>
+  <text class="dg-soft" x="132" y="118" text-anchor="middle">SRC-013 · raw/v2 · 已激活</text>
+  <rect class="dg-node-warn" x="267" y="60" width="225" height="80" rx="6"/>
+  <text class="dg-label" x="379" y="84" text-anchor="middle">30 分钟</text>
+  <text class="dg-soft" x="379" y="102" text-anchor="middle">源码实现现状（尚未同步）</text>
+  <text class="dg-soft" x="379" y="118" text-anchor="middle">session.py:6 = 30 * 60</text>
+  <rect class="dg-node-muted" x="515" y="60" width="225" height="80" rx="6"/>
+  <text class="dg-label" x="627" y="84" text-anchor="middle">90 分钟</text>
+  <text class="dg-soft" x="627" y="102" text-anchor="middle">未批准建议，不覆盖现行规则</text>
+  <text class="dg-soft" x="627" y="118" text-anchor="middle">SRC-014 · authoritative: false</text>
+  <text class="dg-faint" x="380" y="170" text-anchor="middle">另有 v1 规则 30 分钟＝版本历史（SRC-006 已被替代）；90 vs 60 是状态不同，60 vs 30 是规则与实现未同步（lint.md §3）</text>
+  <rect class="dg-zone" x="20" y="190" width="720" height="76" rx="8"/>
+  <text class="dg-label" x="380" y="214" text-anchor="middle">重复、过期、冲突不是一个动作（行 2154–2158）</text>
+  <text class="dg-soft" x="130" y="240" text-anchor="middle">重复：核对后合并，保留各来源</text>
+  <text class="dg-soft" x="380" y="240" text-anchor="middle">过期：退出当前查询，保留历史</text>
+  <text class="dg-soft" x="630" y="240" text-anchor="middle">冲突：比范围状态权威生效期</text>
+  <text class="dg-faint" x="380" y="296" text-anchor="middle">两份同范围、同生效期间的已批准规则真正矛盾，才需要负责人确认；无法解释时留双方依据并确认（行 2158、2164）</text>
+</svg>
+<figcaption>图 6 · 三种地位（笔记行 2126–2138、2152–2168）。快照 lint 的判定：三个值均可由「状态/版本/同步状态」解释，无无法解释的冲突；「源码是否会跟进 60 分钟」保留为待核对，报告不代为裁定。新导入不一定新内容，多篇转述也可能来自同一个错误来源（行 2164）。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么不能「三个值投票取多数」或「取最新」？</strong> 90 分钟只是讨论建议，还没进入规则状态；30 分钟是实现现状与历史，不是竞争规则。投票或取最新会把未批准建议晋升成规则、把源码事实改成规则的应然值。巡检的正确动作是<strong>先分类再处置</strong>：重复核对同项目版本范围后合并（保留各来源与背景）、过期退出默认当前查询（保留历史用途）、冲突比较范围状态权威生效期。报告先列页面、问题、证据、影响与建议，<strong>不直接删除或合并</strong>（行 2166）；「本次未发现问题」不等于永久正确（行 2168）。这与 0019 冲突四问（先核范围再比来源）同构，也呼应 0020 Citation 的教训：字面相同的词可能方向相反，数字相同的值可能地位不同。
+</div>
+
+<h3 id="sec7">7. 权限边界：贯穿读取、生成、发布和使用</h3>
+<figure class="diagram" id="fig7">
+<svg viewBox="0 0 760 330" role="img" aria-label="权限五环节">
+  <defs><marker id="m7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">五个环节都要检查，一个入口漏了就是绕过（行 2176–2182）</text>
+  <rect class="dg-node" x="20" y="60" width="130" height="64" rx="6"/>
+  <text class="dg-label" x="85" y="84" text-anchor="middle">来源读取</text>
+  <text class="dg-soft" x="85" y="102" text-anchor="middle">按执行身份查正文</text>
+  <text class="dg-soft" x="85" y="116" text-anchor="middle">附件图片与元数据</text>
+  <rect class="dg-node" x="170" y="60" width="130" height="64" rx="6"/>
+  <text class="dg-label" x="235" y="84" text-anchor="middle">生成</text>
+  <text class="dg-soft" x="235" y="102" text-anchor="middle">只给已授权来源</text>
+  <text class="dg-soft" x="235" y="116" text-anchor="middle">保留派生依赖</text>
+  <rect class="dg-node" x="320" y="60" width="130" height="64" rx="6"/>
+  <text class="dg-label" x="385" y="84" text-anchor="middle">发布</text>
+  <text class="dg-soft" x="385" y="102" text-anchor="middle">可信程序定可见</text>
+  <text class="dg-soft" x="385" y="116" text-anchor="middle">范围与发布权限</text>
+  <rect class="dg-node" x="470" y="60" width="130" height="64" rx="6"/>
+  <text class="dg-label" x="535" y="84" text-anchor="middle">页面使用</text>
+  <text class="dg-soft" x="535" y="102" text-anchor="middle">检索读取导航导出</text>
+  <text class="dg-soft" x="535" y="116" text-anchor="middle">缓存同一限制</text>
+  <rect class="dg-node" x="620" y="60" width="120" height="64" rx="6"/>
+  <text class="dg-label" x="680" y="84" text-anchor="middle">来源撤权</text>
+  <text class="dg-soft" x="680" y="102" text-anchor="middle">沿依赖调整页面</text>
+  <text class="dg-soft" x="680" y="116" text-anchor="middle">索引摘要缓存失效</text>
+  <path class="dg-arrow" d="M150 92 L170 92" marker-end="url(#m7)"/>
+  <path class="dg-arrow" d="M300 92 L320 92" marker-end="url(#m7)"/>
+  <path class="dg-arrow" d="M450 92 L470 92" marker-end="url(#m7)"/>
+  <path class="dg-arrow" d="M600 92 L620 92" marker-end="url(#m7)"/>
+  <rect class="dg-zone" x="20" y="160" width="720" height="60" rx="8"/>
+  <text class="dg-label" x="380" y="184" text-anchor="middle">最小整页方案：读者满足所有来源的访问条件，才可读该页（行 2184）</text>
+  <text class="dg-soft" x="380" y="204" text-anchor="middle">公开介绍单独用公开来源生成；受限内容对外使用按规定脱敏与审批</text>
+  <rect class="dg-node-warn" x="20" y="250" width="720" height="60" rx="6"/>
+  <text class="dg-label" x="380" y="272" text-anchor="middle">access_policy 字段和提示词不是鉴权；模型不能自行把页面改为公开（行 2186）</text>
+  <text class="dg-soft" x="380" y="292" text-anchor="middle">搜索有权限检查、直接 read_file 没有，也会形成绕过——要从多个入口验证同一限制（行 2188）</text>
+</svg>
+<figcaption>图 7 · 权限五环节（笔记行 2172–2190）。快照 access-review.md 是「如实标注未验证」的现成教学现场：本实验<strong>没有任何可执行的鉴权机制</strong>，唯一真实控制是 POSIX 模式位，且来源 0600、派生页全 0644——限制没有向下游传播；本机单身份无法双身份测试，报告未伪造任何拒绝日志，7 条验收用例一律标「未执行」。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么总结不能扩大阅读范围？</strong> 维护 Agent 同时读公开说明与内部安全设计，生成的综合页仍可能包含受限事实——<strong>改变表达方式不会消除信息限制</strong>（行 2174，复习 Q30）。不这样的事故：受限源码在源头 0600，讨论它的知识页却 0644 世界可读，索引成了受限内容的无限制广播面（access-review §1.4 的真实发现）。为什么提示词自律不算？即便模型 100% 遵守，任何绕过模型的直接文件读取（cat、cp、tar）都不受约束。所以原稿口径是：<strong>有可执行身份控制就分别用授权与未授权身份测试；没有就如实标未实现，列接入点和用例，不能伪造拒绝日志或假装切换身份</strong>（行 2190）。这与 0019「格式通过≠事实正确」、0016「状态≠结论只认审计」同构：声明不等于机制，机制要有真实拒绝证据。
+</div>
+
+<h3 id="sec8">8. 四维验收：检查什么，才敢比较收益</h3>
+<figure class="diagram" id="fig8">
+<svg viewBox="0 0 760 300" role="img" aria-label="四维验收与快照判定">
+  <defs><marker id="m8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">四个维度各查一件事，快照 acceptance 的真实判定（行 2196–2201）</text>
+  <rect class="dg-node-ok" x="20" y="60" width="165" height="80" rx="6"/>
+  <text class="dg-label" x="102" y="84" text-anchor="middle">完整性 · 通过</text>
+  <text class="dg-soft" x="102" y="102" text-anchor="middle">六项要点有依据</text>
+  <text class="dg-soft" x="102" y="118" text-anchor="middle">缺项明示（49 处待核对）</text>
+  <rect class="dg-node-ok" x="215" y="60" width="165" height="80" rx="6"/>
+  <text class="dg-label" x="297" y="84" text-anchor="middle">可信度 · 通过</text>
+  <text class="dg-soft" x="297" y="102" text-anchor="middle">抽查 7 条结论回查原文</text>
+  <text class="dg-soft" x="297" y="118" text-anchor="middle">事实推导建议执行分开</text>
+  <rect class="dg-node-ok" x="410" y="60" width="165" height="80" rx="6"/>
+  <text class="dg-label" x="492" y="84" text-anchor="middle">时效性 · 通过</text>
+  <text class="dg-soft" x="492" y="102" text-anchor="middle">当前规则/源码/旧规则</text>
+  <text class="dg-soft" x="492" y="118" text-anchor="middle">分别问，分区不混用</text>
+  <rect class="dg-node-warn" x="605" y="60" width="135" height="80" rx="6"/>
+  <text class="dg-label" x="672" y="84" text-anchor="middle">可检索性</text>
+  <text class="dg-soft" x="672" y="102" text-anchor="middle">部分通过：换词与</text>
+  <text class="dg-soft" x="672" y="118" text-anchor="middle">自然语言问法 0 命中</text>
+  <rect class="dg-zone" x="20" y="170" width="720" height="60" rx="8"/>
+  <text class="dg-label" x="380" y="194" text-anchor="middle">只有索引导航就记录导航结果，不虚报召回率（行 2203）</text>
+  <text class="dg-soft" x="380" y="214" text-anchor="middle">程序查来源链接版本依赖权限；模型辅助查语义冲突与条件遗漏；缺资料先补来源，没有就保留缺口</text>
+  <text class="dg-faint" x="380" y="262" text-anchor="middle">未运行原文 RAG 对照 → 不宣布 Wiki 更准更便宜（行 2209；acceptance 首部明示）</text>
+  <text class="dg-faint" x="380" y="282" text-anchor="middle">比较要固定同一问题集，统计回答质量、来源支持、维护费用与端到端耗时（行 2207）；页面正确，回答仍可能误读</text>
+</svg>
+<figcaption>图 8 · 四维验收（笔记行 2194–2209）。可检索性的真实判定：逐字问法「登录状态老是掉」命中 3 处（因短语被逐字嵌入页面），「会话过期」「退出后令牌还能用吗」0 命中——wiki 用「到期」不用「过期」，同义词未映射；无检索工具，部分子项标未验证。实验⑤会本机复现这组数字。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么「整理得好」不等于「检索得到」，更不等于「更准更便宜」？</strong> 快照把知识库整理得来源齐全、分区清楚，但换一种问法就 0 命中——<strong>整理质量与可检索性是两件事</strong>，后者要靠同义词映射或接入检索层（0020 的术语扩展正是解法）。收益比较的口径与 0019 记忆策略、你的 benchmark 工作一致：固定同一问题集，统一指标，再查失败原因；<strong>未实际比较就不能宣布更准或更便宜</strong>。另外「本次未发现问题」不等于永久正确——快照全部检查是一次性人工执行，无自动回归、无 CI。把 Wiki 接入 RAG 后还要重新维护证据标注，不能沿用已变化的旧节点 ID（行 2203）。
+</div>
+
+<h3 id="sec9">9. 面试视角：两分钟主链 + 追问链</h3>
+<p><strong>两分钟主链</strong>（不看稿讲清）：Wiki 维护知识、RAG 为本次问题找知识、Memory 召回经验，工作记忆管当前任务 → 最小结构 raw 只读/staging 草稿/wiki 发布 + schema/manifests/logs/reports → 知识页三问（适用哪里/结论/依据）+ 五类表达分开 → 生成发布分离：模型整理内容，程序管合法输入、三层检查与提交前复核 → 来源追踪到具体位置，派生页追到原文，问答归档不自动变事实 → 原文变化沿依赖传播到不动点，按含义改不全局替换数字，索引缓存未接入标未接入 → 60/30/90 三种地位不投票，重复过期冲突三分处理 → 权限贯穿五环节，字段与提示词不是鉴权，没有机制就如实标未实现 → 四维验收，未比较不宣布更准更便宜。</p>
+<pre>知识资产治理
+├── 分工：Wiki 维护知识 / RAG 找知识 / Memory 召回经验 / 工作记忆管当前
+├── 结构：raw 只读 → staging 草稿 → wiki 发布；schema + manifests + logs + reports
+├── 页面：三问（范围/结论/依据）+ 五类表达；无回执不写测试通过
+├── 发布：模型整理内容，程序管输入、检查、提交前复核（哈希/权限/基线）
+├── 追踪：结论→证据具体位置；派生页→原文；问答归档先核对
+├── 更新：新快照登记 → 直接+间接依赖到不动点 → 按含义改 → 索引缓存同步
+├── 冲突：60 规则 / 30 实现与历史 / 90 建议，三种地位；重复过期冲突三分
+├── 权限：读取-生成-发布-使用-撤权五环节；字段≠鉴权；未实现就标未实现
+└── 验收：完整性/可信度/时效性/可检索性；未比较不宣布收益</pre>
+<p><strong>面试官追问链</strong>：</p>
+<ul>
+  <li>「为什么不直接让 RAG 每次现查，省掉维护？」→ 关系整理反复重做是重复开销，且每次整理可能互相矛盾；Wiki 沉淀复用，代价是维护责任——所以治理链才是工程重点。</li>
+  <li>「模型总结的页面凭什么可信？」→ 结论到证据具体位置映射 + 发布前三层检查 + 提交前复核哈希权限基线；prepublish 真实抓出伪引文与遗漏否定词，结构通过拦不住含义错误。</li>
+  <li>「规则从 30 改 60，你怎么更新知识库？」→ 新快照登记替代关系，沿 sources_used 找直接依赖、沿 depends_on 反向传播到不动点；按含义改，源码 30、历史 30、未同步原文 30 分别保留标注；索引缓存同步，未接入标未接入。</li>
+  <li>「受限资料总结后能公开吗？」→ 不能自动公开：总结仍含受限事实，可见范围由可信程序按来源权限确定；公开用公开来源或脱敏审批；提示词自律不算隔离，要有多入口真实拒绝测试。</li>
+  <li>「你们 Wiki 比直接检索好多少？」→ 未做固定问题集的对照就不报收益数字；可检索性实测换词 0 命中说明整理≠可检索；先说清测了什么、没测什么，再谈比较。</li>
+</ul>
+
+<hr>
+
+<h2 id="part2">第二部分：检索式测验（10 题 = 4 选择 + 6 简述）</h2>
+<p>Q1–Q2 换形式重测 0020 的两条核心不变量（0020 分数未报，按核心不变量兜底）；Q3–Q4 考本课核心判断（Q4 换形式覆盖章复习 Q28）；Q5–Q10 简述覆盖主链（Q6/Q7/Q8 分别换形式覆盖复习 Q29/Q30/Q31），为结课课 0022 的集中复测铺垫。简述题先脱稿写，再展开参考答案，按得分点严格自评；漏掉关键点就选「部分对」。</p>
+<div id="quiz"></div>
+
+<hr>
+
+<h2 id="part3">第三部分：第二层练习——读透两个快照，再离线走通治理链</h2>
+<p>4-5 目录是<strong>纯文件快照，无任何可执行脚本</strong>，本课实验全部离线：①对照两个阶段快照，②哈希与来源核对，③「预期先写后验」的影响传播，④60/30/90 地位判定，⑤复现可检索性判定，⑥权限纸面设计 + /tmp 闸口模拟。命令均从<strong>本课程仓库根目录</strong>开始；探针用系统 <code>python3</code>（3.9.6，纯标准库）即可，不改课程原文件。所有「本机实测」来自 2026-11-22 的验证运行。<strong>必做①②③④（③必须先写预期再跑验证），选做⑤⑥至少一项。</strong></p>
+
+<h3>实验 ①：阶段快照对照——demo5 与 step9 差在哪几步</h3>
+<ul>
+  <li>目录级 diff + 文件与来源计数：<pre>diff -rq course_code/week04/4-5/llm-wiki-demo5-step course_code/week04/4-5/llm-wiki-demo-step9
+echo "diff exit=$?"
+echo "demo5 文件数: $(find course_code/week04/4-5/llm-wiki-demo5-step -type f | wc -l | tr -d ' ')"
+echo "step9 文件数: $(find course_code/week04/4-5/llm-wiki-demo-step9 -type f | wc -l | tr -d ' ')"
+python3 -c "
+import json
+for d in ['llm-wiki-demo5-step','llm-wiki-demo-step9']:
+    s=json.load(open(f'course_code/week04/4-5/{d}/manifests/sources.json'))
+    print(d, '来源数:', len(s['sources']))"</pre><strong>先写预期</strong>：demo5 停在八步表的哪一步？step9 多出哪些目录和报告？raw/v1 会不会有差异？<br>预期（本机实测）：<strong>diff exit=1</strong>；demo5 <strong>28</strong> 文件、step9 <strong>35</strong> 文件；来源 <strong>12 → 14</strong>。只在 step9 出现：<code>raw/v2</code>、<code>raw/discussions</code>、<code>wiki/queries</code>、reports 的 acceptance/access-review/lint/update-impact 四份；内容差异集中在 manifests 两份、staging 五份、wiki 四页 + index + log。<strong>raw/v1 十二份与 schema.md、prepublish.md、导入日志完全无差异</strong>——demo5 是「发布四页 v1」后的阶段快照，step9 走完问答归档、v2 更新、巡检、权限审查、最终验收。对照笔记八步表（行 2215–2224）正好补上后五步；注意笔记明示八步表是练习流程不是已执行结果（行 2226），快照才是执行现场。</li>
+</ul>
+
+<h3>实验 ②：哈希与来源核对——原文没被改，发布没漂移（落地验收①）</h3>
+<ul>
+  <li>标准库 hashlib 三层核对（从仓库根目录执行）：<pre>python3 - &lt;&lt;'EOF'
+import hashlib, json
+from pathlib import Path
+base = Path("course_code/week04/4-5/llm-wiki-demo-step9")
+sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+
+# 1) 来源清单 14 条 sha256 对照 raw 文件
+srcs = json.loads((base/"manifests/sources.json").read_text())["sources"]
+bad = [s["source_id"] for s in srcs if sha(base/s["relative_path"]) != s["sha256"]]
+print(f"来源哈希核对: {len(srcs)-len(bad)}/{len(srcs)} 一致, 异常: {bad}")
+
+# 2) 页面注册表 5 页 content_sha256 对照发布文件（注意字段是 path）
+pages = json.loads((base/"manifests/pages.json").read_text())["pages"]
+for pg in pages:
+    ok = sha(base/pg["path"]) == pg["content_sha256"]
+    print(f"  {pg['page_id']} v{pg['version']} 哈希一致: {ok}")
+
+# 3) staging 草稿与 wiki 发布副本逐字节一致
+for draft in sorted((base/"staging").rglob("*.md")):
+    pub = base/"wiki"/draft.relative_to(base/"staging")
+    print(f"  草稿=发布副本 {draft.relative_to(base/'staging')}: {draft.read_bytes()==pub.read_bytes()}")
+
+# 4) 归档 corpus.zip 是否在仓库内（登记了哈希但文件缺失则无法复核）
+print("corpus.zip 在 4-5 目录内:", any(Path("course_code/week04/4-5").rglob("corpus.zip")))
+EOF</pre><strong>先写预期</strong>：14 份来源哈希会不会全一致？5 页发布副本与登记哈希、与 staging 草稿是否一致？corpus.zip 找得到吗？<br>预期（本机实测）：<strong>14/14 一致，异常 []</strong>；5 页全部 v2 哈希一致 True；4 份草稿与发布副本逐字节相等 True——「原文没被模型修改、发布没漂移」可程序复核。<strong>corpus.zip 为 False</strong>：sources.json 登记了归档 sha256（b63afc94…），但压缩包不在仓库，<strong>归档级哈希无法本机复核</strong>，只能核 14 份展开文件——这本身就是「能核什么、不能核什么」的口径练习。另一个实测发现的坑：pages.json 页条目字段是 <code>path</code>，dependencies.json 才是 <code>publish_path</code>，第一版脚本用错字段直接 KeyError——<strong>读清单前先核字段名，不要凭印象写探针</strong>。</li>
+</ul>
+
+<h3>实验 ③：预期先写后验——v2 更新的影响传播（落地验收④）</h3>
+<ul>
+  <li>先手推预期清单，再让程序沿 dependencies.json 验证（从仓库根目录执行）：<pre>python3 - &lt;&lt;'EOF'
+import json
+from pathlib import Path
+base = Path("course_code/week04/4-5/llm-wiki-demo-step9")
+dep = json.loads((base/"staging/dependencies.json").read_text())
+
+# ===== 先写预期（读 update-impact.md 之前，按依赖规则手推）=====
+# SRC-013 替代 SRC-006（v1 登录规则）。直接受影响 = sources_used 含 SRC-006 的页。
+# 预期直接：login-session / session-types / login-onboarding（Q1/Q3 答 30 分钟）
+# 预期间接：token-lifecycle（depends_on login-session）、logout-plan（depends_on token-lifecycle）
+expect_direct = {"wiki/technical/login-session.md",
+                 "wiki/comparisons/session-types.md",
+                 "wiki/queries/login-onboarding.md"}
+expect_all = expect_direct | {"wiki/technical/token-lifecycle.md",
+                              "wiki/project/logout-plan.md"}
+
+# ===== 再验证：程序沿 dependencies.json 计算 =====
+direct = {p["publish_path"] for p in dep["pages"]
+          if any(s["source_id"] == "SRC-006" for s in p["sources_used"])}
+print("直接受影响 =", sorted(direct))
+print("与预期一致:", direct == expect_direct)
+
+# 反向传播：X depends_on Y，Y 受影响则 X 受影响；cross_reference 不传播
+rev = {}
+for e in dep["page_graph"]:
+    if e["type"] == "depends_on":
+        rev.setdefault(e["to"], set()).add(e["from"])
+affected = set(direct)
+while True:
+    nxt = affected | {x for y in affected for x in rev.get(y, ())}
+    if nxt == affected: break   # 不动点
+    affected = nxt
+print("受影响全集 =", sorted(affected))
+print("与预期一致:", affected == expect_all)
+
+# ===== 更新后核对：5 页都应引用 SRC-013 且含 60 分钟 =====
+for p in dep["pages"]:
+    txt = (base/p["publish_path"]).read_text()
+    has13 = any(s["source_id"] == "SRC-013" for s in p["sources_used"])
+    print(f"  {p['publish_path']}: 登记SRC-013={has13}, 正文含60分钟={'60 分钟' in txt or '60分钟' in txt}, v{p['version']}")
+EOF</pre><strong>先写预期</strong>：哪些页直接引用 SRC-006？哪些页沿 depends_on 间接受影响？问答页的 cross_reference 边要不要传播？<br>预期（本机实测）：直接 3 页、全集 5 页，<strong>两项与预期一致均 True</strong>；更新后 5 页全部登记 SRC-013、正文含 60 分钟、版本 v2。与 update-impact.md §三§四的判定完全吻合。两个关键口径：<strong>cross_reference 不计入依赖传播</strong>（问答页受影响是因为它自己直接引用 SRC-006，不是因为交叉引用边）；传播到<strong>不动点</strong>为止，二级依赖 logout-plan 不能漏。再对照 lint.md §4.3 的真实缺陷：login-session 正文引用了 SRC-005/009/011 却没登记——若这三个来源日后变更，按 sources_used 做影响分析会漏页。<strong>依赖登记必须完整，否则传播算得再对也是错的</strong>（复习 Q29 的现场）。</li>
+</ul>
+
+<h3>实验 ④：60/30/90 地位判定——逐条语句核对位置与性质（落地验收②③⑥）</h3>
+<ul>
+  <li>八条语句逐条判定 + 知识页三分区锚点 + 90 分钟零晋升检查（从仓库根目录执行）：<pre>python3 - &lt;&lt;'EOF'
+from pathlib import Path
+base = Path("course_code/week04/4-5/llm-wiki-demo-step9")
+
+# 先写预期：每条语句的地位判定（当前规则/源码实现/未批准建议/历史/未同步原文/验收要求）
+claims = [
+    ("raw/v2/docs/session-rules.md", 6, "登录会话有效期为60分钟", "当前已批准规则（SRC-013）"),
+    ("raw/v1/app/session.py", 6, "SESSION_TTL_SECONDS = 30 * 60", "源码实现现状（未同步）"),
+    ("raw/discussions/ttl-proposal.md", 2, "改为90分钟，但尚未批准，也未生效", "未批准建议（SRC-014）"),
+    ("raw/v1/docs/session-rules.md", 14, "登录会话有效期为 30 分钟", "v1 历史规则（已被替代）"),
+    ("raw/v1/web/release-notes-2.4.0.html", 14, "维持 30 分钟不变", "历史发布记录（描述当时）"),
+    ("raw/v1/docs/faq.md", 12, "默认 30 分钟", "原文尚未同步（不得改写）"),
+    ("raw/v1/tables/session-matrix.csv", 2, "登录会话,30 分钟", "原文尚未同步（不得改写）"),
+    ("raw/v1/docs/testing-guide.md", 24, "单元测试必须全绿", "验收要求（不是执行结果）"),
+]
+for path, ln, frag, kind in claims:
+    line = (base/path).read_text().splitlines()[ln-1]
+    print(f"{'✓' if frag in line else '✗ 位置不符'} {path}:{ln} → {kind}")
+
+# 历史修复语句：不写死行号，搜索定位
+hist = (base/"raw/v1/history/2026-09-12-expiry-bug.md").read_text().splitlines()
+hits = [i+1 for i, l in enumerate(hist) if "把比较运算符从 `&lt;=` 改成 `&lt;`" in l]
+print("历史修复语句所在行:", hits, "→ 历史记录（过去发生，非当前实现）")
+
+# 知识页三分区锚点
+page = (base/"wiki/technical/login-session.md").read_text().splitlines()
+for ln, frag in [(45, "【当前有效规则】"), (62, "规则历史（已被替代）"), (99, "与 v2 规则不一致")]:
+    print(f"{'✓' if frag in page[ln-1] else '✗'} login-session.md:{ln} 含「{frag}」")
+
+# 90 分钟不得晋升：wiki 全目录精确检索
+n = sum(t.count("90 分钟") + t.count("90分钟")
+        for t in (p.read_text() for p in (base/"wiki").rglob("*.md")))
+print("wiki/ 中「90 分钟/90分钟」命中:", n, "处（预期 0）")
+EOF</pre><strong>先写预期</strong>：八条语句各是什么地位？「单元测试必须全绿」是执行结果吗？wiki 里能不能找到 90 分钟？<br>预期（本机实测）：<strong>八条全部 ✓</strong>（语句确在声称位置）；历史修复语句定位到 expiry-bug.md 第 21 行；知识页 45/62/99 行三分区锚点全 ✓；<strong>wiki 中 90 分钟命中 0 处</strong>——未批准建议没有被晋升为规则。这就是复习 Q31 的完整现场：60 是当前规则、30 是实现现状与历史、90 是建议，<strong>三种地位分别标来源与状态，不混成一个当前事实</strong>。「单元测试必须全绿」是验收要求不是结果——没有本次回执就不写「测试已经通过」（验收⑥）。注意 testing-guide.md 第 19 行还有「续期后到期时间被推后 30 分钟」的用例描述，属未同步原文，同样不得改写。</li>
+</ul>
+
+<h3>实验 ⑤：复现可检索性判定——整理得好 ≠ 检索得到（选做）</h3>
+<ul>
+  <li>三种问法逐字检索 + 词表对照（从仓库根目录执行）：<pre>cd course_code/week04/4-5/llm-wiki-demo-step9
+export LC_ALL=C  # macOS 自带 bash 3.2 在 C.UTF-8 locale 下会吞中文变量的字节；C locale 按字节匹配，结果一致
+for q in "登录状态老是掉" "会话过期" "退出后令牌还能用"; do
+  echo "问法「$q」命中 $(grep -rn "$q" wiki --include='*.md' | wc -l | tr -d ' ') 处"
+  grep -rn "$q" wiki --include="*.md" | head -3
+done
+echo "--- 词表对照（含 index/log 的全部 wiki/*.md）---"
+for w in 到期 过期 失效 无效; do
+  echo "「$w」出现于 $(grep -rl "$w" wiki --include='*.md' | wc -l | tr -d ' ') 个文件"
+done</pre><strong>先写预期</strong>：哪种问法能命中？换词后呢？「到期/过期/失效/无效」各出现在几个文件？<br>预期（本机实测）：「登录状态老是掉」<strong>3 处</strong>（login-session.md:87、89、185，因 FAQ 短语被逐字嵌入）；「会话过期」<strong>0 处</strong>；「退出后令牌还能用」<strong>0 处</strong>。词表：到期 <strong>7</strong> / 过期 <strong>4</strong> / 失效 <strong>4</strong> / 无效 <strong>5</strong> 个文件——与 acceptance.md §4 完全一致（计数含 index.md 与 log.md；若排除 log.md 会得到 6/3 的不同口径，<strong>统计前先声明范围</strong>）。另一个实测环境坑：macOS 自带 bash 3.2 在 <code>C.UTF-8</code> locale 下会把 echo 里的中文变量吞成乱码（grep 结果不受影响），所以脚本开头 <code>export LC_ALL=C</code>——中文按字节匹配，计数不变。结论：同一概念多套用词且无同义词映射，换词即召回失败；无检索工具，只能报「实测能否定位」，不报召回率。这正是 0020 术语扩展与混合检索要解决的问题——<strong>Wiki 页是 RAG 的优质语料，但整理本身不产生可检索性</strong>。</li>
+</ul>
+
+<h3>实验 ⑥：权限纸面设计 + /tmp 闸口模拟——设计练习，不是快照能力（选做，落地验收⑤）</h3>
+<ul>
+  <li>对照 access-review.md §3 的五个接入位置，在 /tmp 用标准库模拟「策略文件 + 读取闸口 + 依赖传播 + 撤权响应」（从仓库根目录执行；<strong>这是设计练习产物，快照本身没有任何可执行鉴权</strong>）：<pre>python3 - &lt;&lt;'EOF'
+import json
+from pathlib import Path
+base = Path("course_code/week04/4-5/llm-wiki-demo-step9")
+lab = Path("/tmp/wiki-access-lab"); lab.mkdir(exist_ok=True)
+audit = lab/"audit.log"; audit.write_text("# 模拟闸口审计（设计练习产物，非快照能力）\n")
+dep = json.loads((base/"staging/dependencies.json").read_text())
+
+# 纸面策略：SRC-001(auth.py 含密钥) 仅 alice/bob 可读，其余来源公开
+PUBLIC = {"alice", "bob", "carol"}
+policy = {s["source_id"]: ({"alice","bob"} if s["source_id"]=="SRC-001" else set(PUBLIC))
+          for p in dep["pages"] for s in p["sources_used"]}
+def effective(propagate):
+    vis = {p["publish_path"]: set.intersection(*[policy[s["source_id"]] for s in p["sources_used"]])
+           for p in dep["pages"]}
+    if propagate:
+        edges = [(e["from"], e["to"]) for e in dep["page_graph"] if e["type"]=="depends_on"]
+        while True:
+            new = {f: vis[f] &amp; vis[t] for f, t in edges}
+            if all(new[f] == vis[f] for f in new): break
+            vis.update(new)
+    return vis
+def read_artifact(path, who, vis):
+    ok = who in vis.get(path, PUBLIC)
+    with audit.open("a") as f: f.write(f"{who} read {path} -&gt; {'ALLOW' if ok else 'DENY'}\n")
+    return ok
+
+vis_np, vis_p = effective(False), effective(True)
+print("alice 读 login-session:", read_artifact("wiki/technical/login-session.md","alice",vis_p))
+print("carol 读 login-session:", read_artifact("wiki/technical/login-session.md","carol",vis_p))
+print("carol 读 session-types(不传播):", "carol" in vis_np["wiki/comparisons/session-types.md"], "← 危险信号")
+print("carol 读 session-types(传播后):", "carol" in vis_p["wiki/comparisons/session-types.md"])
+print("carol 索引可见页:", sum("carol" in v for v in vis_p.values()), "/ 5")
+print("carol 导出闸口放行文件:", sum("carol" in v for v in vis_p.values()))
+policy["SRC-001"] = {"alice"}   # 撤权：bob 失去 SRC-001
+vis_r = effective(True)
+print("撤权后 bob 可见页:", sum("bob" in v for v in vis_r.values()), "/ 5")
+txt = (base/"wiki/technical/login-session.md").read_text()
+print("绕过演示: carol 直接 open() 仍读到", len(txt), "字符 -&gt; 闸口必须覆盖所有入口")
+print("审计行:", len(audit.read_text().splitlines())-1, "条 -&gt;", audit)
+EOF</pre><strong>先写预期</strong>：carol 能读引用了受限来源 login-session 的页面吗？session-types 自己没引用 SRC-001，不传播权限会怎样？撤权后 bob 呢？绕过闸口直接 open() 会怎样？<br>预期（本机实测）：alice 读 login-session <strong>True</strong>；carol <strong>False</strong>；carol 读 session-types 不传播 <strong>True（危险信号：派生页泄露受限来源的结论）</strong>，沿 depends_on 传播后 <strong>False</strong>；carol 索引可见 <strong>0/5</strong>、导出放行 <strong>0</strong>；撤权后 bob 可见 <strong>0/5</strong>（依赖传播把撤权响应到全部下游页）；<strong>绕过演示：carol 直接 open() 仍读到 8604 字符</strong>——闸口只包住 read_artifact 不够，索引、摘要、导出、归档每个入口都要执行同一限制（行 2188）。审计 2 条写入 /tmp/wiki-access-lab/audit.log。再次强调口径：这是<strong>纸面设计 + 模拟判定</strong>，快照的 access-review 如实标「未实现、未伪造拒绝日志」；真实工程还要处理归档影子副本（../llm-wiki-demo.tgz 潜在旁路）与第二身份测试。</li>
+</ul>
+
+<h2>回读与验证指引</h2>
+<ul>
+  <li>primary source：<a href="../course_code/week04/第四章 学习笔记.md"><code>第四章 学习笔记.md</code></a> 4.5 节（行 1933–2252）——重点回读「一、为什么还要 Wiki」「二、最小结构」「三、知识页三问」「四、生成与发布分开」「五、来源追踪」「六、来源更新」「七、重复/过期/冲突」「八、权限」「九、四维验收」；章复习问题 <strong>Q28–Q31</strong>（题干行 2618–2624，<strong>参考答案行 2715–2725</strong>）本课已换形式覆盖（Q4→Q28、Q6→Q29、Q7→Q30、Q8→Q31），结课前再对照原题自测。</li>
+  <li>快照回读顺序（step9）：<a href="../course_code/week04/4-5/llm-wiki-demo-step9/schema.md"><code>schema.md</code></a>（8 条规则）→ <a href="../course_code/week04/4-5/llm-wiki-demo-step9/manifests/sources.json"><code>manifests/sources.json</code></a>（14 来源与未知字段）→ <a href="../course_code/week04/4-5/llm-wiki-demo-step9/staging/technical/login-session.md"><code>staging/technical/login-session.md</code></a>（草稿）→ <a href="../course_code/week04/4-5/llm-wiki-demo-step9/reports/prepublish.md"><code>reports/prepublish.md</code></a>（发布前检查）→ <a href="../course_code/week04/4-5/llm-wiki-demo-step9/wiki/technical/login-session.md"><code>wiki/technical/login-session.md</code></a>（发布页三分区）→ <a href="../course_code/week04/4-5/llm-wiki-demo-step9/wiki/queries/login-onboarding.md"><code>wiki/queries/login-onboarding.md</code></a>（问答归档）→ <a href="../course_code/week04/4-5/llm-wiki-demo-step9/raw/v2/docs/session-rules.md"><code>raw/v2</code></a> + <a href="../course_code/week04/4-5/llm-wiki-demo-step9/reports/update-impact.md"><code>reports/update-impact.md</code></a>（更新传播）→ <a href="../course_code/week04/4-5/llm-wiki-demo-step9/raw/discussions/ttl-proposal.md"><code>raw/discussions</code></a> + <a href="../course_code/week04/4-5/llm-wiki-demo-step9/reports/lint.md"><code>reports/lint.md</code></a>（巡检）→ <a href="../course_code/week04/4-5/llm-wiki-demo-step9/reports/access-review.md"><code>reports/access-review.md</code></a>（权限如实标注）→ <a href="../course_code/week04/4-5/llm-wiki-demo-step9/reports/acceptance.md"><code>reports/acceptance.md</code></a>（四维判定）。demo5 与 step9 对照读，体会「阶段快照」。</li>
+  <li>跨课连线：<a href="./0019-memory-okf.html">0019</a>（OKF 是 Agent 自己的经验记忆，Wiki 是团队知识资产——写入筛选/来源/失效三问同构；冲突四问 ↔ 重复/过期/冲突三分）；<a href="./0020-rag-pipeline.html">0020</a>（Wiki 页是 RAG 的优质语料，但可检索性「部分通过」说明<strong>整理≠可检索</strong>；换 Embedding 重建文档向量 ↔ 原文变化沿依赖更新派生物）；<a href="./0017-context-engineering.html">0017</a>/<a href="./0018-working-memory.html">0018</a> 与第三章 Harness（生成发布分离 ↔「模型建议、程序把关」；提交前复核 ↔ 拒绝必须回写）。下一课 <a href="./0022-project4-capstone.html">0022 项目四</a>：把长期记忆与 RAG 装进 Codebase Agent，沿真实执行链验收。</li>
+  <li>口径提醒：① 笔记八步表（行 2215–2224）是<strong>练习流程与目标产物，不是笔记已执行的实验结果</strong>（行 2226），执行现场以快照为准；② 可检索性换词与自然语言问法 <strong>0 命中</strong>、无检索工具不报召回率；③ 权限<strong>明确标为未实现</strong>，未伪造拒绝日志，实验⑥是设计练习不是快照能力；④ <strong>未运行原文 RAG 对照，不宣布更准更便宜</strong>；⑤ 实测口径差：demo5 为 28 文件（非 31），pages.json 页条目用 <code>path</code> 字段（dependencies.json 才是 <code>publish_path</code>），corpus.zip 不在仓库、归档级哈希无法本机复核。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<ul>
+  <li><a href="../course_code/week04/第四章 学习笔记.md"><code>course_code/week04/第四章 学习笔记.md</code></a> 4.5 节 + 本章复习问题 Q28–Q31（学生版学习笔记，本课术语与验收的第一材料）</li>
+  <li><a href="../course_code/week04/4-5/llm-wiki-demo-step9/schema.md"><code>course_code/week04/4-5/llm-wiki-demo-step9/</code></a> 完整终态快照（35 文件，本课阅读与核对的第一手对象）+ <code>llm-wiki-demo5-step/</code> 阶段快照（28 文件，对照用）</li>
+  <li><a href="../course_code/week04/README.md"><code>course_code/week04/README.md</code></a> 的 4-5 目录说明 + <a href="../course_materials/week04/4-5.pdf"><code>course_materials/week04/4-5.pdf</code></a>（教师 PDF，补充）</li>
+</ul>
+
+<div class="ask-reminder">
+  <strong>卡住了就问你的 agent。</strong>任何一处让你觉得「等等，为什么」——为什么有了 RAG 还要 Wiki、为什么原文一个字都不能改、为什么提交前还要再查一次哈希、为什么不能全局替换 30、为什么总结不能扩大阅读范围、为什么「未实现」三个字本身就是验收通过项——直接回到对话里问。本课全部内容都在回答一个问题：<strong>这份整理出来的知识，凭什么可信、凭什么还能用、凭什么不给不该看的人看。</strong>
+</div>
+
+<div class="lesson-footer">
+  Week04 主题课序列：<a href="./0017-context-engineering.html">1/6 Context Engineering</a>（0017）· <a href="./0018-working-memory.html">2/6 Working Memory</a>（0018）· <a href="./0019-memory-okf.html">3/6 Memory 体系与 OKF</a>（0019）· <a href="./0020-rag-pipeline.html">4/6 RAG</a>（0020）· <strong>5/6 LLM Wiki（本课，4-5）</strong>· <a href="./0022-project4-capstone.html">6/6 项目四</a>（0022，结课课）<br>
+  前课回顾：<a href="./0020-rag-pipeline.html">0020</a> 管「怎么找证据」；本课管「证据语料本身怎么治理」——知识页整理得再好，也要来源追得到、更新传得动、边界标得如实。<br>
+  <strong>本课通过条件</strong>：① Q1–Q2 重测全对，本课正题（第 3 题起）正确率 85% 以上；② 完成必做实验①②③④（③必须先写预期再验证），并至少完成选做实验⑤⑥中的一项；③ 不看稿 2 分钟讲清主链（分工定位 → 最小结构 → 知识页三问 → 生成发布分离 → 来源追踪 → 更新传播 → 权限边界 → 四维验收）。通过后进入 <a href="./0022-project4-capstone.html">0022 项目四结课课</a>。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  questions: [
+    {
+      type: 'choice',
+      concept: '【重测·0020】重排补不回候选外证据',
+      section: '0020 间隔重测',
+      notesRef: '第四章笔记 4.4 五.1（行 1643–1654）+ 复习 Q24（题干行 2610/答案行 2703–2704）',
+      question: '两个失败：甲题的正确证据在 20 条候选中排第 20、未被选中；乙题的正确证据根本不在候选里。分别应该回到哪个环节定位？',
+      options: [
+        '前者查排序筛选，后者回到召回',
+        '前者回到召回，后者查排序筛选',
+        '两者都加重排轮数即可补回证据',
+        '两者都换更大模型重新生成回答'
+      ],
+      answer: 0,
+      explanation: '四分定位：候选没有→召回遗漏（回解析、分块、查询与检索）；候选有最终没有→排序或筛选；选中请求没有→装配；请求有回答用错→生成理解。排第 20 仍在候选内，重排可以访问；不在候选里，重排只能对已收到的候选重新评分，补不回来。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·0020】Citation 三层检查',
+      section: '0020 间隔重测',
+      notesRef: '第四章笔记 4.4 五.6（行 1739–1761）+ 复习 Q25（题干行 2612/答案行 2706–2707）',
+      question: '回答写「可以修改测试」，证据原文是「不能修改测试」。引用编号合法，每个词也都有字面依据。这个问题属于哪一层检查没通过？',
+      options: [
+        '编号合法层：引用未能反查证据',
+        '实体核对层：路径数字没有依据',
+        '结论支持层：否定方向已被改变',
+        '三层都通过：字面一致就算正确'
+      ],
+      answer: 2,
+      explanation: '编号合法查存在、范围、能反查本轮证据；实体核对查路径常量数字命令的字面依据；结论支持查证据是否真正证明整句话，包括否定、条件、版本和适用范围。「可以修改」与「不能修改」字面同词，前两层都拦不住方向反转，必须靠结论支持层。'
+    },
+    {
+      type: 'choice',
+      concept: '提交前复核：生成期间三种变化',
+      section: '4.5 四',
+      notesRef: '第四章笔记 4.5 四.3（行 2066–2076）',
+      codeRef: 'course_code/week04/4-5/llm-wiki-demo-step9/wiki/log.md（发布前基线复核）',
+      question: '草稿生成期间，原文更新了、执行身份被撤权、别人改了同一页。程序在提交发布前应该怎么做？',
+      options: [
+        '沿用生成时快照，直接覆盖发布',
+        '只重查页面哈希，权限不必再查',
+        '交给模型自行判断是否继续发布',
+        '停止覆盖，重读来源核对后提交'
+      ],
+      answer: 3,
+      explanation: '提交前再次核对来源哈希、权限和页面基线，三者都要查；变化时停止覆盖，重新读取并核对。模型整理内容，程序管理草稿、有效条件与发布——是否继续发布不是模型的判断权。草稿写「退出未实现」而开发者已提交实现时，按旧源码发布就是广播过期结论。'
+    },
+    {
+      type: 'choice',
+      concept: '需求/历史/源码状态分开（复习 Q28 换形式）',
+      section: '4.5 一/三（复习 Q28 换形式）',
+      notesRef: '第四章笔记 4.5 一.1/三（行 1957、1998–2019）+ 复习 Q28（题干行 2618/答案行 2715–2716）',
+      codeRef: 'course_code/week04/4-5/llm-wiki-demo-step9/wiki/project/logout-plan.md',
+      question: 'PRD 草稿提出退出登录，历史记录写着过去的到期修复，当前 auth.py 的 logout() 仍抛 NotImplementedError。知识页应该怎样写退出登录状态？',
+      options: [
+        '需求已提出，可写功能已经上线',
+        '历史修复记录证明退出已经实现',
+        '需求、历史、当前状态分开标注',
+        '三条取最新的一条作为当前状态'
+      ],
+      answer: 2,
+      explanation: '分别标明内容性质、适用版本、状态和来源：需求草稿写期望行为，历史修复写过去发生的结果，当前源码状态写实际读取到的实现。不能因为需求提出了退出登录就写成已上线，也不能拿历史修复或时间最新一条替代当前源码观察。'
+    },
+    {
+      type: 'short',
+      concept: '知识页三问与五类表达',
+      section: '4.5 三',
+      notesRef: '第四章笔记 4.5 三（行 1998–2019）',
+      question: '知识页至少回答哪三个问题？页头要登记什么？资料没有本次测试结果时怎么写？为什么测试指南和历史通过记录都不能替代当前测试？',
+      hint: '三问 → 页头治理字段 → 五类表达 → 无回执的写法。',
+      modelAnswer: '<strong>关键得分点：</strong>① 三问：<strong>适用于哪里，结论是什么，依据在哪里</strong>。② 页头登记 page_id、项目与页面版本、草稿/发布/待复核状态、来源 ID 版本实际哈希、权限策略引用（不能代替鉴权）、关键结论与具体引用、待核对事项；<strong>正文引用了的来源，页头和依赖清单也要登记，不能只登记部分</strong>。③ 五类表达分开：原文事实/源码观察/历史记录/需求草稿/推导（标依据）；没有本次执行回执就写<strong>「资料未提供本次测试结果」</strong>。④ 测试指南说明怎么验收，历史记录说明过去通过，都<strong>不能替代当前测试</strong>；目标结构里的实际值必须来自对应来源。漏①三问或③的无回执写法算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '更新沿依赖传播（复习 Q29 换形式）',
+      section: '4.5 六（复习 Q29 换形式）',
+      notesRef: '第四章笔记 4.5 六（行 2108–2148）+ 复习 Q29（题干行 2620/答案行 2718–2719）',
+      codeRef: 'course_code/week04/4-5/llm-wiki-demo-step9/reports/update-impact.md + staging/dependencies.json',
+      question: '登录规则从 30 分钟改成 60 分钟后，为什么不能只改登录页、更不能全局替换数字？沿什么路径找齐受影响页面？哪些「30 分钟」必须保留？索引和缓存怎么处理？',
+      hint: '新快照登记 → 直接+间接依赖到不动点 → 按含义改 → 索引缓存同步与未接入标注。',
+      modelAnswer: '<strong>关键得分点：</strong>① 新快照先登记：保留 raw/v1，新增 raw/v2，记录实际哈希、替代关系（superseded_by）与激活时间；先标待复核、输出影响报告再更新。② 直接受影响＝sources_used 含旧来源的页（本例 3 页）；间接沿 <strong>depends_on 反向传播到不动点</strong>（本例 token-lifecycle、logout-plan 二级，全集 5 页）；<strong>cross_reference 不传播</strong>。③ 按结论含义改：<strong>源码仍 30*60 就写实现还是 30 分钟</strong>；FAQ/CSV 等未改原文标尚未同步、不擅自改来源；历史记录保留当时 30 分钟；退出状态不因时长变化变成已实现；<strong>不能全局替换 30 或 1800</strong>，必须能分别回答当前规则、当前源码、v1 历史。④ 页面更新沿分块、索引、摘要、缓存同步传播；同步失败标状态并回退当前原文；<strong>没接向量索引或缓存就标未接入，不能声称已同步</strong>；未同步期间查询回新原文并说明 Wiki 待更新。漏②传播路径或③任一保留项算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '总结不扩大阅读范围（复习 Q30 换形式）',
+      section: '4.5 八（复习 Q30 换形式）',
+      notesRef: '第四章笔记 4.5 八（行 2172–2190）+ 复习 Q30（题干行 2622/答案行 2721–2722）',
+      codeRef: 'course_code/week04/4-5/llm-wiki-demo-step9/reports/access-review.md',
+      question: '维护 Agent 同时读公开说明与内部安全设计，生成综合页。为什么不能因为经过总结就公开？派生页可见范围由谁确定？需要公开时怎么办？为什么提示词自律不算权限隔离？',
+      hint: '信息限制不随表达消失 → 可信程序定范围 → 公开来源或脱敏审批 → 多入口验证。',
+      modelAnswer: '<strong>关键得分点：</strong>① 总结仍可能包含受限事实，<strong>改变表达方式不会消除信息限制</strong>，不能自动扩大阅读范围。② 派生页可见范围由<strong>可信程序根据来源权限确定</strong>；最小整页方案：读者满足所有来源的访问条件才可读该页；模型不能自行把页面改为公开。③ 需要公开时：<strong>单独用公开来源生成</strong>，或按规定完成<strong>脱敏与审批</strong>。④ access_policy 字段和提示词不是鉴权：即便模型完全遵守，绕过模型的直接文件读取不受约束；搜索有检查、read_file 没有也是绕过，要<strong>从多个入口验证同一限制</strong>（检索、读取、导航、导出、缓存）。⑤ 有可执行机制就用授权/未授权身份测真实拒绝；没有就<strong>如实标未实现</strong>，列接入点与用例，不伪造拒绝日志、不假装切换身份。漏②或④算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '60/30/90 三种地位（复习 Q31 换形式）',
+      section: '4.5 六/七（复习 Q31 换形式）',
+      notesRef: '第四章笔记 4.5 六.2/七（行 2126–2138、2152–2168）+ 复习 Q31（题干行 2624/答案行 2724–2725）',
+      codeRef: 'course_code/week04/4-5/llm-wiki-demo-step9/reports/lint.md §3 + manifests/sources.json SRC-013/014',
+      question: '新人问「登录会话多久过期」，库里同时有 60 分钟规则、30 分钟源码和 90 分钟建议。三者各应怎样表达？为什么不是三个值投票？什么时候才真正需要负责人确认？',
+      hint: '规则/实现/建议三种地位 → 分别标来源状态 → 投票为什么错 → 真冲突的条件。',
+      modelAnswer: '<strong>关键得分点：</strong>① <strong>60 分钟＝当前已批准教学规则</strong>（SRC-013，raw/v2，本次激活；批准人未知不编造）。② <strong>30 分钟＝源码实现现状</strong>（SESSION_TTL_SECONDS = 30 * 60，尚未同步）＋ v1 历史规则（已被替代，保留追溯）；规则改变不证明源码已改。③ <strong>90 分钟＝未批准建议</strong>（SRC-014，authoritative: false），不能覆盖现行规则、不应晋升为规则。④ 回答时<strong>分别标明规则、实现和建议的来源与状态，不混成一个当前事实</strong>；三者地位不同，不是同地位投票，也不能取最新或取多数。⑤ 只有<strong>两份同范围、同生效期间的已批准规则真正矛盾</strong>才需要负责人确认；无法解释的冲突留双方依据并确认，不静默取一方；「源码是否跟进 60」保留待核对，不代为裁定。漏任一地位标注或⑤算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '生成发布分离与来源追踪',
+      section: '4.5 四/五',
+      notesRef: '第四章笔记 4.5 四/五（行 2023–2104）',
+      codeRef: 'course_code/week04/4-5/llm-wiki-demo-step9/reports/prepublish.md + wiki/queries/login-onboarding.md',
+      question: '为什么「模型整理内容，程序管理草稿、有效条件与发布」？发布前检查三层各查什么？为什么整页参考资料不够？派生页和问答归档怎样追到原文？',
+      hint: '合法输入 → 三层检查 → 结论到证据具体位置 → 派生链与问答归档纪律。',
+      modelAnswer: '<strong>关键得分点：</strong>① 宿主先固定合法输入：项目与执行身份、来源读取权限、版本与哈希；模型输出正文、结论到证据映射、待核对事项三类内容，此阶段不改 raw、不发布、不运行业务测试。② 三层检查：<strong>结构</strong>（来源存在、实际哈希、页面 ID、路径边界、引用位置、发布后链接）、<strong>内容</strong>（引用支持结论、否定与条件完整、需求与执行分开、配置与生效分开）、<strong>发布策略</strong>（哪些可自动发布、哪些需负责人确认、可见范围）；检查失败保留草稿和原因，<strong>可按原文修正草稿，不能改原文迎合结论</strong>。③ 「读过哪些文档」≠「这句话由哪一段支持」：关键结论要对应<strong>具体来源与位置</strong>（30 分钟引有效期长度、到期无效引到期边界、实现引函数）。④ 派生页沿<strong>对比页→知识页→原文</strong>追到底，程序保存直接和间接依赖；问答归档先核对来源范围重复，已有同类页优先更新，结论<strong>直接回查原文</strong>不只引用 AI 总结，归档不把模型输出自动变成事实，归档后同步依赖索引日志。漏②任一层或④算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '四维验收与收益比较口径',
+      section: '4.5 九',
+      notesRef: '第四章笔记 4.5 九（行 2194–2209）',
+      codeRef: 'course_code/week04/4-5/llm-wiki-demo-step9/reports/acceptance.md',
+      question: '质量验收检查哪四个维度？快照把可检索性判为「部分通过」，依据是什么？为什么不能宣布 Wiki 更准更便宜？「本次未发现问题」不等于什么？',
+      hint: '四维各查什么 → 0 命中的实测 → 比较口径 → 一次性检查的边界。',
+      modelAnswer: '<strong>关键得分点：</strong>① 四维：<strong>完整性</strong>（时长/边界/续期/实现/退出状态/测试入口有依据，缺项明确）、<strong>可信度</strong>（抽查至少六条关键结论回查原文，事实推导建议执行分开）、<strong>时效性</strong>（当前规则/当前源码/旧规则分别问，版本状态不混用）、<strong>可检索性</strong>（用换词与自然语言问法实际定位）。② 部分通过的依据：逐字问法「登录状态老是掉」命中 3 处，<strong>「会话过期」「退出后令牌还能用吗」0 命中</strong>（wiki 用「到期」无同义词映射）；无检索工具，只有索引导航就记录导航结果，<strong>不虚报召回率</strong>，部分子项标未验证。③ <strong>未运行原文 RAG 对照就不能说更准更便宜</strong>；比较要固定同一问题集，统计回答质量、来源支持、维护费用与端到端耗时；接入 RAG 后重新维护证据标注，不沿用旧节点 ID。④ 「本次未发现问题」<strong>不等于永久正确</strong>（一次性人工检查，无自动回归）；页面正确回答仍可能误读，回答侧检查继续保留。漏②或③算部分对。'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>

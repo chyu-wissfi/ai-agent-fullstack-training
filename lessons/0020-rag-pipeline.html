@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week04 主题课 4/6 · RAG 链路：先找到证据，再检查回答</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 04 · 主题课 4 / 6 · 覆盖课程小节 4-4 · 版式：先讲后测，精讲与测验五五开</p>
+<h1>RAG 链路——回答看起来很对：证据真找到了吗，回答真检查了吗？</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：Week04 第四课。0019 解决了「值得留下的知识怎样组织成可核对的记录」；本课往前一步：<strong>资料多到变成语料库之后，怎样在回答前把正确证据找回来，生成后又怎样检查回答</strong>。主线是「先找到证据，再检查回答」，出问题时沿链路回查，找第一个丢失证据的环节。<br>
+  <strong>材料定位</strong>：<a href="../course_code/week04/第四章 学习笔记.md"><code>第四章 学习笔记.md</code></a> 4.4 节（行 1215–1931，<strong>本课第一材料</strong>，术语以此为准）+「本章复习问题」Q18–Q27（题干行 2598–2616，参考答案行 2685–2713，本课测验换形式全覆盖）+ <a href="../course_code/week04/README.md"><code>week04/README.md</code></a> 4-4 目录说明 + 教师 PDF <a href="../course_materials/week04/4-4.pdf"><code>4-4.pdf</code></a>（补充）。<br>
+  <strong>代码定位</strong>：<code>course_code/week04/4-4/</code>——<code>corpus/</code> 12 份资料（docs 4、app 3、history 2、PDF/CSV/HTML 各 1），<code>rag/</code> 10 模块，<code>scripts/</code> step1→step5 共 10 个脚本，<code>runs/</code> 21 个原稿运行输出（<strong>本课实验主材料</strong>），<code>eval/questions.json</code> 8 题带 gold 标注。<code>rag44/</code> 是另一套走 Gateway 的参考工程，其 README 明示真实 Embedding 与生成<strong>未联调</strong>，只作阅读对照。<strong>本机无 MINIMAX_CN_API_KEY、无 fastembed 模型缓存</strong>：step1/step3b 的 LLM 段/step4 系/step5 不可离线实跑，实验以 runs/ 阅读核对 + 纯标准库探针为主；BGE 实跑标待验证。<br>
+  <strong>预计用时</strong>：精讲 45 分钟 + 测验 25 分钟 + 第二层动手练习 50 分钟<br>
+  <strong>本课验收标准</strong>（笔记行 1915–1929，七条）：① 正确规则、修改位置与验收要求真实存在于节点中（实验①⑤）；② 同一问题能查看向量、关键词、融合候选与最终请求（实验②③）；③ 正确证据不在候选时能定位为召回问题（实验②⑤）；④ 来源编号有效，关键结论仍逐条核对内容支持（实验④）；⑤ 重排、压缩不被单凭「更复杂」「更短」认定有效（实验②③）；⑥ 比较记录包含完整调用成本和相同范围的延迟（实验②）；⑦ 无答案题能说明资料不足，未知 usage 不填零（实验②）。
+</div>
+
+<h2>怎么用这一课</h2>
+<p><strong>先讲后测，五五开</strong>：第一部分按「为什么还要 RAG → 两阶段链路 → 最小闭环 → 数据准备 → 检索与查询处理 → 后处理与引用校验 → 评估与失败归因」建地图；第二部分 10 题 = <strong>4 选择 + 6 简述</strong>。Q1–Q2 换形式重测 0019 的两条核心不变量（0019 分数未报，按核心不变量兜底）；Q3–Q4 考本课核心判断（分别换形式覆盖章复习 Q22/Q24）；简述 Q5–Q10 覆盖其余复习题（Q5=Q18+Q19、Q6=Q20+Q21、Q7=Q23、Q8=Q25、Q9=Q26、Q10=Q27），按得分点严格自评。</p>
+<p><strong>三层定位</strong>：第一层能默画三张图——两阶段链路（图 1）、检索层次与 RRF（图 4）、失败归因六步（图 8）；第二层读透 runs/ 原稿输出并核对笔记口径（实验②），用纯标准库复算 RRF（实验③）、跑真实引用校验器（实验④）；第三层始终追问「证据在不在候选里、进没进本轮请求、结论受不受证据支持、这个数字是哪次运行的」。</p>
+<p class="sidenote">就业面试视角：面试官问「你们的 RAG 怎么做的」，最想听到的不是「接了向量库加了重排」，而是一条<strong>可证明的链路</strong>：每个环节留下结果 → 指标有口径（召回率/命中率/完全命中）→ 比较固定变量与计时范围 → 失败沿链路回查第一个丢证据的环节。组件增加不是提升证据，固定条件下的比较结果才是。这与你的 benchmark 工作同构：检索质量之外，还要看标注、检查器与统计口径本身是否可信。</p>
+
+<nav class="toc">
+<strong>本课目录</strong>
+<ul>
+  <li><a href="#sec0">0. 开篇：知识组织好了，为什么还要 RAG</a></li>
+  <li><a href="#sec1">1. 两阶段链路：离线准备与在线回答</a></li>
+  <li><a href="#sec2">2. 最小闭环：三个独立问题</a></li>
+  <li><a href="#sec3">3. 数据准备：答案别在入库前丢失</a></li>
+  <li><a href="#sec4">4. 检索：层次、RRF 与查询处理</a></li>
+  <li><a href="#sec5">5. 后处理：选好证据，再检查回答</a></li>
+  <li><a href="#sec6">6. 评估与失败归因：固定题集，找第一个断点</a></li>
+  <li><a href="#sec7">7. 面试视角：两分钟主链</a></li>
+  <li><a href="#part2">第二部分：检索式测验（10 题）</a></li>
+  <li><a href="#part3">第三部分：第二层练习</a></li>
+</ul>
+</nav>
+
+<hr>
+
+<h2>第一部分：精讲（先读，测验在后）</h2>
+
+<h3 id="sec0">0. 开篇：知识组织好了，为什么还要 RAG</h3>
+<p>0019 的 OKF 把少量高价值知识组织成目录树，「先读索引，再读相关概念」够用。但本项目资料有 12 份：规则文档、代码、历史故障与需求记录、PDF 版 PRD、CSV 状态矩阵、HTML 发布说明（<code>corpus/</code>）。资料一多，逐份读全文会撑爆预算，靠索引猜哪份相关又容易漏——<strong>需要按问题把相关证据找回来，再放进模型输入</strong>（笔记行 1217–1238）。这就是 RAG：检索增强生成，<strong>没有修改模型参数</strong>，只是外部资料进了本轮请求。</p>
+<p>本节标题就是主线：<strong>「先找到证据，再检查回答」</strong>（行 1215）。两件事缺一不可：证据没找到，生成再流畅也是无依据；证据找到了，回答仍可能用错、编造或引用错编号。口径提醒：本节原稿演示使用 <strong>MiniMax embo-01 与本地 BGE</strong>，不能把其他小节的 DeepSeek 配置写成本节已运行配置（行 1240）。</p>
+
+<h3 id="sec1">1. 两阶段链路：离线准备与在线回答</h3>
+<figure class="diagram" id="fig1">
+<svg viewBox="0 0 760 330" role="img" aria-label="RAG 两阶段链路">
+  <defs><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">离线准备一次，在线回答每次——每个环节都要留下结果</text>
+  <rect class="dg-zone" x="20" y="46" width="720" height="96" rx="8"/>
+  <text class="dg-label" x="36" y="66">离线：数据准备（笔记 三，行 1347–1443）</text>
+  <rect class="dg-node" x="36" y="78" width="124" height="48" rx="6"/>
+  <text class="dg-label" x="98" y="98" text-anchor="middle">解析</text>
+  <text class="dg-soft" x="98" y="114" text-anchor="middle">保留关系</text>
+  <rect class="dg-node" x="180" y="78" width="124" height="48" rx="6"/>
+  <text class="dg-label" x="242" y="98" text-anchor="middle">清洗</text>
+  <text class="dg-soft" x="242" y="114" text-anchor="middle">不删决定含义的词</text>
+  <rect class="dg-node" x="324" y="78" width="124" height="48" rx="6"/>
+  <text class="dg-label" x="386" y="98" text-anchor="middle">分块</text>
+  <text class="dg-soft" x="386" y="114" text-anchor="middle">完整性 + 粒度</text>
+  <rect class="dg-node" x="468" y="78" width="124" height="48" rx="6"/>
+  <text class="dg-label" x="530" y="98" text-anchor="middle">Embedding</text>
+  <text class="dg-soft" x="530" y="114" text-anchor="middle">文档与查询匹配</text>
+  <rect class="dg-node" x="612" y="78" width="112" height="48" rx="6"/>
+  <text class="dg-label" x="668" y="98" text-anchor="middle">存储</text>
+  <text class="dg-soft" x="668" y="114" text-anchor="middle">向量 + 元数据</text>
+  <path class="dg-arrow" d="M160 102 L180 102" marker-end="url(#m1)"/>
+  <path class="dg-arrow" d="M304 102 L324 102" marker-end="url(#m1)"/>
+  <path class="dg-arrow" d="M448 102 L468 102" marker-end="url(#m1)"/>
+  <path class="dg-arrow" d="M592 102 L612 102" marker-end="url(#m1)"/>
+  <rect class="dg-zone" x="20" y="166" width="720" height="106" rx="8"/>
+  <text class="dg-label" x="36" y="186">在线：检索 → 后处理 → 生成 → 校验（笔记 二/四/五，行 1242–1777）</text>
+  <rect class="dg-node-accent" x="36" y="198" width="92" height="56" rx="6"/>
+  <text class="dg-label" x="82" y="220" text-anchor="middle">问题处理</text>
+  <text class="dg-soft" x="82" y="238" text-anchor="middle">澄清/扩展</text>
+  <rect class="dg-node-accent" x="140" y="198" width="92" height="56" rx="6"/>
+  <text class="dg-label" x="186" y="220" text-anchor="middle">检索</text>
+  <text class="dg-soft" x="186" y="238" text-anchor="middle">向量+关键词</text>
+  <rect class="dg-node-accent" x="244" y="198" width="92" height="56" rx="6"/>
+  <text class="dg-label" x="290" y="220" text-anchor="middle">融合筛选</text>
+  <text class="dg-soft" x="290" y="238" text-anchor="middle">RRF/过滤</text>
+  <rect class="dg-node-accent" x="348" y="198" width="92" height="56" rx="6"/>
+  <text class="dg-label" x="394" y="220" text-anchor="middle">重排压缩</text>
+  <text class="dg-soft" x="394" y="238" text-anchor="middle">可选后处理</text>
+  <rect class="dg-node-accent" x="452" y="198" width="92" height="56" rx="6"/>
+  <text class="dg-label" x="498" y="220" text-anchor="middle">装配</text>
+  <text class="dg-soft" x="498" y="238" text-anchor="middle">编号进请求</text>
+  <rect class="dg-node-accent" x="556" y="198" width="80" height="56" rx="6"/>
+  <text class="dg-label" x="596" y="220" text-anchor="middle">生成</text>
+  <text class="dg-soft" x="596" y="238" text-anchor="middle">带引用</text>
+  <rect class="dg-node-ok" x="648" y="198" width="76" height="56" rx="6"/>
+  <text class="dg-label" x="686" y="220" text-anchor="middle">校验</text>
+  <text class="dg-soft" x="686" y="238" text-anchor="middle">三层检查</text>
+  <path class="dg-arrow" d="M128 226 L140 226" marker-end="url(#m1)"/>
+  <path class="dg-arrow" d="M232 226 L244 226" marker-end="url(#m1)"/>
+  <path class="dg-arrow" d="M336 226 L348 226" marker-end="url(#m1)"/>
+  <path class="dg-arrow" d="M440 226 L452 226" marker-end="url(#m1)"/>
+  <path class="dg-arrow" d="M544 226 L556 226" marker-end="url(#m1)"/>
+  <path class="dg-arrow" d="M636 226 L648 226" marker-end="url(#m1)"/>
+  <path class="dg-arrow-accent" d="M668 126 L668 166 L186 166 L186 198" marker-end="url(#m1)"/>
+  <text class="dg-faint" x="380" y="308" text-anchor="middle">节点入库只说明它能被查询；只有最终进入本轮请求的内容，模型这次才看得到（行 1285）</text>
+</svg>
+<figcaption>图 1 · 两阶段链路（笔记行 1242–1345、1347–1443、1445–1777）。离线把资料变成可检索的节点，在线把问题变成带证据的回答。runs/ 里 step1→step5 的每个输出都对应链路上的一段，失败归因就沿这条链回查。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么分离线在线两阶段，而不是「问一句查一句」？</strong> 解析、分块、建库有成本，离线做一次、在线复用；更重要的是<strong>错误定位</strong>：离线环节丢掉的证据（表格拆散、否定词被清洗、分块切断条件），在线换任何检索模型都补不回来。事故形态：只调在线 top_k 与重排，gold 其实在分块时就丢了。这与 0017 同构——<strong>预算与压缩决定检索结果怎么进请求</strong>，装配不是免费搬运；也与 0018 划清边界——工作记忆是「这一次任务的当前状态」，检索证据是「本轮从外部资料取回的内容」，两者来源与证明力不同，不能混。
+</div>
+
+<h3 id="sec2">2. 最小闭环：检索、装配、生成校验是三个独立问题</h3>
+<p>最小闭环（笔记 二，行 1242–1345）：<strong>Document 是整份资料，Node 是带元数据的检索单元</strong>（行 1263）；Markdown 先用 <code>MarkdownNodeParser</code> 按标题切，再用 <code>SentenceSplitter(chunk_size=384)</code> 拆长小节——384 是分块器 Token 口径，不是 384 汉字，也不是整次请求大小（行 1275–1283）。Embedding 让「登出」与「退出登录」有机会匹配，但<strong>文档与查询必须走匹配的模型与处理方式</strong>，同为 1536 维不代表可比较（行 1292–1300）。</p>
+<figure class="diagram" id="fig2">
+<svg viewBox="0 0 760 300" role="img" aria-label="最小闭环与三个独立问题">
+  <defs><marker id="m2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">step1 最小闭环：每个环节留下结果，三个问题分开判</text>
+  <rect class="dg-node" x="20" y="60" width="110" height="50" rx="6"/>
+  <text class="dg-label" x="75" y="82" text-anchor="middle">问题</text>
+  <text class="dg-soft" x="75" y="99" text-anchor="middle">q_easy / q_hard</text>
+  <rect class="dg-node" x="150" y="60" width="110" height="50" rx="6"/>
+  <text class="dg-label" x="205" y="82" text-anchor="middle">检索 top-3</text>
+  <text class="dg-soft" x="205" y="99" text-anchor="middle">score + 来源</text>
+  <rect class="dg-node" x="280" y="60" width="110" height="50" rx="6"/>
+  <text class="dg-label" x="335" y="82" text-anchor="middle">阈值筛选</text>
+  <text class="dg-soft" x="335" y="99" text-anchor="middle">score ≥ 0.30</text>
+  <rect class="dg-node" x="410" y="60" width="110" height="50" rx="6"/>
+  <text class="dg-label" x="465" y="82" text-anchor="middle">编号装配</text>
+  <text class="dg-soft" x="465" y="99" text-anchor="middle">[1][2][3] 进请求</text>
+  <rect class="dg-node" x="540" y="60" width="100" height="50" rx="6"/>
+  <text class="dg-label" x="590" y="82" text-anchor="middle">生成</text>
+  <text class="dg-soft" x="590" y="99" text-anchor="middle">结论带 [编号]</text>
+  <rect class="dg-node-ok" x="660" y="60" width="80" height="50" rx="6"/>
+  <text class="dg-label" x="700" y="82" text-anchor="middle">校验</text>
+  <text class="dg-soft" x="700" y="99" text-anchor="middle">引用+一致性</text>
+  <path class="dg-arrow" d="M130 85 L150 85" marker-end="url(#m2)"/>
+  <path class="dg-arrow" d="M260 85 L280 85" marker-end="url(#m2)"/>
+  <path class="dg-arrow" d="M390 85 L410 85" marker-end="url(#m2)"/>
+  <path class="dg-arrow" d="M520 85 L540 85" marker-end="url(#m2)"/>
+  <path class="dg-arrow" d="M640 85 L660 85" marker-end="url(#m2)"/>
+  <rect class="dg-node-warn" x="20" y="150" width="230" height="80" rx="6"/>
+  <text class="dg-label" x="135" y="174" text-anchor="middle">检索问题：证据出现了吗</text>
+  <text class="dg-soft" x="135" y="196" text-anchor="middle">不看分数猜质量，直接看证据</text>
+  <text class="dg-soft" x="135" y="214" text-anchor="middle">q_hard 0.94 高分仍是泛化建议</text>
+  <rect class="dg-node-warn" x="265" y="150" width="230" height="80" rx="6"/>
+  <text class="dg-label" x="380" y="174" text-anchor="middle">装配问题：进本轮请求了吗</text>
+  <text class="dg-soft" x="380" y="196" text-anchor="middle">编号可反查 file_path + heading</text>
+  <text class="dg-soft" x="380" y="214" text-anchor="middle">入库 ≠ 模型这次看得到</text>
+  <rect class="dg-node-warn" x="510" y="150" width="230" height="80" rx="6"/>
+  <text class="dg-label" x="625" y="174" text-anchor="middle">生成问题：结论受支持吗</text>
+  <text class="dg-soft" x="625" y="196" text-anchor="middle">一致性检查是字面核对能力</text>
+  <text class="dg-soft" x="625" y="214" text-anchor="middle">不是完整正确性保证</text>
+  <text class="dg-faint" x="380" y="272" text-anchor="middle">runs/step1.txt：两题都「判定=通过」，但 q_hard 的回答是泛化建议——通过 ≠ 答好了（行 1304–1345）</text>
+</svg>
+<figcaption>图 2 · 最小闭环（笔记行 1242–1345）。原稿 step1 里 q_easy 答「30 分钟 [3]」且一致性有依据；q_hard 引用合法、判定通过，回答却大多是通用建议——<strong>三个问题必须分开判</strong>：检索看证据有没有出现（行 1304），装配看编号能不能反查（行 1321），生成看结论受不受支持（行 1335）。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么「不看分数猜质量」？</strong> 相似度分数只回答「语义相近」，不回答「正确证据在不在里面」。q_hard 三条候选分数都在 0.93 以上，判定也通过，但需求讨论记录里没有「改哪些文件」的完整答案，模型只能泛化。替代方案「按分数阈值宣布检索成功」的事故：高分噪声挤掉低分 gold。这与 0019「格式通过≠事实正确」、0018「工具正常返回≠业务验证通过」同构——<strong>每一层的「通过」只证明那一层的事</strong>。一致性检查也要认清边界：它是本项目代码的字面核对能力，方向反转、隐含条件它查不出来（实验④会现场演示）。
+</div>
+
+<h3 id="sec3">3. 数据准备：答案别在入库前丢失</h3>
+<p>数据准备五件事（笔记 三，行 1347–1443）：<strong>解析保留关系</strong>——表格按行保留记录、每个值带列名（「情况：恰好到期；期望：False」），不能把条件与结果拆成两段（行 1359–1377，复习 Q18）；<strong>清洗有红线</strong>——「不 / 仅 / 禁止 / 必须」这类决定含义的词不能删（行 1381）；<strong>分块同时看完整性与粒度</strong>——AST 分块保留函数/类等完整代码单元，但<strong>不说明业务请求经过哪些模块</strong>，调用链仍要追入口、调用方、配置与数据流（行 1402–1417，复习 Q19）；<strong>Overlap 缓解边界断裂也增加重复</strong>（行 1421）；<strong>Chunk Metadata 决定过滤与追溯能力</strong>——file_path、heading 让引用可反查、让范围过滤可行（行 1433）。</p>
+<figure class="diagram" id="fig3">
+<svg viewBox="0 0 760 340" role="img" aria-label="数据准备五件事与红线">
+  <defs><marker id="m3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">入库前的五道工序：每道都可能悄悄丢证据</text>
+  <rect class="dg-node" x="20" y="50" width="180" height="44" rx="6"/>
+  <text class="dg-label" x="110" y="77" text-anchor="middle">解析：保留关系</text>
+  <text class="dg-soft" x="470" y="70" text-anchor="middle">表格按行保留、值带列名：「情况：恰好到期；期望：False」</text>
+  <text class="dg-faint" x="470" y="88" text-anchor="middle">事故：条件与结果拆成两段，模型对应错误（行 1359–1377）</text>
+  <rect class="dg-node-warn" x="20" y="106" width="180" height="44" rx="6"/>
+  <text class="dg-label" x="110" y="133" text-anchor="middle">清洗：红线词不删</text>
+  <text class="dg-soft" x="470" y="126" text-anchor="middle">「不 / 仅 / 禁止 / 必须」决定含义，删掉就反转结论</text>
+  <text class="dg-faint" x="470" y="144" text-anchor="middle">事故：「不要修改测试文件」被洗成「修改测试文件」（行 1381）</text>
+  <rect class="dg-node" x="20" y="162" width="180" height="44" rx="6"/>
+  <text class="dg-label" x="110" y="189" text-anchor="middle">分块：完整性+粒度</text>
+  <text class="dg-soft" x="470" y="182" text-anchor="middle">AST 保留语法单元 ≠ 调用链；运行时行为仍要追入口与数据流</text>
+  <text class="dg-faint" x="470" y="200" text-anchor="middle">事故：条件在上一块、结果在下一块，检索只召回半句（行 1402–1417）</text>
+  <rect class="dg-node" x="20" y="218" width="180" height="44" rx="6"/>
+  <text class="dg-label" x="110" y="245" text-anchor="middle">Overlap：取舍</text>
+  <text class="dg-soft" x="470" y="238" text-anchor="middle">缓解边界断裂，也增加重复存储与重复命中</text>
+  <text class="dg-faint" x="470" y="256" text-anchor="middle">不是越大越好，按断裂风险定（行 1421）</text>
+  <rect class="dg-node" x="20" y="274" width="180" height="44" rx="6"/>
+  <text class="dg-label" x="110" y="301" text-anchor="middle">Metadata：追溯</text>
+  <text class="dg-soft" x="470" y="294" text-anchor="middle">file_path + heading 支撑引用反查与范围过滤</text>
+  <text class="dg-faint" x="470" y="312" text-anchor="middle">没有元数据，引用编号就只是装饰（行 1433）</text>
+  <path class="dg-arrow" d="M110 94 L110 106" marker-end="url(#m3)"/>
+  <path class="dg-arrow" d="M110 150 L110 162" marker-end="url(#m3)"/>
+  <path class="dg-arrow" d="M110 206 L110 218" marker-end="url(#m3)"/>
+  <path class="dg-arrow" d="M110 262 L110 274" marker-end="url(#m3)"/>
+</svg>
+<figcaption>图 3 · 数据准备（笔记行 1347–1443）。corpus 里的 <code>tables/session-matrix.csv</code> 就是表格解析的练习对象；<code>app/session.py</code> 整文件入库是 step1 的简化做法，AST 分块属于 step2 数据准备实验，两者不要混（行 1286）。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么数据准备是失败归因的前排嫌疑？</strong> 因为它的错误<strong>静默</strong>：解析丢了对应关系、清洗删了否定词、分块切断了条件，入库照样成功、检索照样返回高分，只有回到原文对照才发现证据早已不在节点里。替代方案「先上检索技巧再回头补数据」的代价：在丢证据的语料上比较任何算法都没有意义。这与 0019「先组织再检索」同构——<strong>检索技术的上限由语料质量决定</strong>；验收第①条「正确规则真实存在于节点中」（行 1915）就是先查这一层，实验①用 gold 对照离线落地。
+</div>
+
+<h3 id="sec4">4. 检索：层次、RRF 与查询处理</h3>
+<p>先分清三个指标（行 1458–1476）：<strong>召回率</strong>＝每题找回 gold 比例再平均；<strong>命中率</strong>＝至少找到一处 gold 的题占比；<strong>完全命中</strong>＝所有标注证据都找到的题数。一题两处 gold 只找回一处：召回 0.5、命中是、完全命中否——三者可以同时成立，不能只看一个平均数。换 Embedding 要<strong>重建文档向量</strong>并核对索引配置，只改查询侧会让两边处于不同向量空间（行 1478–1490，复习 Q20）。层次要分清：<strong>BM25 是关键词相关性评分方法，Elasticsearch 是承载全文检索/过滤/聚合的系统（可用 BM25 评分），向量库负责向量存储与相似度检索</strong>（行 1512–1532，复习 Q21）；中文 BM25 要有一致分词（原稿用 jieba）。</p>
+<figure class="diagram" id="fig4">
+<svg viewBox="0 0 760 320" role="img" aria-label="检索层次与 RRF 融合">
+  <defs><marker id="m4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">三个层次不混用；两路分数不直接相加，按排名融合</text>
+  <rect class="dg-node" x="20" y="60" width="340" height="56" rx="6"/>
+  <text class="dg-label" x="190" y="82" text-anchor="middle">评分方法层</text>
+  <text class="dg-soft" x="190" y="100" text-anchor="middle">BM25（关键词）· 余弦相似度（向量）</text>
+  <rect class="dg-node" x="20" y="136" width="340" height="56" rx="6"/>
+  <text class="dg-label" x="190" y="158" text-anchor="middle">系统层</text>
+  <text class="dg-soft" x="190" y="176" text-anchor="middle">Elasticsearch（全文/过滤/聚合）· 向量库（Milvus）</text>
+  <rect class="dg-node-accent" x="20" y="212" width="340" height="56" rx="6"/>
+  <text class="dg-label" x="190" y="234" text-anchor="middle">融合层</text>
+  <text class="dg-soft" x="190" y="252" text-anchor="middle">RRF：按排名贡献汇总，不比较原始分数</text>
+  <path class="dg-arrow" d="M190 116 L190 136" marker-end="url(#m4)"/>
+  <path class="dg-arrow" d="M190 192 L190 212" marker-end="url(#m4)"/>
+  <rect class="dg-zone" x="400" y="60" width="340" height="208" rx="8"/>
+  <text class="dg-label" x="570" y="86" text-anchor="middle">score(d) = Σ w_r / (k + rank_r(d))</text>
+  <text class="dg-soft" x="570" y="112" text-anchor="middle">rank 从 1 起；同一节点按稳定 ID 汇总</text>
+  <text class="dg-soft" x="570" y="136" text-anchor="middle">k=60：排名贡献衰减的平滑参数</text>
+  <text class="dg-soft" x="570" y="160" text-anchor="middle">w_r：每路权重（如 BGE 70% + BM25 30%）</text>
+  <text class="dg-soft" x="570" y="184" text-anchor="middle">Top-K：融合后保留几条（如 3）</text>
+  <rect class="dg-node-warn" x="420" y="204" width="300" height="48" rx="6"/>
+  <text class="dg-label" x="570" y="224" text-anchor="middle">k=60 ≠ 返回 60 条 ≠ 每路取 60 条</text>
+  <text class="dg-soft" x="570" y="242" text-anchor="middle">每路取 20、融合后仍可以只留 3 条</text>
+  <text class="dg-faint" x="380" y="300" text-anchor="middle">余弦与 BM25 量纲分布不同，直接相加会让结果受尺度支配（行 1536–1545）</text>
+</svg>
+<figcaption>图 4 · 层次与 RRF（笔记行 1512–1571）。原稿 step3 在这批题上：向量 0.312、BM25 0.625、BGE 0.688、BGE 70%+BM25 30% 召回 0.812——<strong>混合不保证提升</strong>：RRF 等权候选 3 只有 0.375，比 BM25 单路还低（runs/step3.txt，原稿那次运行口径）。实验③用纯标准库复算 k 与权重的语义。</figcaption>
+</figure>
+<p>对象确定之后再谈过滤：<strong>Metadata Filter 先确定对象再过滤</strong>（行 1573）；问题本身不清楚时走查询处理（行 1585–1623，复习 Q23）——<strong>对象不明</strong>（「会话多久过期」没说哪个服务）先结合项目上下文定范围，仍不确定就向用户澄清；<strong>对象明确但用词不匹配</strong>（「验证命令」vs 文档里的「测试入口」）用重写、分解、多路、术语扩展，<strong>改写后必须重新检索，原意不变</strong>。原稿 step3b：重写/分解/多路都停在 0.812 仍漏 q4，只有术语扩展把召回提到 0.938、命中率 1.0——q4 的 top1 没变，但 gold 进了候选（runs/step3b.txt）。</p>
+<figure class="diagram" id="fig5">
+<svg viewBox="0 0 760 300" role="img" aria-label="查询处理决策">
+  <defs><marker id="m5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">先分清「对象不明」还是「用词不匹配」，再选动作</text>
+  <rect class="dg-node-accent" x="280" y="50" width="200" height="46" rx="6"/>
+  <text class="dg-label" x="380" y="78" text-anchor="middle">问题进来：对象明确吗？</text>
+  <rect class="dg-node-warn" x="20" y="140" width="220" height="66" rx="6"/>
+  <text class="dg-label" x="130" y="162" text-anchor="middle">对象不明</text>
+  <text class="dg-soft" x="130" y="182" text-anchor="middle">先结合项目上下文定范围</text>
+  <text class="dg-soft" x="130" y="198" text-anchor="middle">仍不确定 → 向用户澄清</text>
+  <rect class="dg-node" x="270" y="140" width="220" height="66" rx="6"/>
+  <text class="dg-label" x="380" y="162" text-anchor="middle">对象明确，用词不匹配</text>
+  <text class="dg-soft" x="380" y="182" text-anchor="middle">重写 / 分解 / 多路 / 术语扩展</text>
+  <text class="dg-soft" x="380" y="198" text-anchor="middle">「验证命令」→「测试入口 pytest」</text>
+  <rect class="dg-node" x="520" y="140" width="220" height="66" rx="6"/>
+  <text class="dg-label" x="630" y="162" text-anchor="middle">对象明确，用词匹配</text>
+  <text class="dg-soft" x="630" y="182" text-anchor="middle">直接检索</text>
+  <text class="dg-soft" x="630" y="198" text-anchor="middle">对象确定后再 Metadata 过滤</text>
+  <path class="dg-arrow" d="M330 96 L130 140" marker-end="url(#m5)"/>
+  <path class="dg-arrow" d="M380 96 L380 140" marker-end="url(#m5)"/>
+  <path class="dg-arrow" d="M430 96 L630 140" marker-end="url(#m5)"/>
+  <rect class="dg-node-warn" x="20" y="234" width="720" height="44" rx="6"/>
+  <text class="dg-label" x="380" y="261" text-anchor="middle">改写后必须重新检索，原意不变——改写不是答案，查库才是（行 1585）</text>
+</svg>
+<figcaption>图 5 · 查询处理决策（笔记行 1573–1623）。术语扩展在原稿那次运行里把 q4 的 gold 送进候选（召回 0→1），但 top1 仍是需求讨论记录——<strong>看全部候选，不只看第一名</strong>；实验⑤的本地 BM25 探针会复现同构现象。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么两路分数不能直接相加，k 又不是 Top-K？</strong> 余弦相似度集中在 0.8–0.95，BM25 可以是十几分，直接相加等于让 BM25 尺度支配结果。RRF 只看排名：每路第 r 名贡献 w/(k+r)，k=60 让头部名次差距被平滑（第 1 与第 2 只差约 1/61 vs 1/62），<strong>它是融合参数，与「最终留几条」无关</strong>（复习 Q22）。实验③会看到：k 从 60 改到 1 排序不变但分数差拉大；权重 70/30 能翻转 top1。取舍：混合检索多一路开销，<strong>不保证提升</strong>——step3 里 RRF 等权候选 3 反而低于 BM25 单路，配置要用固定题集比较出来，不是「混合更高级」。
+</div>
+
+<h3 id="sec5">5. 后处理：选好证据，再检查回答</h3>
+<p><strong>Rerank 能改排序，不能补回候选之外的内容</strong>（行 1643–1654，复习 Q24）：q4 的 gold 在 20 条候选里排第 20，重排后前三仍没有它——这是召回遗漏，要回解析/分块/查询/检索，不是换更贵的重排模型。LLM 重排要看它实际收到什么：原稿每段只传前 220 字符，截断可能恰好切掉关键句（行 1658）；Cross Encoder 把问题与候选成对打分，分数是相关性不是正确概率（行 1676）。上下文压缩少给内容、也可能删掉证据（行 1702）；后处理要<strong>同时看质量与开销</strong>（行 1718）：runs/step4 里 A 检索直出 / B +Rerank / C +Rerank+压缩答案正确率都是 8/8，B 耗时 36.1→67.5s，C 输入 7656→5922 Token 但无依据实体从 2 回升到 3。</p>
+<figure class="diagram" id="fig6">
+<svg viewBox="0 0 760 300" role="img" aria-label="证据丢失四象限">
+  <defs><marker id="m6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">证据在哪一步丢的？四种情况，四个修法（行 1647–1652）</text>
+  <rect class="dg-node-warn" x="20" y="56" width="350" height="86" rx="6"/>
+  <text class="dg-label" x="195" y="80" text-anchor="middle">候选中没有正确证据</text>
+  <text class="dg-soft" x="195" y="102" text-anchor="middle">定位：召回遗漏（重排做不到）</text>
+  <text class="dg-soft" x="195" y="122" text-anchor="middle">修：解析、分块、查询与检索</text>
+  <rect class="dg-node" x="390" y="56" width="350" height="86" rx="6"/>
+  <text class="dg-label" x="565" y="80" text-anchor="middle">候选有，最终没有</text>
+  <text class="dg-soft" x="565" y="102" text-anchor="middle">定位：排序或筛选问题（本次没排好）</text>
+  <text class="dg-soft" x="565" y="122" text-anchor="middle">修：重排输入与选择规则</text>
+  <rect class="dg-node" x="20" y="162" width="350" height="86" rx="6"/>
+  <text class="dg-label" x="195" y="186" text-anchor="middle">最终选中，请求中没有</text>
+  <text class="dg-soft" x="195" y="208" text-anchor="middle">定位：装配问题</text>
+  <text class="dg-soft" x="195" y="228" text-anchor="middle">修：预算、截断与格式化（0017）</text>
+  <rect class="dg-node" x="390" y="162" width="350" height="86" rx="6"/>
+  <text class="dg-label" x="565" y="186" text-anchor="middle">请求中有，回答用错</text>
+  <text class="dg-soft" x="565" y="208" text-anchor="middle">定位：生成或证据理解问题</text>
+  <text class="dg-soft" x="565" y="228" text-anchor="middle">修：对照结论与引用</text>
+  <text class="dg-faint" x="380" y="282" text-anchor="middle">q4：gold 在 20 条候选排第 20，重排后前三仍无——「排第 20」不代表重排无法访问，但本次没排好（行 1645）</text>
+</svg>
+<figcaption>图 6 · 四象限定位（笔记行 1643–1654）。注意区分：「不在候选里」是重排<strong>做不到</strong>；「在候选里但没选中」是本次<strong>没排好</strong>。runs/step4b.txt 两种候选深度（3 与 20）各跑一遍，正是为了分开这两种情况。</figcaption>
+</figure>
+<p>回答生成后，<strong>Citation 至少分三层检查</strong>（行 1739–1761，复习 Q25）：① <strong>编号合法</strong>——引用对应本轮存在的证据；② <strong>实体有依据</strong>——路径、数字、命令能在被引证据里找到；③ <strong>结论受支持</strong>——证据真正证明整句话，包括否定、条件、版本与适用范围。前两层是代码可查的，第三层要人或更强检查器核对。校验失败以后怎么办？<strong>要定义发布行为</strong>（行 1765）：标记、拦截、重试还是转人工，不能「检查完了照样发」；事后发现错误不等于已阻止展示。</p>
+<figure class="diagram" id="fig7">
+<svg viewBox="0 0 760 330" role="img" aria-label="引用三层检查与发布行为">
+  <defs><marker id="m7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">三层检查各管一段，字面核对查不出方向反转</text>
+  <rect class="dg-node" x="20" y="56" width="500" height="52" rx="6"/>
+  <text class="dg-label" x="270" y="78" text-anchor="middle">层1 编号合法：[n] 对应本轮存在的证据吗</text>
+  <text class="dg-soft" x="270" y="96" text-anchor="middle">无编号 / 编号越界 → 引用不合格（代码可查）</text>
+  <rect class="dg-node" x="20" y="124" width="500" height="52" rx="6"/>
+  <text class="dg-label" x="270" y="146" text-anchor="middle">层2 实体有依据：路径/数字/命令找得到吗</text>
+  <text class="dg-soft" x="270" y="164" text-anchor="middle">字面匹配 + 归一化；换算与推导查不出（代码可查）</text>
+  <rect class="dg-node-accent" x="20" y="192" width="500" height="52" rx="6"/>
+  <text class="dg-label" x="270" y="214" text-anchor="middle">层3 结论受支持：证据真证明整句话吗</text>
+  <text class="dg-soft" x="270" y="232" text-anchor="middle">否定、条件、版本、适用范围（要人或更强检查器）</text>
+  <path class="dg-arrow" d="M270 108 L270 124" marker-end="url(#m7)"/>
+  <path class="dg-arrow" d="M270 176 L270 192" marker-end="url(#m7)"/>
+  <rect class="dg-node-warn" x="550" y="56" width="190" height="188" rx="6"/>
+  <text class="dg-label" x="645" y="84" text-anchor="middle">反例（实验④）</text>
+  <text class="dg-soft" x="645" y="112" text-anchor="middle">证据：「不要为了通过</text>
+  <text class="dg-soft" x="645" y="130" text-anchor="middle">测试去修改测试文件」</text>
+  <text class="dg-soft" x="645" y="158" text-anchor="middle">回答：「可以修改测试</text>
+  <text class="dg-soft" x="645" y="176" text-anchor="middle">文件让用例通过 [1]」</text>
+  <text class="dg-soft" x="645" y="204" text-anchor="middle">实体都在 → 层2 查不出</text>
+  <text class="dg-soft" x="645" y="222" text-anchor="middle">方向反转要层3 核对</text>
+  <rect class="dg-zone" x="20" y="262" width="720" height="48" rx="8"/>
+  <text class="dg-label" x="380" y="291" text-anchor="middle">校验失败 → 发布行为要预先定义：标记 / 拦截 / 重试 / 转人工（行 1765）</text>
+</svg>
+<figcaption>图 7 · 三层检查（笔记行 1739–1777）。rag/answer.py 的 verify() 覆盖层1与层2（正则抽实体 + 字面核对），层3 不在代码能力内——实验④直接调用真实 verify() 演示五种判定，包括「无可核对实体」也不计引用合格。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么「更复杂」「更短」不是有效证据？</strong> step4 的 B 加了重排：答案验收没提高（8/8→8/8），耗时接近翻倍；C 再压缩：输入少约 23%，无依据实体却从 2 回升到 3——压缩可能恰好删掉支持结论的那句。替代方案「组件越多越专业」的事故：成本与延迟上去了，质量原地踏步甚至下降，还无法归因（多处同时变化）。这与 0017 的预算取舍、0019 的「策略是取舍不是测出的结果」同构：<strong>有效性只能来自固定条件下的比较</strong>。引用三层同理——编号合法是格式层，实体有依据是字面层，结论受支持才是业务层，<strong>每层的「通过」只证明那一层的事</strong>（0019 核心不变量在 RAG 里重演）。
+</div>
+
+<h3 id="sec6">6. 评估与失败归因：固定题集，找第一个断点</h3>
+<p>第五步用<strong>固定问题集按相同口径比较</strong>（笔记 六，行 1779–1890）：同样 9 份资料、30 个节点、8 道题，V0 最小闭环 → V1 检索优化 → V2 +Rerank → V3 +压缩。三个逐题案例值得背下来：<strong>q2</strong>——V1 只找到一处 gold，召回 0.5、答案关键词通过、引用却是「无可核对实体」，命中/召回/答案检查可以不一致（行 1808）；<strong>q4</strong>——V2/V3 写出了必备命令却没有 gold 指定小节，关键词通过不能替代依据（行 1820）；<strong>q6</strong>——命中常量来源、出现「1800」，仍判存在无依据实体：换算表达不等于源码事实（行 1835，复习 Q26）。汇总数字按检查器口径解释（行 1843）：答案检查是关键词验收不是全面正确率；「含无依据实体 2/8」是回答数占比不是幻觉率。<strong>Token、费用与计时必须对齐</strong>（行 1860）：输入省 27% 不等于总费用省 27%（后处理用量没计全）；V2/V3 都约 8.3 秒/题但计时范围不同，不能直接比；usage 缺失填 0 是待修正项，正式报告记录未知。</p>
+<p class="sidenote">口径差（已逐行核对）：<strong>笔记与 runs/ 快照不是同一次运行</strong>。逐题检索数字一致（0.312/0.625/0.688/0.812/0.938 与 q2/q4/q6/q7 逐题行），但汇总数字漂移：无依据实体笔记 A4/B1/C3（行 1727）vs runs/step4 A3/B2/C3；V0 答案检查笔记 4/8（行 1847）vs runs/step5 5/8；V2 引用合格笔记 5/8（行 1848）vs runs 6/8；V3 输入节省笔记 2,308 Token/约 27%（行 1862）vs runs 7731−6032=1699/约 22%；Cross Encoder 耗时笔记 137.10s（行 1696）vs runs/step4c 96.73s。<strong>引用任何数字都要注明是哪次运行</strong>——这正是本课「口径意识」的现场教材。</p>
+<figure class="diagram" id="fig8">
+<svg viewBox="0 0 760 350" role="img" aria-label="失败归因六步">
+  <defs><marker id="m8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">出问题时按顺序查，停在第一个丢失证据的环节（行 1892–1905）</text>
+  <rect class="dg-node" x="20" y="46" width="44" height="40" rx="6"/>
+  <text class="dg-label" x="42" y="71" text-anchor="middle">1</text>
+  <text class="dg-soft" x="230" y="64" text-anchor="middle">原文是否有答案，状态是否适用</text>
+  <text class="dg-faint" x="600" y="64" text-anchor="middle">失败 → 补可靠来源或说明缺口</text>
+  <rect class="dg-node" x="20" y="96" width="44" height="40" rx="6"/>
+  <text class="dg-label" x="42" y="121" text-anchor="middle">2</text>
+  <text class="dg-soft" x="230" y="114" text-anchor="middle">解析与分块是否保留关键条件</text>
+  <text class="dg-faint" x="600" y="114" text-anchor="middle">失败 → 加载、清洗、分块和元数据</text>
+  <rect class="dg-node-accent" x="20" y="146" width="44" height="40" rx="6"/>
+  <text class="dg-label" x="42" y="171" text-anchor="middle">3</text>
+  <text class="dg-soft" x="230" y="164" text-anchor="middle">候选中是否有答案证据</text>
+  <text class="dg-faint" x="600" y="164" text-anchor="middle">失败 → 查询、模型、分词、过滤与召回</text>
+  <rect class="dg-node" x="20" y="196" width="44" height="40" rx="6"/>
+  <text class="dg-label" x="42" y="221" text-anchor="middle">4</text>
+  <text class="dg-soft" x="230" y="214" text-anchor="middle">最终节点和请求是否保留</text>
+  <text class="dg-faint" x="600" y="214" text-anchor="middle">失败 → 重排、压缩、预算与装配</text>
+  <rect class="dg-node" x="20" y="246" width="44" height="40" rx="6"/>
+  <text class="dg-label" x="42" y="271" text-anchor="middle">5</text>
+  <text class="dg-soft" x="230" y="264" text-anchor="middle">回答结论是否受引用支持</text>
+  <text class="dg-faint" x="600" y="264" text-anchor="middle">失败 → 提示词、生成与结论核对</text>
+  <rect class="dg-node" x="20" y="296" width="44" height="40" rx="6"/>
+  <text class="dg-label" x="42" y="321" text-anchor="middle">6</text>
+  <text class="dg-soft" x="230" y="314" text-anchor="middle">检查结果是否如实表达覆盖</text>
+  <text class="dg-faint" x="600" y="314" text-anchor="middle">失败 → 标注、检查器与发布规则</text>
+  <path class="dg-arrow" d="M42 86 L42 96" marker-end="url(#m8)"/>
+  <path class="dg-arrow" d="M42 136 L42 146" marker-end="url(#m8)"/>
+  <path class="dg-arrow" d="M42 186 L42 196" marker-end="url(#m8)"/>
+  <path class="dg-arrow" d="M42 236 L42 246" marker-end="url(#m8)"/>
+  <path class="dg-arrow" d="M42 286 L42 296" marker-end="url(#m8)"/>
+</svg>
+<figcaption>图 8 · 归因六步（笔记行 1892–1905）。一次只修一个具体问题，再用原失败题复测、用新题检查；不要同时换模型、分块、提示词后只凭最终结果宣布某个方法有效。无答案题单独设计验收与统计（行 1880–1888，复习 Q27）：检查能否识别证据不足并说明缺口，空 gold 不能沿旧分母机械平均——runs/extra_technical_checks.txt 里「部署地址」一题答「证据里没有写」就是正确拒答样本。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么归因要「找第一个断点」而不是看最终答案？</strong> 最终答案错可能是六层中任何一层丢的证据，直接调生成提示词可能修的是第 3 层的病。按顺序查、停在第一个失败环节，修完用原题复测——这与第三章 Harness 的失败归因沿 Trace 找第一个断点完全同构，也与你的 benchmark 口径意识同构：<strong>指标本身也要被检查</strong>（第 6 步：检查结果是否如实表达覆盖）。「生成失败为空」只说明这套规则未检出，不能推导「检索到了就一定答对」；八题都有答案，不能推断系统会拒答——所以无答案题要单独统计正确拒答与错误作答。
+</div>
+
+<h3 id="sec7">7. 面试视角：两分钟主链 + 追问链</h3>
+<p><strong>两分钟主链</strong>（不看稿讲清）：RAG 是外部证据进输入、没改参数，分离线在线两阶段 → 数据准备五道工序（解析保留关系/清洗红线/分块完整性与粒度/Overlap/Metadata），答案别在入库前丢失 → 检索分层次（BM25 评分方法/ES 系统/向量库），指标分口径（召回率/命中率/完全命中），换 Embedding 重建文档向量 → 混合用 RRF 按排名融合，k=60 是平滑参数不是 Top-K，混合不保证提升 → 查询处理先分对象不明与用词不匹配，改写后必须重新检索 → 后处理四象限定位，重排补不回候选外证据，压缩可能删证据 → 引用三层检查（编号合法/实体有依据/结论受支持），校验失败要定义发布行为 → 固定题集同口径比较，Token 费用计时对齐，无答案题单独统计 → 失败沿六步找第一个丢证据环节，一次修一个再复测。</p>
+<pre>RAG 链路
+├── 是什么：外部证据进输入（≠参数更新）；离线准备 + 在线回答
+├── 数据准备：解析保留关系 / 清洗红线 / 分块完整性+粒度 / Overlap / Metadata
+├── 检索：层次（BM25 方法 / ES 系统 / 向量库）；换模型重建文档向量
+├── 融合：RRF 按排名，k=60 平滑参数 ≠ Top-K；混合不保证提升
+├── 查询处理：对象不明→澄清；用词不匹配→扩展后重新检索
+├── 后处理：重排补不回候选外；压缩可能删证据；质量与开销同看
+├── 校验：编号合法 / 实体有依据 / 结论受支持；失败定义发布行为
+├── 评估：固定题集同口径；Token/费用/计时对齐；无答案题单独统计
+└── 归因：六步找第一个丢证据环节；一次修一个，原题复测</pre>
+<p><strong>面试官追问链</strong>：</p>
+<ul>
+  <li>「检索效果不好你怎么排查？」→ 不先调模型：按六步顺序查原文→分块→候选→请求→结论→检查器，停在第一个丢证据的环节；q4 排第 20 是召回/排序问题，换重排模型补不回候选外的 gold。</li>
+  <li>「RRF 的 k=60 是什么意思？」→ 排名贡献 w/(k+rank) 的平滑参数，控制头部名次差距的衰减；不是返回 60 条，也不是每路取 60 条；最终留几条由 Top-K 决定。</li>
+  <li>「加了重排和压缩，效果一定更好吗？」→ 不一定：原稿 step4 答案验收 8/8 不变、耗时近翻倍、压缩后无依据实体回升；有效性要固定题集同口径比较，组件增加不是提升证据。</li>
+  <li>「引用检查通过就能发布吗？」→ 三层各管一段：编号合法是格式、实体有依据是字面、结论受支持才是业务；「不要修改测试」被答成「可以修改」字面检查查不出；校验失败还要有预定义的发布行为。</li>
+  <li>「怎么证明系统不会编造？」→ 八题都有答案证明不了拒答能力；无答案题单独设计验收（正确说明资料不足）与统计（空 gold 不沿旧分母），usage 未知不填零。</li>
+</ul>
+
+<hr>
+
+<h2 id="part2">第二部分：检索式测验（10 题 = 4 选择 + 6 简述）</h2>
+<p>Q1–Q2 换形式重测 0019 的两条核心不变量（0019 分数未报，按核心不变量兜底）；Q3–Q4 考本课核心判断（分别换形式覆盖章复习 Q22/Q24）；Q5–Q10 简述覆盖其余复习题（Q5=Q18+Q19、Q6=Q20+Q21、Q7=Q23、Q8=Q25、Q9=Q26、Q10=Q27），为结课课 0022 的集中复测铺垫。简述题先脱稿写，再展开参考答案，按得分点严格自评；漏掉关键点就选「部分对」。</p>
+<div id="quiz"></div>
+
+<hr>
+
+<h2 id="part3">第三部分：第二层练习——读透原稿输出，再离线复算与改造</h2>
+<p>本机<strong>无 MINIMAX_CN_API_KEY、无 fastembed 模型缓存</strong>：step1/step2 语义分块/step3b 的 LLM 段/step4 系/step5 不可离线实跑，实验以 <code>runs/</code> 原稿输出阅读核对为主；③④用系统 <code>python3</code>（纯标准库 + 真实 rag 模块）离线复算与改造；⑤是可选加餐（已在本机实跑，用 4-4/.venv 轻量依赖）。BGE 首跑需联网下载模型，step3 实跑标<strong>待验证</strong>。命令均从<strong>本课程仓库根目录</strong>开始（实验②④除外，注明 cd）；不改课程原文件。所有「本机实测」来自 2026-11-22 的验证运行。</p>
+
+<h3>实验 ①：gold 对照核验——正确证据真实存在于语料中（落地验收①）</h3>
+<ul>
+  <li>逐题核对 eval/questions.json 的 gold 文件存在、标题命中、required_facts 字面可查（从仓库根目录执行）：<pre>python3 - &lt;&lt;'EOF'
+import json, re
+from pathlib import Path
+base = Path("course_code/week04/4-4")
+qs = json.loads((base/"eval/questions.json").read_text(encoding="utf-8"))["questions"]
+files = [p for p in (base/"corpus").rglob("*") if p.is_file() and not p.name.startswith(".")]
+print("corpus 文件数:", len(files))
+norm = lambda s: re.sub(r"\s+", "", s)
+for q in qs:
+    texts, ok_file, ok_head = [], True, True
+    for g in q["gold"]:
+        p = base/"corpus"/g["file"]
+        ok_file &= p.exists()
+        if p.exists():
+            t = p.read_text(encoding="utf-8")
+            texts.append(t)
+            heads = [l.lstrip("#").strip() for l in t.splitlines() if l.startswith("#")]
+            ok_head &= (not g["heading"]) or any(g["heading"] in h for h in heads)
+    joined = norm("\n".join(texts))
+    missing = [f for f in q["required_facts"] if norm(f) not in joined]
+    print(q["id"], "文件存在:", ok_file, "标题命中:", ok_head, "required 字面缺失:", missing)
+pay = (base/"corpus/docs/payment-session.md").read_text(encoding="utf-8")
+print("干扰项「5 分钟」在支付文档:", "5 分钟" in pay)
+src = (base/"corpus/app/session.py").read_text(encoding="utf-8")
+print("常量行:", [l for l in src.splitlines() if "SESSION_TTL_SECONDS" in l][0].strip())
+EOF</pre><strong>先写预期</strong>：8 题的 gold 文件都存在吗？required_facts 都能在 gold 原文里字面找到吗？q1 的干扰项「5 分钟」在哪份文档？q6 要的「1800」在源码里吗？<br>预期（本机实测）：corpus 文件数 <strong>12</strong>；8 题文件存在/标题命中全 True；<strong>只有 q6 字面缺失 ['1800']</strong>——源码写的是 <code>SESSION_TTL_SECONDS = 30 * 60</code>，1800 是换算结果不是字面事实（复习 Q26 的活例证）；干扰项「5 分钟」确在支付文档（q1 考的就是不被它带偏）。<strong>gold 标注本身也要核对</strong>：标注说「代码里的常量注释写着 1800 的来历」，实际注释只写「单位秒」——标注与原文的口径差也要记录。</li>
+</ul>
+
+<h3>实验 ②：runs/ 原稿输出精读——核对笔记口径，找漂移（落地验收②③⑤⑥⑦）</h3>
+<ul>
+  <li>按链路顺序读关键输出（先 cd 进 4-4 目录）：<pre>cd course_code/week04/4-4
+grep -n "判定=通过" runs/step1.txt
+sed -n '7,12p' runs/step3.txt
+sed -n '76,81p' runs/step3.txt
+grep -n "术语扩展后\|仍漏" runs/step3b.txt
+sed -n '85,88p' runs/step4.txt
+sed -n '18,22p' runs/step5.txt
+sed -n '36,42p' runs/extra_technical_checks.txt
+ls milvus_login_demo.db/
+sed -n '84,88p' rag44/README.md</pre><strong>先写预期</strong>：step1 两题判定都通过，q_hard 答好了吗？step3 哪个配置召回最高？step3b 哪种查询处理补回了 q4？step4 加组件后答案正确率变了吗？step5 V0 答案正确率是笔记说的 4/8 吗？milvus_login_demo.db 是文件还是目录？<br>预期（本机实测）：step1 两题「判定=通过」，但 q_hard 回答是泛化建议（<strong>通过≠答好</strong>）；step3 向量 0.312 / BM25 0.625 / RRF 等权候选 3 仅 0.375（<strong>混合不保证提升</strong>），BGE 0.688、BGE 70%+BM25 30% 召回 0.812 为该批最好；step3b 重写/分解/多路全停在 0.812 仍漏 q4，<strong>只有术语扩展 0.938、仍漏：无</strong>；step4 A/B/C 答案正确率均 8/8，无依据实体 <strong>3/2/3</strong>、总 prompt 7656/7666/5922（B 耗时 36.1→67.5s）；step5 V0 答案正确率 <strong>5/8</strong>（笔记行 1847 写 4/8——<strong>不是同一次运行</strong>），V1 0.938/8/8、V2/V3 0.812/8/8 引用均 6/8；extra 无答案题「部署地址」答「<strong>证据里没有写</strong>」（正确拒答样本，验收⑦）；milvus_login_demo.db 是<strong>目录</strong>（LOCK + collections/，week04 README 行 33 称「文件」措辞不精确）；rag44 README 明示真实 Embedding 与生成<strong>未联调</strong>。再对照笔记行 1727–1728、1847–1849、1862–1864、1696：汇总数字多处漂移（详见精讲第 6 节 sidenote），逐题检索数字一致——<strong>引用数字必须注明哪次运行</strong>。</li>
+</ul>
+
+<h3>实验 ③：纯标准库 RRF 复算——k=60 的语义与 Top-K 的区别（落地验收②⑤）</h3>
+<ul>
+  <li>先看真实实现的签名与核心行，再用标准库复算（从仓库根目录执行）：<pre>grep -n "k: int = 60\|k + rank\|top_k: int = 5" course_code/week04/4-4/rag/retrieve.py
+python3 - &lt;&lt;'EOF'
+def rrf(lists, top_k, k=60, weights=None):
+    weights = weights or [1.0]*len(lists)
+    fused = {}
+    for w, results in zip(weights, lists):
+        for rank, nid in enumerate(results, 1):
+            fused[nid] = fused.get(nid, 0.0) + w/(k+rank)
+    return sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
+vec = ["A","B","C","D"]; kw = ["B","C","A","E"]
+fmt = lambda rs: " / ".join(f"{n} {s:.5f}" for n, s in rs)
+print("等权 k=60 top3:", fmt(rrf([vec,kw], 3)))
+print("70/30 加权 k=60 top3:", fmt(rrf([vec,kw], 3, weights=[0.7,0.3])))
+print("等权 k=1  top3:", fmt(rrf([vec,kw], 3, k=1)))
+print("k=60 top_k=3 条数:", len(rrf([vec,kw], 3)), "| top_k=60 条数:", len(rrf([vec,kw], 60)))
+EOF</pre><strong>先写预期</strong>：两路排名 vec=[A,B,C,D]、kw=[B,C,A,E]，等权融合谁第一？把向量路权重调到 70% 会怎样？k 从 60 改到 1 排序变吗？top_k=60 能返回 60 条吗？<br>预期（本机实测）：真实实现 rag/retrieve.py 行 69–70 签名 <code>rrf_fuse(..., top_k=5, k=60, weights=None)</code>、行 85 <code>fused[key] += weight/(k+rank)</code>。等权 k=60 top3：<strong>B 0.03252 / A 0.03227 / C 0.03200</strong>（B 两路都靠前）；70/30 加权：<strong>A 0.01624 / B 0.01621</strong> / C 0.01595——<strong>权重翻转 top1</strong>；k=1 顺序不变（B/A/C）但分数差拉大（0.83333/0.75000/0.58333）——k 是平滑参数，改变的是衰减不是条数；top_k=3 返回 3 条、top_k=60 只返回 <strong>5</strong> 条（两路并集只有 5 个节点）——<strong>k=60 与返回条数无关</strong>（复习 Q22 现场）。</li>
+</ul>
+
+<h3>实验 ④：真实引用校验器五案例 + 改造（预期先写后验，落地验收④）</h3>
+<ul>
+  <li>直接 import 课程真实的 rag.answer.verify（纯标准库，系统 python3 可用；先 cd 进 4-4 目录），用伪造节点构造五个案例：<pre>cd course_code/week04/4-4
+python3 - &lt;&lt;'EOF'
+from types import SimpleNamespace as NS
+from rag.answer import verify
+def node(text, file="docs/session-rules.md", heading="有效期长度"):
+    return NS(node=NS(text=text, metadata={"file_path": file, "heading": heading}))
+ev_rule = node("## 有效期长度\n- 管理后台的登录会话有效期为 30 分钟。")
+ev_src  = node("SESSION_TTL_SECONDS = 30 * 60  # 登录会话有效期，单位秒", file="app/session.py", heading="(整文件)")
+ev_test = node("## 提交前检查\n- 不要为了通过测试去修改测试文件，测试文件由维护者负责。", file="docs/testing-guide.md", heading="提交前检查")
+cases = [
+    ("q1式", "登录会话的有效期是 30 分钟 [1]。", [ev_rule]),
+    ("q6式(只有规则证据)", "SESSION_TTL_SECONDS 的值是 1800 秒 [1]。", [ev_rule]),
+    ("引用越界", "有效期是 30 分钟 [2]。", [ev_rule]),
+    ("无编号", "有效期是 30 分钟。", [ev_rule]),
+    ("方向反转", "可以修改测试文件让用例通过 [1]。", [ev_test]),
+]
+for name, ans, ev in cases:
+    r = verify(ans, ev)
+    print(name, "→", r["verdict"], "| 无依据:", r["unsupported"])
+print("---- 改造：给 q6 补上源码证据 ----")
+r = verify("SESSION_TTL_SECONDS 的值是 1800 秒 [1][2]。", [ev_rule, ev_src])
+print("补源码证据后 →", r["verdict"], "| 有依据:", r["supported"], "| 无依据:", r["unsupported"])
+EOF</pre><strong>先写预期</strong>：五个案例各判什么？「方向反转」案例实体都在证据里，层2 查得出吗？<strong>改造预期先写下来</strong>：给 q6 补上源码证据 ev_src 后，「1800 秒」会变成有依据吗？<br>预期（本机实测）：q1式→<strong>通过</strong>；q6式→<strong>存在无依据实体</strong> [SESSION_TTL_SECONDS, 1800 秒]（规则文档里没有常量与秒数）；引用[2]→<strong>引用越界</strong>；无编号→<strong>无引用</strong>；方向反转→<strong>无可核对实体</strong>（「可以修改测试文件」没抽出可核对实体，字面检查覆盖不了方向反转——层3 的责任）。<strong>改造验证</strong>：补源码证据后<strong>仍判「存在无依据实体」</strong>——常量 SESSION_TTL_SECONDS 变有依据，但「1800 秒」字面仍缺失（源码是 <code>30 * 60</code>），<strong>字面检查不会做算术推导</strong>。若你预期「补证据就通过」，这里就是预期被证伪的现场：换算等价≠字面有依据≠结论受支持，三层各管一段（复习 Q25/Q26）。</li>
+</ul>
+
+<h3>实验 ⑤（可选加餐，已本机实跑）：本地 BM25 探针——复现「top1 不变、gold 进候选」</h3>
+<ul>
+  <li>用 conda agentloop 解释器建 4-4 独立 venv（<strong>不往 conda 环境直接 pip install</strong>），装轻量依赖 jieba + rank_bm25，对 corpus 的 .py/.md 建 BM25 索引跑三个查询（从仓库根目录执行）：<pre>/Users/chyu-wissfi/miniconda3/envs/agentloop/bin/python -m venv course_code/week04/4-4/.venv
+course_code/week04/4-4/.venv/bin/pip install -q jieba rank_bm25
+course_code/week04/4-4/.venv/bin/python - &lt;&lt;'EOF'
+import re
+from pathlib import Path
+import jieba
+from rank_bm25 import BM25Okapi
+base = Path("course_code/week04/4-4/corpus")
+nodes = []
+for p in sorted(base.rglob("*")):
+    if not p.is_file() or p.name.startswith(".") or p.suffix not in {".py", ".md"}:
+        continue
+    t = p.read_text(encoding="utf-8")
+    rel = str(p.relative_to(base))
+    if p.suffix == ".py":
+        nodes.append((rel, t))
+    else:
+        body = re.sub(r"\A---.*?---\s*", "", t, flags=re.S)
+        for chunk in re.split(r"(?m)^(?=## )", body):
+            if chunk.strip():
+                nodes.append((rel, chunk))
+tok = lambda t: [w for w in jieba.lcut(t.lower()) if w.strip()]
+bm25 = BM25Okapi([tok(t) for _, t in nodes])
+def show(tag, query):
+    scores = bm25.get_scores(tok(query))
+    top = sorted(range(len(nodes)), key=lambda i: scores[i], reverse=True)[:3]
+    print(tag)
+    for r, i in enumerate(top, 1):
+        head = nodes[i][1].splitlines()[0][:40]
+        print(f"  top{r} {nodes[i][0]} {scores[i]:.3f} | {head}")
+show("q6 原问题", "SESSION_TTL_SECONDS 这个常量的值是多少？")
+show("q4 原问题", "退出登录改完以后，用哪条命令验证？")
+show("q4 术语扩展", "退出登录改完以后，用哪条命令验证？ 测试入口 python -m pytest")
+print("节点数:", len(nodes))
+EOF</pre><strong>先写预期</strong>：q6 的 gold（app/session.py）能排第一吗？q4 的 gold（docs/testing-guide.md § 测试入口）在原问题下进 top3 吗？术语扩展后呢？<br>预期（本机实测）：节点数 <strong>30</strong>（与原稿按标题分块同数）；q6 top1 是 <strong>app/config.py 11.030</strong>（运维覆盖配置的空值文件蹭了关键词），gold app/session.py 第 2（9.817）——与 runs/step3 的 BM25 q6 记录一致；q4 原问题 gold <strong>不在 top3</strong>（top1 需求讨论验收标准 4.623 / top2 FAQ 忘记测试命令 4.584）；术语扩展后 <strong>gold 进第 2</strong>（docs/testing-guide.md § 测试入口 14.476），top1 仍是 FAQ（17.167）——<strong>与笔记「第一名不变、有效证据进第二三位、看全部候选」同构</strong>。注意：本探针只取 .py/.md（PDF/CSV/HTML 不在内），是 BM25 单路简化版，不能据此推断原稿混合检索的全部行为。<strong>待验证项</strong>：step3 实跑（BGE 首跑需联网下载模型）与 extra_milvus_pitfalls 实跑未在本机执行，理论可离线，标待验证；本机已验证的替代证据是 runs/ 原稿输出与本探针。</li>
+</ul>
+
+<h2>回读与验证指引</h2>
+<ul>
+  <li>primary source：<a href="../course_code/week04/第四章 学习笔记.md"><code>第四章 学习笔记.md</code></a> 4.4 节（行 1215–1931）——重点回读「二、最小检索闭环」「三、数据准备」「四、检索（RRF/查询处理）」「五、后处理与 Citation 三层」「六、固定题集评估」「七、第一个丢证据环节」；章复习问题 <strong>Q18–Q27</strong>（题干行 2598–2616，参考答案行 2685–2713）本课已换形式全覆盖：Q18/Q19→测验 Q5、Q20/Q21→Q6、Q22→Q3、Q23→Q7、Q24→Q4、Q25→Q8、Q26→Q9、Q27→Q10，结课前再对照原题自测。</li>
+  <li>代码回读顺序：<a href="../course_code/week04/4-4/eval/questions.json"><code>eval/questions.json</code></a>（8 题与 gold）→ <a href="../course_code/week04/4-4/corpus/docs/session-rules.md"><code>corpus/docs/session-rules.md</code></a>（核心规则）→ <a href="../course_code/week04/4-4/rag/ingest.py"><code>rag/ingest.py</code></a> + <a href="../course_code/week04/4-4/rag/config.py"><code>rag/config.py</code></a>（解析分块入库）→ scripts step1→step5（对照 <code>runs/</code> 同名 .txt）→ <a href="../course_code/week04/4-4/rag/checks.py"><code>rag/checks.py</code></a> + <a href="../course_code/week04/4-4/rag/evaluate.py"><code>rag/evaluate.py</code></a>（检查器与评估口径）→ <a href="../course_code/week04/4-4/rag44/README.md"><code>rag44/README.md</code></a>（另一套参考工程，未联调声明在行 84–87）。</li>
+  <li>跨课连线：向上承接 <a href="./0017-context-engineering.html">0017</a>（预算与压缩决定检索结果怎么进请求——装配四象限的第三格）、<a href="./0018-working-memory.html">0018</a>（工作记忆是当前任务状态，检索证据是本轮取回的外部资料，来源与证明力不同）、<a href="./0019-memory-okf.html">0019</a>（长期记忆≠向量库、先组织再检索——本课把「组织好的语料」接上「按问题取回」；格式通过≠事实正确在引用三层里重演）与第三章 Loop/State/Harness（检索作为工具走 Runtime，失败归因沿 Trace 找第一个断点 ↔ 本课六步归因）。向下预告 <a href="./0021-llm-wiki.html">0021 LLM Wiki</a>：本课假设语料已经存在，0021 解决「检索语料本身怎么治理」。</li>
+  <li>口径提醒：① 笔记数字（0.312/0.625/0.688/0.812/0.938、V0–V3 表）都是<strong>原稿那次运行</strong>口径，本机未复跑完整链路，不得写成普适结论；笔记与 runs/ 快照汇总数字多处漂移（精讲第 6 节 sidenote），引用注明出处。② <code>milvus_login_demo.db</code> 是 Milvus Lite <strong>目录</strong>不是单文件（week04 README 行 33 措辞不精确）。③ rag44 真实 Embedding/生成未联调，只作阅读对照。④ 本节演示用 MiniMax + 本地 BGE，不是 DeepSeek（笔记行 1240）。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<ul>
+  <li><a href="../course_code/week04/第四章 学习笔记.md"><code>course_code/week04/第四章 学习笔记.md</code></a> 4.4 节 + 本章复习问题 Q18–Q27（学生版学习笔记，本课术语与验收的第一材料）</li>
+  <li><code>course_code/week04/4-4/runs/</code> 21 个原稿运行输出（step1→step5 与 extra 系列，本课实验②的第一手核对对象）+ <a href="../course_code/week04/4-4/eval/questions.json"><code>eval/questions.json</code></a>（固定问题集与 gold 标注）</li>
+  <li><a href="../course_code/week04/README.md"><code>course_code/week04/README.md</code></a> 的 4-4 目录说明 + <a href="../course_materials/week04/4-4.pdf"><code>course_materials/week04/4-4.pdf</code></a>（教师 PDF，补充）</li>
+</ul>
+
+<div class="ask-reminder">
+  <strong>卡住了就问你的 agent。</strong>任何一处让你觉得「等等，为什么」——为什么高分检索仍答不好、为什么混合检索反而更低、为什么 k=60 不是返回 60 条、为什么重排补不回候选外的证据、为什么引用三层都过了结论还可能错、为什么输入省 27% 不等于费用省 27%、为什么笔记和 runs/ 的数字对不上——直接回到对话里问。本课全部内容都在回答一个问题：<strong>证据是怎样一步步丢的，回答又凭什么算被检查过。</strong>
+</div>
+
+<div class="lesson-footer">
+  Week04 主题课序列：<a href="./0017-context-engineering.html">1/6 Context Engineering</a>（0017）· <a href="./0018-working-memory.html">2/6 Working Memory</a>（0018）· <a href="./0019-memory-okf.html">3/6 Memory 体系与 OKF</a>（0019）· <strong>4/6 RAG 链路（本课，4-4）</strong>· <a href="./0021-llm-wiki.html">5/6 LLM Wiki</a>（0021）· <a href="./0022-project4-capstone.html">6/6 项目四</a>（0022，结课课）<br>
+  前课回顾：<a href="./0019-memory-okf.html">0019</a> 管「值得留下的知识怎样组织成可核对的记录」；本课管「资料变成语料库后，怎样按问题找回证据并检查回答」——长期记忆≠向量库，检索只是取用方式。<br>
+  <strong>本课通过条件</strong>：① Q1–Q2 重测全对，本课正题（第 3 题起）正确率 85% 以上；② 完成实验①②③，并至少完成实验④⑤中的一项（预期先写后验）；③ 不看稿 2 分钟讲清主链（数据准备 → 分块入库 → 混合检索 → 后处理 → 引用校验 → 固定题集评估 → 失败归因）。通过后进入 0021 LLM Wiki。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  questions: [
+    {
+      type: 'choice',
+      concept: '【重测·0019】格式通过≠事实正确',
+      section: '0019 间隔重测',
+      notesRef: '0019 精讲第 4 节 + 第四章笔记 4.3 四（行 1090）+ 复习 Q15（行 2592/2676）',
+      question: '某份 OKF 知识页通过了 /okf-validate，描述与正文也一致。这时能确认什么？',
+      options: [
+        '结构合规，业务结论仍要核对',
+        '结构合规，业务结论已经核实',
+        '结构合规，登录行为已经测试',
+        '结构合规，记录永远不会过期'
+      ],
+      answer: 0,
+      explanation: '格式检查只证明结构与必填字段合规；描述与正文一致也只是内部自洽，不证明业务结论正确。事实正确性还要读来源、核对当前代码、实际执行确认；记录也不会因为格式合规就永不过期。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·0019】外部读入看回执',
+      section: '0019 间隔重测',
+      notesRef: '0019 精讲第 3/5 节 + 第四章笔记 4.3 三（行 968–974）+ 复习 Q17（行 2596/2682）',
+      question: '新会话里模型准确说出「会话模块在 utils/token.ts」。要证明这条知识从外部记录读入，最少需要什么？',
+      options: [
+        '回答中提到的文件名完全正确',
+        '模型自称记得这个项目的结构',
+        '用户在上次会话里说过这路径',
+        '工具回执显示读取了知识文件'
+      ],
+      answer: 3,
+      explanation: '回答提及熟悉文件名可能来自参数记忆或猜测，模型自述与用户历史都不是读取证据。要看工具回执或确定性加载记录，证明知识文件确实被读进本轮请求——「是否实际读取，看回执」。'
+    },
+    {
+      type: 'choice',
+      concept: 'RRF k=60 是融合参数≠Top-K（复习 Q22 换形式）',
+      section: '4.4 四（复习 Q22 换形式）',
+      notesRef: '第四章笔记 4.4 四.6（行 1536–1545）+ 复习 Q22（行 2606/2697–2698）',
+      question: '混合检索配置写着「每路取 20，RRF k=60，最终留 3」。k=60 在这里是什么？',
+      options: [
+        '最终返回六十条证据给模型',
+        '每一路都要先取六十条候选',
+        '排名贡献衰减用的平滑参数',
+        '余弦相似度阈值为0.60'
+      ],
+      answer: 2,
+      explanation: 'RRF 分数 = Σ w/(k+rank)，k 控制排名贡献怎样衰减：k 越大头部名次差距越平滑。它与返回条数无关——每路取 20、融合后仍只留 3 条；也不是每路候选数或相似度阈值。实验③复算：k=1 排序不变但分数差拉大，top_k=60 也只返回并集 5 条。'
+    },
+    {
+      type: 'choice',
+      concept: '候选外证据重排补不回（复习 Q24 换形式）',
+      section: '4.4 五（复习 Q24 换形式）',
+      notesRef: '第四章笔记 4.4 五.1（行 1643–1654）+ 复习 Q24（行 2610/2703–2704）',
+      question: 'q4 问「退出登录改完以后，用哪条命令验证」。已知 gold 是 docs/testing-guide.md § 测试入口，两次实验结果如下。下一步最合理的是什么？<pre>候选深度 3：gold 不在候选 → 重排后前三仍无 gold\n候选深度 20：gold 排第 20 → 重排后前三仍无 gold</pre>',
+      options: [
+        '换一个更贵的重排模型再试试',
+        '先解决召回问题再谈重排优化',
+        '把相似度阈值调高来过滤噪声',
+        '让生成模型凭记忆把命令补上'
+      ],
+      answer: 1,
+      explanation: '重排只能对已收到的候选重新评分排序，不能选择输入中不存在的证据。深度 3 时 gold 根本不在候选，是召回遗漏，要回查询/分词/过滤/召回环节；深度 20 时 gold 在候选却排第 20，才轮到查排序与选择规则。调高阈值只会丢更多候选，凭记忆补命令违反「只依据证据回答」。'
+    },
+    {
+      type: 'short',
+      concept: '解析保留对应关系 + AST 分块边界（复习 Q18+Q19 换形式）',
+      section: '4.4 三（复习 Q18+Q19 换形式）',
+      notesRef: '第四章笔记 4.4 三.1/三.3（行 1359–1377、1402–1417）+ 复习 Q18/Q19（行 2598–2600/2685–2689）',
+      question: '解析「会话状态矩阵」这类表格时，怎样保留条件与结果的对应关系？AST 分块保留了完整代码单元，为什么仍不能代替调用链分析？',
+      hint: '按行保留 + 值带列名 → 分块不拆行 → AST 语法单元 ≠ 运行时调用关系。',
+      modelAnswer: '<strong>关键得分点：</strong>① 表格<strong>按行保留记录，每个值带上列名</strong>（如「情况：恰好到期；期望：False」），分块尽量让同一行的条件与结果在一起，并保存表格来源和位置；不能把条件与结果分别堆成两段，否则模型可能对应错误。② AST 分块识别函数、类、赋值等<strong>语法结构</strong>，帮助保留完整代码单元；但它<strong>不说明业务请求经过哪些模块</strong>，也不能完整确定运行时调用关系。③ 理解实际行为仍要<strong>追踪入口、调用方、配置和数据流</strong>。漏①的「值带列名/不拆行」或②的「语法≠运行时」算部分对。'
+    },
+    {
+      type: 'short',
+      concept: 'Embedding 一致性 + 检索三层次（复习 Q20+Q21 换形式）',
+      section: '4.4 四（复习 Q20+Q21 换形式）',
+      notesRef: '第四章笔记 4.4 二.3/四.2/四.4–5（行 1292–1300、1478–1490、1512–1532）+ 复习 Q20/Q21（行 2602–2604/2691–2695）',
+      question: '换 Embedding 模型后，为什么不能只改查询侧？BM25、Elasticsearch 与向量库分别处于什么层次，能不能互相替代？',
+      hint: '两边向量空间要匹配 → 同维度≠可比较 → 重建文档向量 → 方法/系统/存储三层。',
+      modelAnswer: '<strong>关键得分点：</strong>① 文档向量与查询向量必须来自<strong>匹配的模型和处理方式</strong>；只改查询侧，两边处于不同向量空间，<strong>即使维度相同（如都是 1536）也不能可靠比较</strong>。② 更换模型要<strong>重新生成文档向量</strong>，并核对索引配置（集合维度、度量、overwrite 影响）。③ 层次：<strong>BM25 是关键词相关性评分方法</strong>；<strong>Elasticsearch 是承载全文检索、过滤、聚合的系统</strong>，可以使用 BM25 评分；<strong>向量库负责向量存储与相似度检索</strong>，可与关键词检索配合成混合方案。三者不在同一层，不是互相替代关系。漏①的「同维度不可比」或③任一层定位算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '对象不明 vs 用词不匹配（复习 Q23 换形式）',
+      section: '4.4 四（复习 Q23 换形式）',
+      notesRef: '第四章笔记 4.4 四.7–8（行 1573–1623）+ 复习 Q23（行 2608/2700–2701）',
+      question: '「会话多久过期」和「用哪条命令验证」都检索不佳。怎样判断各属于「对象不明」还是「用词不匹配」？分别怎么处理？改写之后必须做什么？',
+      hint: '先定对象再谈过滤 → 不明先上下文再澄清 → 不匹配扩展术语 → 改写后重新检索。',
+      modelAnswer: '<strong>关键得分点：</strong>① 「会话多久过期」没说哪个服务（登录/支付），是<strong>对象不明</strong>：先结合项目上下文确定范围，仍无法判断<strong>向用户澄清</strong>；对象确定后才谈 Metadata 过滤。② 「用哪条命令验证」对象明确（login_demo 测试），但文档写的是「测试入口」，是<strong>用词不匹配</strong>：补充项目术语或改写查询（如扩展「测试入口 python -m pytest」），也可重写/分解/多路。③ <strong>改写后必须重新检索，原意不变</strong>——改写不是答案，查库才是。④ 原稿证据：重写/分解/多路都停在 0.812 仍漏 q4，术语扩展提到 0.938；q4 top1 没变但 gold 进候选，<strong>看全部候选不只看第一名</strong>。漏①②的区分或③算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '引用三层检查（复习 Q25 换形式）',
+      section: '4.4 五（复习 Q25 换形式）',
+      notesRef: '第四章笔记 4.4 五.6（行 1739–1761）+ 复习 Q25（行 2612/2706–2707）',
+      question: '引用检查的三层各检查什么？为什么「编号合法、实体都有依据」仍不能保证结论正确？用本语料举一个例子。校验失败后还要定义什么？',
+      hint: '编号→实体→结论 → 字面核对的边界 → 方向反转例 → 发布行为。',
+      modelAnswer: '<strong>关键得分点：</strong>① <strong>编号合法</strong>：引用是否对应本轮存在的证据（无编号/越界都不合格）；<strong>实体有依据</strong>：路径、数字、命令等能否在被引证据中找到；<strong>结论受支持</strong>：证据是否真正证明整句话，包括<strong>否定、条件、版本和适用范围</strong>。② 前两层是字面/格式核对，查不出语义反转：证据写「<strong>不要</strong>为了通过测试去修改测试文件」，回答「可以修改测试文件让用例通过 [1]」——实体都在证据里，编号也合法，结论却反了（实验④实测判「无可核对实体」，不计引用合格）。③ 校验失败要<strong>预定义发布行为</strong>：标记/拦截/重试/转人工，不能检查完照样发；事后发现错误≠已阻止展示。漏①任一层或②的例子算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '30 分钟=1800 秒≠代码常量（复习 Q26 换形式）',
+      section: '4.4 五（复习 Q26 换形式）',
+      notesRef: '第四章笔记 4.4 五.6（行 1749–1757）+ 复习 Q26（行 2614/2709–2710）',
+      question: '回答写「30 分钟 = 1800 秒」并引用了规则文档。为什么这不能证明当前代码常量就是 1800？要说明当前实现还需查什么？（提示：本语料源码写的是 30 * 60，实验①④已实测。）',
+      hint: '换算等价≠源码事实 → 常量可能被覆盖/不参与计算 → 读定义与调用 → 字面检查不做算术。',
+      modelAnswer: '<strong>关键得分点：</strong>① 换算只证明<strong>两个时长数值等价</strong>，不证明源码采用了这个值：当前常量可能不同，可能<strong>被配置覆盖</strong>（本语料 app/config.py 有运维覆盖项），也可能没有参与实际计算。② 要<strong>读取常量定义和相关调用关系</strong>才能说明当前实现——本语料源码是 <code>SESSION_TTL_SECONDS = 30 * 60</code>，字面「1800」不在源码中（实验①实测 q6 required 字面缺失）。③ 检查器边界：字面核对<strong>不会做算术推导</strong>，实验④补上源码证据后「1800 秒」仍判无依据——原文事实/可靠推导/项目判断要三分，不能把推导写成已核对的原文事实。漏①的「覆盖/不参与计算」或②算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '无答案题单独统计 + 评估口径（复习 Q27 换形式）',
+      section: '4.4 六（复习 Q27 换形式）',
+      notesRef: '第四章笔记 4.4 六.5–7（行 1843–1888）+ 复习 Q27（行 2616/2712–2713）',
+      question: '无答案题为什么要单独设计验收与统计，不能沿用原来的召回率计算？比较 V0–V3 这类配置时，Token、费用与计时还要对齐哪些口径？',
+      hint: '检查拒答能力 → 空 gold 换分母 → 输入节省≠总费用 → 计时范围一致 → usage 未知不填零。',
+      modelAnswer: '<strong>关键得分点：</strong>① 无答案题检查系统能否<strong>识别证据不足并说明缺口</strong>，而不是生成猜测；八题都有答案证明不了拒答能力。② 没有正确证据时<strong>普通召回率不适合沿用原计算</strong>：空 gold 不能沿旧分母机械平均，应<strong>单独统计正确拒答、错误作答</strong>等结果并明确判断标准（runs/extra 里「部署地址」答「证据里没有写」是正确拒答样本）。③ 比较口径：<strong>输入节省≠总费用节省</strong>（V3 省的是回答输入，完整后处理用量没计全）；<strong>计时范围要一致</strong>（V2 计检索+融合+重排+回答，V3 复用 V2 结果只计压缩+装配+回答，不能直接比也不能相加）；建库与在线开销分开；<strong>usage 缺失记录未知，不填零</strong>；组件增加不是提升证据，固定条件下比较才是。漏②或③任两项算部分对。'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>

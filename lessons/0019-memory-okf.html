@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week04 主题课 3/6 · Memory 体系与 OKF：把值得留下的知识存成可核对的记录</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 04 · 主题课 3 / 6 · 覆盖课程小节 4-3 · 版式：先讲后测，精讲与测验五五开</p>
+<h1>Memory 体系与 OKF——存下来只是起点，读得到、核得对、维护得住才算数</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：Week04 第三课。0018 工作记忆管「这一次任务的当前状态」；本课往后延伸一步：<strong>任务结束后，哪些信息还能在下次任务中继续使用</strong>——长期记忆的筛选、性质、生命周期、OKF 组织、pi 插件的真实路径，以及它与任务恢复的边界。这是本章与你 OpenViking 记忆系统工作最直接相关的一课。<br>
+  <strong>材料定位</strong>：<a href="../course_code/week04/第四章 学习笔记.md"><code>第四章 学习笔记.md</code></a> 4.3 节（行 907–1213，<strong>本课第一材料</strong>，术语以此为准）+「本章复习问题」Q13–Q17（行 2588–2596，参考答案行 2670–2683，本课测验换形式覆盖）+ <a href="../course_code/week04/README.md"><code>week04/README.md</code></a> 4-3 目录说明 + 教师 PDF <a href="../course_materials/week04/4-3.pdf"><code>4-3.pdf</code></a>（补充，16 页）。<br>
+  <strong>代码定位</strong>：<code>course_code/week04/4-3/</code>——<code>okf/</code> 是课堂生成的 OKF 知识包快照（index.md / log.md / sessions/ 三概念 / testing/ 两概念），<code>login_demo/</code> 是 TS Express 目标仓库。<strong>本机未装 pi CLI</strong>，本课以快照阅读 + 离线流程实验为主；pi 插件命令作为流程理解，不要求本机执行。<br>
+  <strong>预计用时</strong>：精讲 45 分钟 + 测验 25 分钟 + 第二层动手练习 50 分钟<br>
+  <strong>本课验收标准</strong>（笔记行 1203–1211，三步 + 三检查）：① 真正写入一条带项目、来源与适用范围的持久记录；② 关闭会话，新会话实际读取记录并核对当前源码；③ 制造一次项目变化，更新原记录，确认旧入口退出当前使用。另检查：推断没有变成验证事实、格式通过没有变成业务通过、跨项目记录没有混用。<strong>实验④⑤③分别离线落地这三步。</strong>
+</div>
+
+<h2>怎么用这一课</h2>
+<p><strong>先讲后测，五五开</strong>：第一部分按「用途二分 → 写入筛选 → 生命周期 → OKF 组织 → pi 真实路径 → 恢复边界 → 策略取舍」建地图；第二部分 10 题 = <strong>4 选择 + 6 简述</strong>。Q1–Q2 换形式重测 0018 的两条核心不变量（0018 分数未报，按核心不变量兜底）；Q3–Q4 考本课核心判断（Q4 换形式覆盖章复习 Q15）；简述 Q5–Q10 覆盖六条主链（Q5/Q6/Q9 分别覆盖复习 Q13/Q14/Q16+Q17），按得分点严格自评。</p>
+<p><strong>三层定位</strong>：第一层能默画三张图——写入前三问决策树（图 2）、自动记忆真实路径（图 5）、恢复四入口（图 7）；第二层读透 okf/ 快照并复核负向事实（实验①②），再离线走通「写入 → 新会话读取 → 更新」三步（实验③④⑤）；第三层始终追问「这条知识凭什么值得存」「格式通过证明了什么、没证明什么」「模型说记得，拿什么证明它真读了」。</p>
+<p class="sidenote">就业面试视角：面试官问「你们 Agent 的记忆怎么做的」，最想听到的不是「接了向量库」，而是一条治理链：写入前筛选（价值/来源/失效）→ 分性质保存（要求/事实/推断/证据）→ 使用时真正读取并核对当前现场 → 变化后定位原记录更新。向量相似度只是检索组件，替代不了这条链。这与你的 OpenViking benchmark 工作同构：检索质量之外，还要看记录本身的来源与时效治理。</p>
+
+<nav class="toc">
+<strong>本课目录</strong>
+<ul>
+  <li><a href="#sec0">0. 开篇：任务结束后什么值得留下</a></li>
+  <li><a href="#sec1">1. 短期与长期：按用途，不按介质</a></li>
+  <li><a href="#sec2">2. 写入前三问与四种性质</a></li>
+  <li><a href="#sec3">3. 生命周期：写入、检索、更新、失效</a></li>
+  <li><a href="#sec4">4. OKF：先组织，再谈检索</a></li>
+  <li><a href="#sec5">5. pi 插件：自动记忆的真实路径</a></li>
+  <li><a href="#sec6">6. 恢复边界：长期记忆不是进度存档</a></li>
+  <li><a href="#sec7">7. 记忆策略：四种取舍与组合方案</a></li>
+  <li><a href="#sec8">8. 面试视角：两分钟主链</a></li>
+  <li><a href="#part2">第二部分：检索式测验（10 题）</a></li>
+  <li><a href="#part3">第三部分：第二层练习</a></li>
+</ul>
+</nav>
+
+<hr>
+
+<h2>第一部分：精讲（先读，测验在后）</h2>
+
+<h3 id="sec0">0. 开篇：任务结束后，什么值得留下</h3>
+<p>登录修复结束了。回头看工作记忆里的信息：「正在准备补丁」通常已经没用；但<strong>模块位置、项目边界要求、测试入口和核验过的修复经验</strong>，下次增加退出登录还会用到（笔记行 911）。不保留这些，新任务就要重新搜索，用户也可能再次说明同一条约定（行 913）。</p>
+<p>这正是 0018 生命周期最后一环「归档：筛选后续有用知识」的展开。<strong>长期记忆，是跨会话、跨任务保存并复用信息的能力</strong>——程序从外部记录取回相关知识，再放进模型输入，<strong>没有修改模型参数</strong>（行 917）。本课路线：选出值得存的 → 用 OKF 组织成文件 → 用 pi 插件维护与召回 → 上下文丢失后怎样恢复。</p>
+
+<h3 id="sec1">1. 短期与长期：按用途区分，不按存储介质</h3>
+<figure class="diagram" id="fig1">
+<svg viewBox="0 0 760 320" role="img" aria-label="同一信息的两种用途">
+  <defs><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">同一条信息，两种用途：服务这一次，还是服务下一次</text>
+  <rect class="dg-node-accent" x="20" y="60" width="220" height="50" rx="6"/>
+  <text class="dg-label" x="130" y="82" text-anchor="middle">当前任务用途</text>
+  <text class="dg-soft" x="130" y="99" text-anchor="middle">工作记忆（0018）</text>
+  <rect class="dg-node-accent" x="520" y="60" width="220" height="50" rx="6"/>
+  <text class="dg-label" x="630" y="82" text-anchor="middle">后续任务用途</text>
+  <text class="dg-soft" x="630" y="99" text-anchor="middle">长期记忆（本课）</text>
+  <text class="dg-soft" x="380" y="80" text-anchor="middle">信息</text>
+  <text class="dg-label" x="380" y="135" text-anchor="middle">补丁尚未应用</text>
+  <text class="dg-label" x="380" y="170" text-anchor="middle">当前失败断言</text>
+  <text class="dg-label" x="380" y="205" text-anchor="middle">会话模块路径 / 测试命令</text>
+  <text class="dg-label" x="380" y="240" text-anchor="middle">到期立即失效的项目规则</text>
+  <text class="dg-soft" x="130" y="135" text-anchor="middle">当前进度</text>
+  <text class="dg-soft" x="130" y="170" text-anchor="middle">分析和修复</text>
+  <text class="dg-soft" x="130" y="205" text-anchor="middle">本次定位 / 本次验证</text>
+  <text class="dg-soft" x="130" y="240" text-anchor="middle">本次约束</text>
+  <text class="dg-soft" x="630" y="135" text-anchor="middle">通常没有</text>
+  <text class="dg-soft" x="630" y="170" text-anchor="middle">可整理为有版本范围的故障经验</text>
+  <text class="dg-soft" x="630" y="205" text-anchor="middle">新任务定位线索 / 验证入口</text>
+  <text class="dg-soft" x="630" y="240" text-anchor="middle">范围内后续功能仍需遵守</text>
+  <path class="dg-arrow" d="M300 131 L240 131" marker-end="url(#m1)"/>
+  <path class="dg-arrow" d="M300 166 L240 166" marker-end="url(#m1)"/>
+  <path class="dg-arrow" d="M300 201 L240 201" marker-end="url(#m1)"/>
+  <path class="dg-arrow" d="M300 236 L240 236" marker-end="url(#m1)"/>
+  <path class="dg-arrow-accent" d="M460 166 L520 166" marker-end="url(#m1)"/>
+  <path class="dg-arrow-accent" d="M460 201 L520 201" marker-end="url(#m1)"/>
+  <path class="dg-arrow-accent" d="M460 236 L520 236" marker-end="url(#m1)"/>
+  <text class="dg-faint" x="380" y="290" text-anchor="middle">「短期」说的是服务当前任务，不是只能放内存；「长期」说的是跨任务复用，也不保证永远正确（行 927–929）</text>
+</svg>
+<figcaption>图 1 · 用途二分（笔记行 919–929）。一个任务持续两天、工作记忆存进数据库，仍然主要服务这个任务——是短期。长期记忆也不保证永远正确：代码和约定变化后，记录仍要维护。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么按用途而不是按「存哪里 / 存多久」分？</strong> 按介质分（内存=短期、数据库=长期）会误判：持久化的工作记忆仍服务当前任务，任务结束就该归档筛选；按时间分（超过一天=长期）同样误判。用途口径直接决定<strong>维护责任</strong>：服务当前任务的记录随任务归档，服务后续任务的记录才需要来源、适用范围与失效规则。长期记忆≠模型参数更新（没改参数，只是外部记录进输入），也≠向量数据库（向量库只是可选检索组件，文件/普通数据库同样能组织记忆）——这是复习 Q13 的核心。
+</div>
+
+<h3 id="sec2">2. 写入前三问，与要求/事实/推断/证据四种性质</h3>
+<p>写入前问三件事（行 935–941）：<strong>以后哪类任务还会用到它？来源能不能核对？什么变化会让它失效？</strong>模块和测试入口有明确用途，可以保留；「退出登录可能与缓存有关」只能作为推断；已删除的临时打印通常留在本次日志即可（行 943）。<strong>凭证、登录令牌、密码和完整用户请求载荷，不作为本案例的长期知识</strong>（行 945）。</p>
+<figure class="diagram" id="fig2">
+<svg viewBox="0 0 760 330" role="img" aria-label="写入前三问决策树">
+  <defs><marker id="m2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">写入筛选：三问 + 一条红线</text>
+  <rect class="dg-node-warn" x="20" y="60" width="200" height="50" rx="6"/>
+  <text class="dg-label" x="120" y="82" text-anchor="middle">红线：凭证/令牌/密码</text>
+  <text class="dg-soft" x="120" y="99" text-anchor="middle">完整用户载荷 → 不存</text>
+  <rect class="dg-node" x="280" y="60" width="200" height="50" rx="6"/>
+  <text class="dg-label" x="380" y="82" text-anchor="middle">问1：以后哪类任务用？</text>
+  <text class="dg-soft" x="380" y="99" text-anchor="middle">没有复用价值 → 留本次日志</text>
+  <rect class="dg-node" x="540" y="60" width="200" height="50" rx="6"/>
+  <text class="dg-label" x="640" y="82" text-anchor="middle">问2：来源能核对吗？</text>
+  <text class="dg-soft" x="640" y="99" text-anchor="middle">不能 → 标推断/待验证</text>
+  <rect class="dg-node" x="280" y="150" width="200" height="50" rx="6"/>
+  <text class="dg-label" x="380" y="172" text-anchor="middle">问3：什么变化会失效？</text>
+  <text class="dg-soft" x="380" y="189" text-anchor="middle">写明失效条件再写入</text>
+  <path class="dg-arrow" d="M480 85 L540 85" marker-end="url(#m2)"/>
+  <path class="dg-arrow" d="M640 110 L640 175 L480 175" marker-end="url(#m2)"/>
+  <rect class="dg-zone" x="20" y="230" width="720" height="76" rx="8"/>
+  <text class="dg-label" x="380" y="254" text-anchor="middle">按性质分开保存（行 951–956）</text>
+  <text class="dg-soft" x="130" y="278" text-anchor="middle">要求：核对提出者权限与范围</text>
+  <text class="dg-soft" x="320" y="278" text-anchor="middle">事实：核对版本与当前文件</text>
+  <text class="dg-soft" x="500" y="278" text-anchor="middle">推断：只作线索不定根因</text>
+  <text class="dg-soft" x="660" y="278" text-anchor="middle">证据：支持核对结论</text>
+  <path class="dg-arrow-accent" d="M380 200 L380 230" marker-end="url(#m2)"/>
+</svg>
+<figcaption>图 2 · 写入筛选（笔记行 935–962）。用户说「不要修改测试」是要求；用户说「文件应该在 session 目录」仍可能只是待核对线索。记录项目、来源和检查时间；涉及执行事实再补版本或文件哈希。<strong>一次任务的限制不能不加范围地变成全项目永久规则</strong>（行 962）。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么分性质保存，而不是统一存「结论」？</strong> 因为四种性质的<strong>使用方式完全不同</strong>：要求要遵守（但先核对提出者权限与适用范围），事实要重核（版本变了就失效），推断只能当排查线索（不能直接定根因），证据用来支持核对。混存的事故：错误推断被写成确定结论，反复影响后续排查（行 982）；一次任务的临时限制被当成全项目永久规则。这与 0018 临时事实五性质、你熟悉的 de-test fact 族输出协议同构——<strong>先定性质与来源，再谈检索与使用</strong>。
+</div>
+
+<h3 id="sec3">3. 生命周期：写入、检索、更新、失效</h3>
+<p><strong>写入后，新任务还必须真正读取</strong>（行 968–974）：几天后输入变成「退出登录任务 + 项目标识」，程序检索相关记录、装配进请求，模型才能据此读当前源码、确认测试、再实施功能。<strong>只看到回答提及熟悉文件名，不足以证明记忆被读取——要看工具回执或确定性加载记录</strong>（行 974）。</p>
+<figure class="diagram" id="fig3">
+<svg viewBox="0 0 760 330" role="img" aria-label="记忆生命周期与冲突处理">
+  <defs><marker id="m3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">四动作各管一段，冲突先核范围再比来源</text>
+  <rect class="dg-node" x="20" y="60" width="160" height="56" rx="6"/>
+  <text class="dg-label" x="100" y="82" text-anchor="middle">写入</text>
+  <text class="dg-soft" x="100" y="100" text-anchor="middle">带项目·来源·范围</text>
+  <rect class="dg-node" x="215" y="60" width="160" height="56" rx="6"/>
+  <text class="dg-label" x="295" y="82" text-anchor="middle">检索</text>
+  <text class="dg-soft" x="295" y="100" text-anchor="middle">真正读进本轮请求</text>
+  <rect class="dg-node-accent" x="410" y="60" width="160" height="56" rx="6"/>
+  <text class="dg-label" x="490" y="82" text-anchor="middle">更新</text>
+  <text class="dg-soft" x="490" y="100" text-anchor="middle">定位原记录 ID/路径</text>
+  <rect class="dg-node" x="605" y="60" width="135" height="56" rx="6"/>
+  <text class="dg-label" x="672" y="82" text-anchor="middle">失效处理</text>
+  <text class="dg-soft" x="672" y="100" text-anchor="middle">过期/废弃/删除</text>
+  <path class="dg-arrow" d="M180 88 L215 88" marker-end="url(#m3)"/>
+  <path class="dg-arrow" d="M375 88 L410 88" marker-end="url(#m3)"/>
+  <path class="dg-arrow" d="M570 88 L605 88" marker-end="url(#m3)"/>
+  <rect class="dg-zone" x="20" y="150" width="720" height="80" rx="8"/>
+  <text class="dg-label" x="380" y="174" text-anchor="middle">冲突处理顺序（行 990）：不能只因新消息更晚就覆盖</text>
+  <text class="dg-soft" x="130" y="200" text-anchor="middle">① 同项目·同对象·同环境？</text>
+  <text class="dg-soft" x="320" y="200" text-anchor="middle">② 来源是否适用？</text>
+  <text class="dg-soft" x="500" y="200" text-anchor="middle">③ 谁有权调整/提供新证据？</text>
+  <text class="dg-soft" x="665" y="200" text-anchor="middle">④ 决定替换内容</text>
+  <text class="dg-faint" x="380" y="222" text-anchor="middle">要求看谁有权提出，事实看证据是否适用；同样可靠却矛盾 → 查配置或让维护者确认</text>
+  <text class="dg-soft" x="130" y="270" text-anchor="middle">过期/历史：退出当前使用</text>
+  <text class="dg-faint" x="130" y="288" text-anchor="middle">保留追溯价值</text>
+  <text class="dg-soft" x="380" y="270" text-anchor="middle">废弃：不再推荐/不再生效</text>
+  <text class="dg-faint" x="380" y="288" text-anchor="middle">入口或规则被取代</text>
+  <text class="dg-soft" x="630" y="270" text-anchor="middle">删除：移除错误/不该存的</text>
+  <text class="dg-faint" x="630" y="288" text-anchor="middle">备份缓存清除范围另行定义</text>
+</svg>
+<figcaption>图 3 · 生命周期（笔记行 966–1004）。更新、删除以前先确认项目和准确的记录 ID 或路径——<strong>搜索只能返回候选，不能因为两条内容相似就任意覆盖</strong>（行 980）。旧记录 pytest 与新说明 python -m pytest 可能都能运行，差别在入口约定和环境（行 986）。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么冲突不能「新的覆盖旧的」？</strong> 时间更新不等于更可靠：新消息可能来自模型建议，也可能属于另一个分支（行 988）。按时间覆盖的事故：把另一分支的入口约定覆盖到当前项目，或把模型推断覆盖掉维护者要求。当前方案是四问顺序——先核范围（不同范围分别保留、各自标注），再比来源（要求看权限、事实看证据），同样可靠却矛盾就查配置或问维护者，<strong>不替用户编结论</strong>（PDF p6）。<strong>为什么过期≠删除？</strong> 「旧版本用 &lt;=，改 &lt; 后测试通过」有历史追溯价值，保留并标失效范围；「当前源码仍用 &lt;=」在修改后就不能当现行事实。删除活动记忆也不自动证明备份和缓存都已清除（行 1004）。
+</div>
+
+<h3 id="sec4">4. OKF：先解决知识组织，再选择检索技术</h3>
+<p><strong>长期记忆不等于向量数据库</strong>——保存、分类、来源、更新和使用规则，不能由向量相似度替代（行 1010）。OKF（Open Knowledge Format）用 Markdown 目录树组织知识，顶部 YAML 保存元数据，链接连接相关概念，<code>index.md</code> 提供目录，<code>log.md</code> 记录更新（行 1012）。v0.2 规范中概念文件的 <code>type</code> 始终必填；<code>~/.pi/agent/okf-memory</code> 是路径约定，实际跨项目隔离仍要确认配置的根目录，不能只靠标签（行 1014）。工作顺序：<strong>先读索引，再读当前任务相关概念，不必把整套知识全文自动塞进请求</strong>（行 1016）。</p>
+<figure class="diagram" id="fig4">
+<svg viewBox="0 0 760 330" role="img" aria-label="OKF 知识包结构解剖">
+  <defs><marker id="m4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">仓库 okf/ 快照解剖（login_demo，2026-10-07）</text>
+  <rect class="dg-node-accent" x="20" y="60" width="220" height="60" rx="6"/>
+  <text class="dg-label" x="130" y="82" text-anchor="middle">index.md</text>
+  <text class="dg-soft" x="130" y="100" text-anchor="middle">okf_version: "0.2" + 范围纪律</text>
+  <rect class="dg-node" x="280" y="60" width="220" height="60" rx="6"/>
+  <text class="dg-label" x="390" y="82" text-anchor="middle">sessions/（3 概念）</text>
+  <text class="dg-soft" x="390" y="100" text-anchor="middle">module-layout · token-format</text>
+  <text class="dg-soft" x="390" y="114" text-anchor="middle">expiry-rule-absent（负向事实）</text>
+  <rect class="dg-node" x="540" y="60" width="200" height="60" rx="6"/>
+  <text class="dg-label" x="640" y="82" text-anchor="middle">testing/（2 概念）</text>
+  <text class="dg-soft" x="640" y="100" text-anchor="middle">test-entry · environment-limits</text>
+  <rect class="dg-node" x="20" y="150" width="220" height="60" rx="6"/>
+  <text class="dg-label" x="130" y="172" text-anchor="middle">log.md</text>
+  <text class="dg-soft" x="130" y="190" text-anchor="middle">Creation/Decision + 待验证 7 条</text>
+  <rect class="dg-zone" x="280" y="150" width="460" height="60" rx="8"/>
+  <text class="dg-label" x="510" y="172" text-anchor="middle">每个概念：YAML 元数据 + Markdown 正文 + 相关链接</text>
+  <text class="dg-soft" x="510" y="192" text-anchor="middle">type: Fact 必填 · generated/verified · 证据强度分级 · 待验证标注</text>
+  <path class="dg-arrow" d="M130 120 L130 150" marker-end="url(#m4)"/>
+  <path class="dg-arrow" d="M390 120 L390 150" marker-end="url(#m4)"/>
+  <rect class="dg-node-warn" x="20" y="240" width="720" height="60" rx="6"/>
+  <text class="dg-label" x="380" y="262" text-anchor="middle">元数据组织了记录，不能单独证明内容正确（行 1020–1046）</text>
+  <text class="dg-soft" x="380" y="282" text-anchor="middle">type:Fact ≠ 全文已验证 · source:session ≠ 分清用户/实读 · 时间戳 ≠ 测试执行时间 · 标签 ≠ 根目录已隔离 · 路径线索 ≠ 文件存在</text>
+</svg>
+<figcaption>图 4 · 快照解剖。这份快照是<strong>正面样本</strong>：负向事实「不存在到期规则」附可复现的 grep 回执（exit 1），「token 永久有效」标待验证（推断），HTTP 行为因端口被拒一律待验证——同一文件里证据强度分级清楚。</figcaption>
+</figure>
+<p class="sidenote">材料与快照的口径差（已核对）：笔记 4.1 与 PDF p8 展示的<strong>原稿文件</strong>是另一份（Python 味，<code>app/session.py</code>、<code>source: session</code>），它的 description 直接写「实现在 app/session.py」，正文却承认原相对路径未找到——<strong>摘要比正文更确定，这是需要核对的信号</strong>（行 1036）。仓库 okf/ 快照是 TS login_demo 版（generated/verified 成对），描述与正文一致。两份不是同一文件：原稿作警示案例，快照作正面样本，实验①会对照。</p>
+<div class="why-box">
+<strong>为什么先组织、再谈检索？</strong> 规则写在笔记、入口写在临时文件、经验藏在聊天记录里——下次任务开始时 Agent 不知道有哪些记录、哪条是当前规则，只能重翻或问用户（PDF p7）。OKF 先解决「有哪些、什么性质、谁来源、何时更新」，检索技术（向量/BM25/文件读取）只是在此之上的取用方式。替代方案「直接上向量库」的代价：相似度找不到「哪条是当前有效规则」，也无法表达失效与权限。<strong>格式通过（/okf-validate）只证明结构合规，不证明业务结论正确</strong>（行 1090，复习 Q15）——与 0018「工具正常返回≠业务验证通过」同构。
+</div>
+
+<h3 id="sec5">5. pi 插件：「自动记忆」的真实路径</h3>
+<p>两个插件分工（行 1052）：<strong>pi-okf</strong> 辅助建立和维护项目知识；<strong>pi-okf-memory</strong> 在对话中让模型调用工具保存与召回。原稿提醒两套插件声明的 OKF 版本不同，不能直接混写，以对应插件支持的格式与实际回执为准（行 1054）。终端安装（<code>pi install npm:pi-okf@0.4.0</code>）与会话命令（<code>/okf-init</code>、<code>/okf-validate</code>、<code>/okf-update</code>）分开；笔记保留原稿版本，命令是课程操作记录，不代表最新发布版本（行 1070）。</p>
+<figure class="diagram" id="fig5">
+<svg viewBox="0 0 760 340" role="img" aria-label="自动记忆真实路径时序">
+  <defs><marker id="m5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">「自动」＝模型在指引下选择工具，不是后台无条件保存</text>
+  <text class="dg-label" x="110" y="56" text-anchor="middle">pi 适配层</text>
+  <text class="dg-label" x="380" y="56" text-anchor="middle">模型</text>
+  <text class="dg-label" x="640" y="56" text-anchor="middle">记忆库（工具）</text>
+  <line class="dg-line" x1="110" y1="66" x2="110" y2="300"/>
+  <line class="dg-line" x1="380" y1="66" x2="380" y2="300"/>
+  <line class="dg-line" x1="640" y1="66" x2="640" y2="300"/>
+  <rect class="dg-node" x="30" y="76" width="160" height="40" rx="6"/>
+  <text class="dg-soft" x="110" y="100" text-anchor="middle">会话启动：准备记忆库+目录摘要</text>
+  <path class="dg-arrow-accent" d="M190 130 L370 130" marker-end="url(#m5)"/>
+  <text class="dg-soft" x="280" y="122" text-anchor="middle">before_agent_start 注入纪律+摘要+指引</text>
+  <rect class="dg-node-accent" x="300" y="146" width="160" height="40" rx="6"/>
+  <text class="dg-soft" x="380" y="170" text-anchor="middle">新背景/偏好/决策/纠正出现</text>
+  <path class="dg-arrow" d="M460 166 L630 166" marker-end="url(#m5)"/>
+  <text class="dg-soft" x="545" y="158" text-anchor="middle">okf_search 先查重</text>
+  <path class="dg-arrow" d="M460 200 L630 200" marker-end="url(#m5)"/>
+  <text class="dg-soft" x="545" y="192" text-anchor="middle">okf_remember 写入</text>
+  <path class="dg-arrow-accent" d="M630 220 L470 220" marker-end="url(#m5)"/>
+  <text class="dg-soft" x="550" y="214" text-anchor="middle">回执：是否真写入看这里</text>
+  <rect class="dg-node" x="300" y="236" width="160" height="40" rx="6"/>
+  <text class="dg-soft" x="380" y="260" text-anchor="middle">后续相关问题</text>
+  <path class="dg-arrow" d="M460 256 L630 256" marker-end="url(#m5)"/>
+  <text class="dg-soft" x="545" y="248" text-anchor="middle">okf_search 候选 → okf_read 全文</text>
+  <text class="dg-faint" x="380" y="322" text-anchor="middle">目录摘要 ≠ 全文；关键项目约束仍由 Harness 精确加载，再交执行层检查（行 1147）</text>
+</svg>
+<figcaption>图 5 · 真实路径（笔记行 1135–1147；PDF p13）。原稿提到六件记忆工具但正文未完整列出名称，本课只用已明确给出的 okf_search / okf_remember / okf_read，其余以安装版本工具列表为准（行 1141）。</figcaption>
+</figure>
+<p><strong>全新会话验证外部读取</strong>（行 1094–1108）：关闭旧会话，在同一项目启动新会话，要求先读索引、再读会话与测试概念、最后读当前源码。原稿记录中索引 → 概念 → 源码三步都出现在工具回执，可以确认外部知识进入了新会话；此时只完成定位与核对，没有实现退出登录，也没有运行建议命令。</p>
+<figure class="diagram" id="fig6">
+<svg viewBox="0 0 760 250" role="img" aria-label="新会话三步读取证明链">
+  <defs><marker id="m6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">证明「真读了」：三步回执，而不是回答里的熟悉文件名</text>
+  <rect class="dg-node-muted" x="20" y="70" width="150" height="56" rx="6"/>
+  <text class="dg-label" x="95" y="92" text-anchor="middle">关闭旧会话</text>
+  <text class="dg-soft" x="95" y="110" text-anchor="middle">新会话不继承旧聊天</text>
+  <rect class="dg-node" x="210" y="70" width="150" height="56" rx="6"/>
+  <text class="dg-label" x="285" y="92" text-anchor="middle">回执1：读 index.md</text>
+  <text class="dg-soft" x="285" y="110" text-anchor="middle">目录与范围纪律</text>
+  <rect class="dg-node" x="400" y="70" width="150" height="56" rx="6"/>
+  <text class="dg-label" x="475" y="92" text-anchor="middle">回执2：读概念文件</text>
+  <text class="dg-soft" x="475" y="110" text-anchor="middle">核对来源与状态</text>
+  <rect class="dg-node-ok" x="590" y="70" width="150" height="56" rx="6"/>
+  <text class="dg-label" x="665" y="92" text-anchor="middle">回执3：读当前源码</text>
+  <text class="dg-soft" x="665" y="110" text-anchor="middle">逐项核对是否一致</text>
+  <path class="dg-arrow" d="M170 98 L210 98" marker-end="url(#m6)"/>
+  <path class="dg-arrow" d="M360 98 L400 98" marker-end="url(#m6)"/>
+  <path class="dg-arrow" d="M550 98 L590 98" marker-end="url(#m6)"/>
+  <rect class="dg-node-warn" x="20" y="160" width="720" height="56" rx="6"/>
+  <text class="dg-label" x="380" y="182" text-anchor="middle">反例：回答里出现熟悉文件名 ✗ 不足以证明外部记忆被使用</text>
+  <text class="dg-soft" x="380" y="200" text-anchor="middle">可能来自模型参数记忆或猜测——要看工具回执/确定性加载记录，再核对内容是否进入本轮请求（行 974、复习 Q17）</text>
+</svg>
+<figcaption>图 6 · 读取证明链（笔记行 1094–1108）。实验③用离线探针模拟这条链：概念给路径，程序验当前源码存在与关键符号——「每项说明来自哪个知识文件、与当前代码是否一致」。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么「自动记忆」要强调「模型在指引下选工具」？</strong> 误解一：后台无条件保存每句话——那会把噪声、凭证、推断全存进去，违反写入筛选。误解二：每次任务确定性读入全部记忆——那等于完整历史直发，预算与污染问题回来（0017）。真实路径是适配层注入纪律与目录摘要，模型按需 search/read/remember，<strong>是否实际写入、召回或删除，看回执</strong>（行 1145–1147）。这与 0016「状态≠结论只认审计」同构：能力声明不等于执行事实。图谱（/okf graph）显示关联，也不能直接证明因果（行 1157）。
+</div>
+
+<h3 id="sec6">6. 恢复边界：长期记忆不是进度存档</h3>
+<p><strong>不能只查长期知识就宣布恢复</strong>（行 1163）。长期记忆能告诉模型模块在哪里、曾用什么办法；当前任务到底应用补丁没有、审批是否有效、测试对应哪个版本，仍要读工作记忆、Checkpoint 和执行回执，再核对现场（行 1165）。</p>
+<figure class="diagram" id="fig7">
+<svg viewBox="0 0 760 300" role="img" aria-label="恢复四入口分工">
+  <defs><marker id="m7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">四类信息，四个恢复入口——不混在一次相似度检索里</text>
+  <rect class="dg-node-accent" x="290" y="120" width="180" height="60" rx="6"/>
+  <text class="dg-label" x="380" y="144" text-anchor="middle">当前任务恢复</text>
+  <text class="dg-soft" x="380" y="162" text-anchor="middle">从哪继续？哪些证据重做？</text>
+  <rect class="dg-node" x="20" y="60" width="220" height="56" rx="6"/>
+  <text class="dg-label" x="130" y="82" text-anchor="middle">工作记忆 + Checkpoint</text>
+  <text class="dg-soft" x="130" y="100" text-anchor="middle">目标·约束·步骤状态（精确进度）</text>
+  <rect class="dg-node" x="520" y="60" width="220" height="56" rx="6"/>
+  <text class="dg-label" x="630" y="82" text-anchor="middle">长期记忆（按项目召回）</text>
+  <text class="dg-soft" x="630" y="100" text-anchor="middle">模块线索·历史经验（先候选再核对）</text>
+  <rect class="dg-node" x="20" y="200" width="220" height="56" rx="6"/>
+  <text class="dg-label" x="130" y="222" text-anchor="middle">执行记录引用</text>
+  <text class="dg-soft" x="130" y="240" text-anchor="middle">完整日志·补丁细节（按需再读）</text>
+  <rect class="dg-node" x="520" y="200" width="220" height="56" rx="6"/>
+  <text class="dg-label" x="630" y="222" text-anchor="middle">实际工具读取</text>
+  <text class="dg-soft" x="630" y="240" text-anchor="middle">当前文件与环境（现场是否仍匹配）</text>
+  <path class="dg-arrow" d="M240 100 L290 135" marker-end="url(#m7)"/>
+  <path class="dg-arrow" d="M520 100 L470 135" marker-end="url(#m7)"/>
+  <path class="dg-arrow" d="M240 228 L290 165" marker-end="url(#m7)"/>
+  <path class="dg-arrow" d="M520 228 L470 165" marker-end="url(#m7)"/>
+  <text class="dg-faint" x="380" y="288" text-anchor="middle">混检索的事故：把经验当约束，把旧测试当当前通过结果（行 1174）</text>
+</svg>
+<figcaption>图 7 · 恢复四入口（笔记行 1167–1174）。与 0012 恢复五步、0018 恢复核对现场同构：长期记忆提供线索，精确进度与现场核对另有入口。</figcaption>
+</figure>
+<div class="why-box">
+<strong>为什么不能把这几类信息混在一次相似度检索里？</strong> 相似度只回答「语义相近」，不回答「这是进度还是经验、是当前事实还是历史」。混检索的事故：模型把历史故障经验当成当前约束，把旧版本测试当成当前通过结果（行 1174）——0018 的 stale 问题在记忆层重演。当前方案按信息性质分入口：精确状态走工作记忆/Checkpoint，线索经验走长期记忆召回，细节走执行记录引用，现场走实际读取。<strong>分入口的代价是装配更复杂，收益是每类信息的证明力不被混淆</strong>。
+</div>
+
+<h3 id="sec7">7. 记忆策略：四种取舍，与本项目先采用的组合方案</h3>
+<table>
+  <tr><th>策略</th><th>可能收益</th><th>需要承担的代价</th></tr>
+  <tr><td>无记忆</td><td>简单，没有记忆查询开销</td><td>重复搜索和重复询问</td></tr>
+  <tr><td>完整历史</td><td>细节多</td><td>输入增长，夹带旧状态，可能超限</td></tr>
+  <tr><td>摘要记忆</td><td>输入集中</td><td>可能漏约束、改条件；生成有开销</td></tr>
+  <tr><td>按需检索</td><td>控制输入规模</td><td>查询、维护成本与漏召回风险</td></tr>
+</table>
+<p>笔记强调：<strong>这些是取舍，不是本项目已测出的性能结果</strong>——不能只因接了插件就宣布成功率提高或延迟降低（行 1187）。本项目先采用组合方案（行 1189）：精确状态走工作记忆和 Checkpoint，必要约定按项目读取并强制检查，经验按需检索，完整日志留引用。比较时固定任务与起点，记录完成率、总 Token、费用、查询耗时和端到端耗时，再检查失败原因（行 1191）。</p>
+<div class="why-box">
+<strong>为什么是组合方案而不是单选？</strong> 四种策略各怕一件事：无记忆怕重复、完整历史怕丢约束与超限、摘要怕失真、按需检索怕漏召回（PDF p15）。组合方案让每类信息走最适入口，把单一策略的弱点用另一入口补上。代价是系统复杂度与装配责任上升。比较口径与你的 benchmark 工作完全一致：<strong>固定任务与起点、统一指标、再查失败原因</strong>——「接了插件」是配置变化，不是性能结论。
+</div>
+
+<h3 id="sec8">8. 面试视角：两分钟主链 + 追问链</h3>
+<p><strong>两分钟主链</strong>（不看稿讲清）：短期长期按用途分（服务这一次 vs 服务下一次），长期记忆是外部记录进输入、没改参数、不等于向量库 → 写入前三问（复用价值/来源/失效）+ 四性质分开（要求/事实/推断/证据），凭证不存 → 生命周期四动作，更新定位原记录、冲突先核范围再比来源、过期≠废弃≠删除 → OKF 先组织（目录树+YAML+index+log），格式通过≠事实正确 → 自动记忆是模型在指引下选工具，看回执；新会话读取要三步回执证明 → 长期记忆不能恢复全部进度，四类信息四个入口 → 策略是取舍不是测出的结果，组合方案 + 固定口径比较。</p>
+<pre>长期记忆
+├── 是什么：跨会话跨任务复用；外部记录进输入（≠参数更新 ≠向量库）
+├── 存什么：前三问筛选 + 四性质（要求/事实/推断/证据）；凭证不存
+├── 怎样维护：写入→检索→更新→失效；冲突四问；过期/废弃/删除三分
+├── 怎样组织：OKF 目录树 + YAML + index + log；格式≠事实
+├── 怎样发生：适配层注入指引 → 模型选工具 → 回执为准
+├── 怎样证明读了：新会话三步回执（索引→概念→源码）
+└── 边界：不恢复进度（四入口分工）；策略是取舍，组合方案</pre>
+<p><strong>面试官追问链</strong>：</p>
+<ul>
+  <li>「记忆为什么不直接 fine-tune 进模型？」→ 外部记录可核对、可更新、可删除、可按项目隔离；参数更新做不到这些治理动作。</li>
+  <li>「怎么防止模型把推断当事实存进去？」→ 写入前三问 + 分性质保存 + 无执行证据标待验证；快照里「token 永久有效」就标了待验证。</li>
+  <li>「两条记忆冲突你信哪条？」→ 先核范围再比来源：要求看谁有权提出，事实看证据是否适用；不只看时间新旧。</li>
+  <li>「怎么证明新会话真用了外部记忆？」→ 不继承旧聊天的新会话 + 索引→概念→源码三步工具回执 + 内容进本轮请求；回答提及文件名不算。</li>
+  <li>「上下文丢了，查长期记忆能恢复任务吗？」→ 不能只查长期知识：进度走工作记忆/Checkpoint，现场走实际读取，长期记忆只给线索。</li>
+</ul>
+
+<hr>
+
+<h2 id="part2">第二部分：检索式测验（10 题 = 4 选择 + 6 简述）</h2>
+<p>Q1–Q2 换形式重测 0018 的两条核心不变量（0018 分数未报，按核心不变量兜底）；Q3–Q4 考本课核心判断（Q4 换形式覆盖章复习 Q15）；Q5–Q10 简述覆盖六条主链（Q5/Q6/Q9 分别覆盖复习 Q13/Q14/Q16+Q17），为结课课 0022 的集中复测铺垫。简述题先脱稿写，再展开参考答案，按得分点严格自评；漏掉关键点就选「部分对」。</p>
+<div id="quiz"></div>
+
+<hr>
+
+<h2 id="part3">第三部分：第二层练习——读透快照，再离线走通三步</h2>
+<p>本机<strong>未装 pi CLI</strong>，本课实验全部离线：①②读快照与复核负向事实，③模拟新会话读取链，④⑤在 <code>/tmp</code> 离线落地验收三步的「写入」与「更新」，⑥是筛选与冲突的设计练习。命令均从<strong>本课程仓库根目录</strong>开始；探针用系统 <code>python3</code> 即可（纯标准库），不改课程原文件。所有「本机实测」来自 2026-11-22 的验证运行。</p>
+
+<h3>实验 ①：快照结构与元数据——type 必填，描述与正文一致</h3>
+<ul>
+  <li>读索引与五个概念的元数据：<pre>cd course_code/week04/4-3/okf
+head -12 index.md
+grep -n "^type:\|^status:\|^generated:\|^verified:" sessions/*.md testing/*.md</pre><strong>先写预期</strong>：index 的 okf_version 是多少？五个概念的 type 都是什么？generated 与 verified 是否成对？<br>预期（本机实测）：okf_version <strong>"0.2"</strong>；五个概念全部 <code>type: Fact</code>（v0.2 必填）、<code>status: stable</code>、generated/verified 成对（by: human:wilson, at: 2026-10-07）。index 还有三条范围纪律：只读源码、不含凭证、有证据标已执行验证/仅推断标待验证。</li>
+  <li>对照原稿警示案例：打开 <a href="../course_materials/week04/4-3.pdf"><code>4-3.pdf</code></a> p8 的原稿文件（<code>source: session</code>、description 写「实现在 app/session.py」但正文承认原路径未找到），再对比快照 <code>sessions/module-layout.md</code> 的 description 与正文。<strong>先写预期</strong>：哪份「摘要比正文更确定」？快照有没有这个问题？<br>预期：原稿有（描述比正文确定，需核对信号）；快照描述与正文一致（正面样本）。两份不是同一文件——笔记 4.1 讲的是原稿。</li>
+</ul>
+
+<h3>实验 ②：负向事实复核——「不存在」也要有执行证据</h3>
+<ul>
+  <li>重跑快照里的全量检索，核对当前源码：<pre>cd course_code/week04/4-3/login_demo
+grep -rniE "expir|exp\b|ttl|maxAge|iat|refresh|session|timeout|deadline|cookie" src/ artifacts/ README.md package.json
+echo "grep exit=$?"
+cat src/utils/token.ts</pre><strong>先写预期</strong>：grep 退出码是多少？token.ts 里有没有时间比较？parseAccessToken 做字段结构校验吗？<br>预期（本机实测）：<strong>exit=1（无任何匹配）</strong>——负向事实「不存在到期规则」可复现；token.ts 只有 base64url 编解码，无任何时间逻辑；<code>JSON.parse(json) as AuthTokenPayload</code> 不做结构校验。再读 <code>okf/sessions/expiry-rule-absent.md</code> 的证据强度表：「无到期词」标<strong>已执行验证</strong>（grep 回执），「token 永久有效/可伪造」标<strong>待验证</strong>（推断，未做端到端时序测试）——同一文件里证据强度分级。<strong>这就是「推断没有变成验证事实」的现场</strong>。</li>
+</ul>
+
+<h3>实验 ③：模拟新会话读取链——概念给路径，程序验现场（离线落地验收②）</h3>
+<ul>
+  <li>三步读取探针（从仓库根目录执行）：<pre>python3 - &lt;&lt;'EOF'
+import re
+from pathlib import Path
+okf = Path("course_code/week04/4-3/okf")
+root = Path("course_code/week04/4-3")
+index = (okf/"index.md").read_text(encoding="utf-8")
+print("回执1 读索引: okf_version 在?", "okf_version" in index, "| 概念链接数:", index.count("](/"))
+concept = (okf/"sessions/module-layout.md").read_text(encoding="utf-8")
+print("回执2 读概念: module-layout.md", len(concept), "字符")
+paths = sorted(set(re.findall(r"`(login_demo/src/[^`]+?\.ts)`", concept)))
+print("回执3 核对当前源码（概念给路径，程序验存在）:")
+for p in paths:
+    print(" ", p, "存在" if (root/p).exists() else "缺失")
+for p, sym in [("login_demo/src/utils/token.ts","issueAccessToken"),
+               ("login_demo/src/middleware/auth-middleware.ts","authMiddleware")]:
+    print("  符号核对:", p, sym, sym in (root/p).read_text(encoding="utf-8"))
+EOF</pre><strong>先写预期</strong>：概念里的文件路径在当前源码里都存在吗？关键符号对得上吗？<br>预期（本机实测）：索引含 okf_version、6 个概念链接；module-layout 2801 字符；<strong>10 个 src 文件全部存在</strong>，issueAccessToken / authMiddleware 符号核对 True。这就是「每项说明来自哪个知识文件、与当前代码是否一致」的离线版——<strong>读取链留下回执，而不是只凭回答里的文件名</strong>。正式 pi 会话里对应索引→概念→源码三步工具回执。</li>
+</ul>
+
+<h3>实验 ④：写入一条持久记录——带项目、来源、范围、失效条件（离线落地验收①）</h3>
+<ul>
+  <li>在 /tmp 建一个 mini OKF 包，写一条「事实」性质的测试入口概念（从仓库根目录执行）：<pre>python3 - &lt;&lt;'EOF'
+from pathlib import Path
+b = Path("/tmp/okf-mini"); (b/"sessions").mkdir(parents=True, exist_ok=True)
+(b/"index.md").write_text('---\nokf_version: "0.2"\n---\n# login_demo 知识库（练习）\n* [测试入口](/sessions/test-entry.md)\n', encoding="utf-8")
+(b/"sessions/test-entry.md").write_text('''---
+type: Fact
+title: 测试入口
+description: login_demo 当前唯一自动化质量门槛是 npm run build 类型检查。
+tags: [login_demo, testing]
+status: stable
+source: 项目 README 与 package.json 实读
+scope: login_demo
+checked_at: 2026-11-22
+expires_when: 引入测试框架或入口命令变更
+---
+# 当前入口
+npm run build
+# 历史说明
+（暂无）
+''', encoding="utf-8")
+(b/"log.md").write_text("# 更新日志\n\n## 2026-11-22\n* **Creation**: 建立测试入口概念，来源为项目实读。\n", encoding="utf-8")
+print("写入完成:", sorted(str(p.relative_to(b)) for p in b.rglob("*.md")))
+EOF</pre><strong>先写预期</strong>：这条记录凭什么值得存（前三问）？它带了哪些治理字段？<br>预期（本机实测）：生成 index.md / log.md / sessions/test-entry.md 三个文件。复用价值：下次改登录还要找验证入口；来源：项目实读可核对；失效条件：引入测试框架或入口变更。治理字段：type/scope/source/checked_at/expires_when 齐全。<strong>对照快照</strong>：真实 okf/ 还多了证据强度分级与待验证清单，正式工程要补齐。</li>
+</ul>
+
+<h3>实验 ⑤：制造变化并更新原记录——旧入口退出当前使用（离线落地验收③）</h3>
+<ul>
+  <li>模拟维护者调整测试入口，更新实验④的原概念（承接④的 /tmp/okf-mini，从仓库根目录执行）：<pre>python3 - &lt;&lt;'EOF'
+from pathlib import Path
+b = Path("/tmp/okf-mini")
+f = b/"sessions/test-entry.md"
+t = f.read_text(encoding="utf-8")
+t = t.replace("description: login_demo 当前唯一自动化质量门槛是 npm run build 类型检查。",
+              "description: login_demo 当前测试入口为 python -m pytest tests/ -q（维护者调整）。")
+t = t.replace("# 当前入口\nnpm run build", "# 当前入口\npython -m pytest tests/ -q（维护者已调整，回执待补）")
+t = t.replace("# 历史说明\n（暂无）", "# 历史说明\n- 2026-11-22 前：npm run build（类型检查，仍可用作编译门槛）")
+f.write_text(t, encoding="utf-8")
+log = b/"log.md"
+log.write_text(log.read_text(encoding="utf-8") + "* **Update**: 测试入口调整为 python -m pytest，旧入口移入历史说明，描述同步更新。\n", encoding="utf-8")
+t2 = f.read_text(encoding="utf-8")
+head, hist = t2.split("# 历史说明")
+print("当前入口已换:", "python -m pytest" in head)
+print("旧入口只在历史:", "npm run build" not in head and "npm run build" in hist)
+print("log 有 Update:", "**Update**" in log.read_text(encoding="utf-8"))
+EOF</pre><strong>先写预期</strong>：更新要改哪几处？只改正文够不够？<br>预期（本机实测）：三项检查全 True。<strong>本机实测发现的坑</strong>：第一版只改正文、不改 YAML description，「旧入口只在历史」检查<strong>失败</strong>——因为摘要里仍写着 npm run build，继续传播旧入口。这正是笔记「摘要比正文更确定」警示的现场：<strong>更新要连描述一起改</strong>，否则检索摘要还在误导。旧入口保留在历史说明（追溯价值），log 追加 Update（更新留痕）。</li>
+</ul>
+
+<h3>实验 ⑥：设计练习——写入筛选分类 + 冲突四问（纸面，附参考要点）</h3>
+<ul>
+  <li><strong>分类</strong>：把下面 8 条信息分成「保存/不保存」，保存的标性质（要求/事实/推断/证据）与失效条件——① 会话模块在 utils/token.ts 与 middleware/auth-middleware.ts（实读确认）；② 项目约定「恰好到期必须无效」（维护者规定，仅限本教学项目）；③ 「退出登录可能与缓存有关」（模型猜测）；④ 本次为排查临时加的 console.log（已删除）；⑤ 用户登录令牌原文；⑥ grep 无到期词的回执（exit 1）；⑦ 「旧版本用 &lt;=，改 &lt; 后边界测试通过」（有版本范围）；⑧ 「文件应该在 session 目录」（用户随口一说，未核对）。<br>参考要点：①事实（核对当前文件，迁移即失效）；②要求（核对提出者权限，范围仅本项目，规则正式变更才更新）；③推断（只作线索，标待验证）；④不存（留本次日志）；⑤不存（凭证红线）；⑥证据（支持①的负向结论）；⑦事实/经验（标版本范围，退出当前事实但保留历史价值）；⑧推断/待核对线索（不能当事实）。</li>
+  <li><strong>冲突四问</strong>：旧记忆「pytest tests/ -q」，新说明「python -m pytest tests/ -q」。按顺序走：同项目同对象同环境吗？→ 来源是否适用（新说明来自维护者还是模型建议？是否另一分支？）→ 谁有权调整入口？→ 决定替换。<br>参考要点：两条可能都能运行，差别在入口约定与环境；不能只因新消息更晚就覆盖；确认维护者调整后更新原记录、旧命令留历史；同样可靠却矛盾就查配置或问维护者，不替用户编结论。</li>
+</ul>
+
+<h2>回读与验证指引</h2>
+<ul>
+  <li>primary source：<a href="../course_code/week04/第四章 学习笔记.md"><code>第四章 学习笔记.md</code></a> 4.3 节（行 907–1213）——重点回读「一、用途二分」「二、前三问与四性质」「三、生命周期与冲突/失效」「四、OKF 与元数据边界」「五、pi 真实路径与新会话证明」「六、恢复边界」「七、策略取舍」；章复习问题 Q13–Q17（行 2588–2596，参考答案行 2670–2683）本课已换形式覆盖，结课前再对照原题自测。</li>
+  <li>快照回读顺序：<a href="../course_code/week04/4-3/okf/index.md"><code>okf/index.md</code></a>（目录与纪律）→ <a href="../course_code/week04/4-3/okf/sessions/module-layout.md"><code>sessions/module-layout.md</code></a>（定位与调用链）→ <a href="../course_code/week04/4-3/okf/sessions/expiry-rule-absent.md"><code>sessions/expiry-rule-absent.md</code></a>（负向事实与证据强度分级，重点）→ <a href="../course_code/week04/4-3/okf/testing/test-entry.md"><code>testing/test-entry.md</code></a> 与 <a href="../course_code/week04/4-3/okf/testing/environment-limits.md"><code>environment-limits.md</code></a>（取证边界）→ <a href="../course_code/week04/4-3/okf/log.md"><code>log.md</code></a>（Creation/Decision 与待验证 7 条）。</li>
+  <li>跨课连线：0018（归档「筛选后续有用知识」→ 本课；stale/版本绑定 → 失效规则；恢复核对现场 → 恢复四入口）；0017（目录摘要≠全文 ↔ 装配预算；缓存命中≠内容正确 ↔ 格式通过≠事实正确）；0016（状态≠结论只认审计 ↔ 自动记忆看回执）；0012（恢复五步 ↔ 长期记忆不恢复进度）。下一课 0020 RAG：资料变多后怎样检索、选证据、查回答。</li>
+  <li>口径提醒：笔记 4.1 的「摘要比正文更确定」案例来自<strong>原稿展示文件</strong>（Python 味 app/session.py），仓库 okf/ 快照是 TS login_demo 版且描述与正文一致——两者不是同一文件。pi 插件命令保留原稿版本（pi-okf@0.4.0），是课程操作记录而非最新版本；六件工具只用了笔记明确给出的三个名称。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<ul>
+  <li><a href="../course_code/week04/第四章 学习笔记.md"><code>course_code/week04/第四章 学习笔记.md</code></a> 4.3 节 + 本章复习问题 Q13–Q17（学生版学习笔记，本课术语与验收的第一材料）</li>
+  <li><a href="../course_code/week04/4-3/okf/index.md"><code>course_code/week04/4-3/okf/</code></a> 知识包快照（课堂生成的正面样本，本课阅读与核对的第一手对象）</li>
+  <li><a href="../course_code/week04/README.md"><code>course_code/week04/README.md</code></a> 的 4-3 目录说明 + <a href="../course_materials/week04/4-3.pdf"><code>course_materials/week04/4-3.pdf</code></a>（教师 PDF，补充；p8 原稿警示文件、p13 自动记忆时序、p15 组合方案）</li>
+</ul>
+
+<div class="ask-reminder">
+  <strong>卡住了就问你的 agent。</strong>任何一处让你觉得「等等，为什么」——例如为什么存进数据库的工作记忆仍是短期、为什么推断不能当事实存、为什么冲突不能新的覆盖旧的、为什么格式通过证明不了事实正确、为什么「自动记忆」要看回执、为什么长期记忆恢复不了任务进度——直接回到对话里问。本课全部内容都在回答一个问题：<strong>这条知识，凭什么值得存、又凭什么还能用。</strong>
+</div>
+
+<div class="lesson-footer">
+  Week04 主题课序列：<a href="./0017-context-engineering.html">1/6 Context Engineering</a>（0017）· <a href="./0018-working-memory.html">2/6 Working Memory</a>（0018）· <strong>3/6 Memory 体系与 OKF（本课，4-3）</strong>· <a href="./0020-rag-pipeline.html">4/6 RAG</a>（0020）· <a href="./0021-llm-wiki.html">5/6 LLM Wiki</a>（0021）· <a href="./0022-project4-capstone.html">6/6 项目四</a>（0022，结课课）<br>
+  前课回顾：<a href="./0018-working-memory.html">0018</a> 管「这一次任务的当前状态」；本课管「任务结束后值得留下的知识」，并划清它与任务恢复的边界。<br>
+  <strong>本课通过条件</strong>：① Q1–Q2 重测全对，本课部分（第 3 题起）正确率 85% 以上；② 完成实验①②③，并至少完成实验④⑤中的一项（预期先写后验）；③ 不看稿 2 分钟讲清主链（用途二分 → 写入筛选 → 生命周期 → OKF 组织 → 自动记忆看回执 → 恢复边界）。通过后进入 0020 RAG。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  questions: [
+    {
+      type: 'choice',
+      concept: '【重测·0018】三阶段状态依据',
+      section: '0018 间隔重测',
+      notesRef: '0018 精讲第 2 节 + 第四章笔记 4.2 二（行 714–716）',
+      question: '模型上一轮提出「把 <= 改成 <」，本轮用户说「继续」。工作记忆里「已修改」三个字凭什么才能写？',
+      options: [
+        '修改工具确认补丁已经应用',
+        '模型在回答里说已经改好了',
+        '计划里写了下一步应用补丁',
+        '上一轮对话已经讨论过方案'
+      ],
+      answer: 0,
+      explanation: '提出方案、修改成功、测试通过是三阶段：建议只能存候选方案，修改工具确认成功才写「已修改」，当前版本测试通过才存验证结果。模型自述、计划、讨论都不是执行证据。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·0018】拒绝必须回写',
+      section: '0018 间隔重测',
+      notesRef: '0018 精讲第 3 节 + 第四章笔记 4.2 三（行 770）',
+      question: 'Runtime 拒绝了涉及 tests/ 的补丁。工作记忆的下一步应该记什么？',
+      options: [
+        '补丁被拒绝，代码未修改',
+        '补丁已应用，待运行测试',
+        '方案已通过，可直接交付',
+        '约束已放宽，按原计划走'
+      ],
+      answer: 0,
+      explanation: '拒绝后记录必须变「补丁被拒绝，代码未修改」，下一步重新准备符合约束的补丁；不能沿原计划进入「修改后验证」，否则状态与事实分叉。约束也不会因为被拒绝就自动放宽。'
+    },
+    {
+      type: 'choice',
+      concept: '短期/长期按用途区分',
+      section: '4.3 一',
+      notesRef: '第四章笔记 4.3 一（行 927–929）',
+      question: '一个任务持续两天，工作记忆存进了数据库。这份记录属于？',
+      options: [
+        '短期：仍服务当前这个任务',
+        '长期：已经持久化到数据库',
+        '长期：保存时间超过了一天',
+        '短期：数据库只能存临时态'
+      ],
+      answer: 0,
+      explanation: '短期/长期按用途分，不按存储介质或保存时长。持续两天的任务，工作记忆存数据库仍主要服务这个任务——是短期。长期指跨任务复用，且也不保证永远正确。'
+    },
+    {
+      type: 'choice',
+      concept: '格式通过≠事实正确（复习 Q15 换形式）',
+      section: '4.3 四/五（复习 Q15）',
+      notesRef: '第四章笔记 4.3 四.1/五.2（行 1020–1046、1090）+ 复习 Q15（行 2592/2676）',
+      question: '/okf-validate 通过，能证明什么？',
+      options: [
+        '文件结构与必填字段合规',
+        '知识页的业务结论都正确',
+        '登录行为已经通过了测试',
+        '记录的路径当前一定存在'
+      ],
+      answer: 0,
+      explanation: '格式检查验证文件结构、必填字段等组织要求，不验证业务结论是否成立。格式正确的文件也可能保存错误路径或过期测试结果；事实正确性还要读来源、核对当前代码、实际执行确认。'
+    },
+    {
+      type: 'short',
+      concept: '用途二分与长期记忆的本质',
+      section: '4.3 一（复习 Q13 换形式）',
+      notesRef: '第四章笔记 4.3 一（行 909–929）+ 复习 Q13（行 2588/2670）',
+      question: '短期与长期记忆按什么区分？为什么「长期记忆」不等于模型参数更新，也不等于向量数据库？',
+      hint: '用途口径 → 外部记录进输入 → 向量库只是组件 → 可靠性取决于治理。',
+      modelAnswer: '<strong>关键得分点：</strong>① 按用途：短期服务当前任务（持续两天存数据库仍是短期），长期服务跨会话跨任务复用；不是按存储介质或保存时长。② 长期记忆保存在<strong>模型外部</strong>，使用时读取相关记录加入输入，<strong>没有修改模型参数</strong>。③ 向量库只是可选存储检索组件，也可用文件/普通数据库；可靠性取决于<strong>保存标准、来源、适用范围、更新删除规则</strong>，相似度替代不了这些。④ 长期也不保证永远正确，代码约定变化后仍要维护。漏①用途口径或③算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '写入前三问与四种性质',
+      section: '4.3 二（复习 Q14 换形式）',
+      notesRef: '第四章笔记 4.3 二（行 933–962）+ 复习 Q14（行 2590/2673）',
+      question: '一条信息写入长期记忆前要问哪三件事？要求、事实、推断、证据为什么分性质保存？凭证类信息怎么处理？',
+      hint: '三问 → 四性质各自的使用方式 → 记录字段 → 凭证红线。',
+      modelAnswer: '<strong>关键得分点：</strong>① 三问：以后哪类任务还会用到（复用价值）→ 来源能不能核对 → 什么变化会让它失效。② 四性质：<strong>要求</strong>核对提出者权限与适用范围；<strong>事实</strong>核对版本与当前文件；<strong>推断</strong>只作排查线索不能定根因；<strong>证据</strong>支持核对对应结论。混存后果：推断被当验证事实、一次任务限制变全项目永久规则。③ 记录项目、来源、检查时间，执行事实补版本/哈希。④ 凭证/令牌/密码/完整用户载荷<strong>不作为长期知识</strong>。漏②任一性质或④算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '生命周期、冲突顺序与失效三分',
+      section: '4.3 三',
+      notesRef: '第四章笔记 4.3 三（行 966–1004）',
+      question: '记忆生命周期四动作各管什么？新旧记录冲突时的处理顺序？过期、废弃、删除分别解决什么问题？',
+      hint: '四动作 → 冲突四问与「要求看权限/事实看证据」 → 三种失效动作的差异。',
+      modelAnswer: '<strong>关键得分点：</strong>① 写入让有用信息留下（带项目来源范围）；检索让它进入需要它的任务（<strong>写入后必须真正读取</strong>）；更新让它跟上项目变化（<strong>定位原记录 ID/路径，搜索只返回候选不能相似覆盖</strong>）；删除让错误/不该保留的不再被读到。② 冲突顺序：同项目同对象同环境吗 → 来源是否适用 → 谁有权调整要求或提供新证据 → 决定替换；<strong>要求看谁有权提出，事实看证据是否适用</strong>；同样可靠却矛盾查配置或问维护者；不能只因新消息更晚就覆盖。③ 过期/历史＝退出当前事实使用但保留追溯价值；废弃＝不再作为推荐入口或有效规则；删除＝移除错误/不应保存/无保留价值的活动记录；<strong>删除不自动证明备份缓存已清</strong>，清除范围另行定义。漏②顺序或③三分算部分对。'
+    },
+    {
+      type: 'short',
+      concept: 'OKF 组织作用与元数据边界',
+      section: '4.3 四（复习 Q15）',
+      notesRef: '第四章笔记 4.3 四（行 1008–1046）',
+      question: 'OKF 用什么组织知识？为什么「先解决组织，再选择检索技术」？type: Fact、source: session、时间戳、标签各不能直接推出什么？',
+      hint: '组织五件 → 相似度替代不了什么 → 元数据五个「不能推出」 → 使用前核对。',
+      modelAnswer: '<strong>关键得分点：</strong>① OKF 用 Markdown 目录树 + 顶部 YAML 元数据 + 链接连接概念 + index.md 目录 + log.md 更新记录；v0.2 概念 type 必填；先读索引再读相关概念，不必全文塞进请求。② 为什么先组织：保存/分类/来源/更新/使用规则<strong>不能由向量相似度替代</strong>；长期记忆≠向量库。③ 元数据边界：type:Fact 不证明全文每条已验证；source:session 分不清哪句来自用户哪句来自实读；时间戳不证明测试在该时间执行；标签项目名不证明存储根目录已隔离；路径线索不证明当前文件存在。④ 使用知识要先找当前源码核对——记忆给定位入口与检查步骤，<strong>不证明当前实现正确</strong>。漏③任两项算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '自动记忆真实路径与新会话读取证明',
+      section: '4.3 五（复习 Q16+Q17）',
+      notesRef: '第四章笔记 4.3 五（行 1094–1147）+ 复习 Q16/Q17（行 2594–2596/2679–2683）',
+      question: 'pi 的「自动记忆」具体由哪些动作组成？关闭旧会话后，怎样证明知识确实从外部记录读入而不是模型「记得」？',
+      hint: '适配层注入 → 模型选工具（search/remember/read）→ 回执 → 新会话三步证明。',
+      modelAnswer: '<strong>关键得分点：</strong>① 适配层会话启动准备记忆库与目录摘要，<strong>before_agent_start 注入记忆纪律+目录摘要+读取指引</strong>；模型在指引下决定是否调工具：新背景/稳定偏好/明确决策/纠正出现时先 okf_search 查重再 okf_remember 写入；后续问题先 okf_search 找候选再 okf_read 读全文。② 自动＝<strong>模型在指引下选工具</strong>，不是后台无条件保存每句话，也不是每次确定性读入全部记忆；是否写入/召回/删除<strong>看回执</strong>；目录摘要≠全文，关键约束仍由 Harness 精确加载。③ 证明外部读取：启动<strong>不继承旧聊天</strong>的新会话，看读索引→概念→源码的<strong>工具回执/确定性加载记录</strong>，再核对内容是否进入本轮请求；只看到回答提及熟悉文件名不足以证明。漏②的「看回执」或③算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '恢复边界与记忆策略取舍',
+      section: '4.3 六/七',
+      notesRef: '第四章笔记 4.3 六/七（行 1161–1191）',
+      question: '当前任务丢失上下文，只查长期记忆能宣布恢复吗？四类信息各走什么恢复入口？四种记忆策略的取舍与本项目的组合方案是什么？',
+      hint: '不能只查长期 → 四入口分工 → 四策略各怕什么 → 组合方案与比较口径。',
+      modelAnswer: '<strong>关键得分点：</strong>① <strong>不能</strong>。长期记忆给模块线索与历史经验；当前补丁应用没有、审批是否有效、测试对应哪个版本，要读工作记忆/Checkpoint/执行回执再核对现场。② 四入口：当前目标约束步骤状态→<strong>工作记忆与 Checkpoint</strong>；模块线索历史经验→<strong>按项目召回长期记忆</strong>（先候选再核对适用）；完整日志补丁细节→<strong>执行记录引用</strong>按需读；当前文件环境→<strong>实际工具读取</strong>。不能混在一次相似度检索里（经验当约束、旧测试当当前通过）。③ 四策略取舍：无记忆简单但重复搜索询问；完整历史细节多但输入增长夹带旧状态可能超限；摘要记忆输入集中但可能漏约束改条件且有生成开销；按需检索控制规模但有查询维护成本与漏召回风险。④ 组合：精确状态走工作记忆+Checkpoint，必要约定按项目读取强制检查，经验按需检索，完整日志留引用；比较固定任务起点，记录完成率/总Token/费用/查询耗时/端到端耗时再查失败原因——<strong>取舍不是已测出的性能结果</strong>。漏①或②混检索后果算部分对。'
+    }
+  ]
+});
+</script>
+
+</body>
+</html>
