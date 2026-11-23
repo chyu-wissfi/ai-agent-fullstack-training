@@ -53,6 +53,7 @@
 | 0021 | Week04 4-5 | LLM Wiki：知识资产的来源、更新与权限治理 | **2026-11-22 生成**（0021-llm-wiki.html）；10 题（4 选择 + 6 简述）；Q1–Q2 重测 0020，Q4/Q6/Q7/Q8 换形式覆盖章复习 Q28–Q31；8 张 SVG；纯快照阅读，六实验全部本机实测（diff/哈希/依赖传播/60·30·90/换词检索/权限闸口模拟） |
 | 0022 | Week04 4-6 | 项目四：给 Codebase Agent 装上记忆和检索（结课课） | **2026-11-22 生成**（0022-project4-capstone.html）；**Week04 结课课**；10 题（4 选择 + 6 简述）；Q1–Q2 重测 0021，Q4/Q5 换形式覆盖章复习 Q32/Q33；8 张 SVG；结课专属「已实现/已验证/尚未证明」三分清单 + 33 题全量自测分布表；实验①–⑤必做全部本机实测（npm 基线/记忆 CLI 全链路/rag.python 改造/纯检索/基线 diff 与 Trace 归因），⑥真实 Run 无 key 标可选加餐待验证 |
 | 0023 | Week05 5-1 | Multi-Agent 与 Subagent：该拆才拆，拆了还要管得住 | **2026-11-22 生成**；Week05 第一课；10 题（4 选择 + 6 简述）；Q1–Q2 重测 0022，Q5–Q10 换形式覆盖章复习 Q1–Q8；8 张 SVG；实验①–⑤全部本机实测（11 条基线/真实 SQLite 冲突探针/依赖与并发/隔离与全局预算/实际取消），⑥真实 pi 无 CLI+无 key 标待验证；官方 pi 示例固定 9c465268 核对，新增 reference/multi-agent-subagent.html 速查卡 |
+| 0024 | Week05 5-2 | Subagent 任务委托：九项契约与证据聚合 | **2026-11-23 生成**；10 题（4 选择 + 6 简述）；Q1–Q2 重测 0023，Q5–Q10 换形式覆盖章复习 Q9–Q17；8 张 SVG；实验①–⑤全部本机实测（11+1 基线/错误注入/未知与重复 ID+快照/字面语义与去重+行为探针/chain 与重试账），⑥真实 pi 待验证；新增 reference/subagent-task-contract.html；明确 accepted≠语义通过、needs_review=false 不含语义、incomplete 只有 ID 等实现边界 |
 
 ## 0014 生成记录（2026-11-02）
 
@@ -172,6 +173,14 @@
 - **本机验证（全部离线，系统 Python 3.9.6 标准库）**：① demo 完整性 `python3 -m unittest discover -s tests -v` **11/11 OK**，fixture 根目录既有测试 **1/1 OK**；② probe_orders 真实 SQLite：返回 user_id=[10,20]、small_queries=4、large_queries=7、only_current_user=false、bounded_queries=false——绿色测试与越权/N+1 同时成立；③ DAG 调度 limit=2 peak=2、一次 0.287s，limit=1 peak=1、一次 0.454s，report 都等三专家完成且结果顺序不变（时间只作一次记录）；④ Prompt-only 测试文件被改 true、无 write→TOOL_NOT_GRANTED、越界→PATH_DENIED、子项均≤800 但全局 2200>2000；⑤ 本地 sleep 子进程 SIGTERM returncode=-15、1 秒内退出未升级 SIGKILL、远端请求停止仍 unknown。课件 heredoc 与本次实测一致，写入仅在 /tmp。
 - **材料/实现口径差**：①笔记行 92 的旧文档写 `docs/old.md`，fixture 实际为 `docs/legacy.md`，当前规则仍为 docs/current.md；②PPT npm 安装与笔记源码加载未混同；③官方当前 README 的 parallel 上限、子用量边界和输出上限已写入精讲，不把示例当完整 Harness/Sandbox；④实验③④⑤是教学探针，不宣称验证 pi 本身；⑤fixture 测试须在 fixture 根目录运行，否则 app 包导入失败，已写入实验①。
 - 实验①–⑤必做全部实测，⑥真实 pi parallel 可选待验证；通过条件 Q1–Q2 全对+Q3–Q10≥7/8、实验①–⑤、2 分钟主链、章复习 Q1–Q8。新增速查卡 `reference/multi-agent-subagent.html`，HTML 本地链接/锚点、SVG 数、题型数、JS 语法与选项长度均做静态校验。
+
+## 0024 生成记录（2026-11-23，Week05 第二课）
+
+- 0023 分数未报，Q1–Q2 按 0023 两条核心不变量（三层隔离由程序落实 / 局部合规不等于全局合规）换形式重测。Q3/Q4 考 policy/limits 生效链与字面/语义边界；简述 Q5–Q10 覆盖章复习 Q9–Q17：Q5=Q9，Q6=Q10/Q11，Q7=Q12/Q13，Q8=Q14/Q15，Q9=Q16，Q10=Q17 并加练失败分类。4 选择 + 6 简述，参考答案按关键得分点严格自评。
+- 精讲主线按笔记 5.2：模糊委托事故 → 九项任务契约 → C1/C2/C3 逐项静态覆盖审计 → 模型候选与程序可信事实 → policy/limits 接真实执行 → 五步聚合与五出口 → 结构/字面/语义三层核验与快照失效 → 去重和范围/版本/行为仲裁 → chain 的 previous 不授权 → 分类失败、重试账与真实取消 → 代码边界与面试主链。8 张 SVG；新增 `reference/subagent-task-contract.html`。
+- **本机验证（全部离线，系统 Python 3.9.6 标准库）**：demo 完整性 **11/11 OK**、fixture 既有测试 **1/1 OK**；inject_demo 得 accepted/rejected/conflicts 各 1、incomplete=[performance]、needs_review=true、semantic=pending；needs_input 与未返回均进 incomplete；未知/重复 task_id 抛「任务 ID 未授权或重复」；仅修改 docs/current.md 也抛「审查期间快照发生变化」；真实 SQL 配「整个系统所有鉴权均失效」仍 accepted=1、needs_review=false、semantic=pending；同 key 同 claim 合并 sources=[security,test]，实现/测试不同 key 保留两项；真实 SQLite 探针 user_id=[10,20]、SELECT 4→7、两布尔 false；chain 探针 write=PERMISSION_DENIED，临时错误/timeout 两次 60 教学单位，权限拒绝/needs_input 一次 30。课件 heredoc 均按实测输出编写，写入只在 /tmp。
+- **实现边界（已写入精讲第 8 节与回读提醒）**：当前聚合器 expected 固定 test/security/performance；未知/重复 ID 直接 ValueError；incomplete 只有任务 ID，不存失败原因/缺输入/部分证据；不检查每个结果自报的 snapshot_id/parent_run_id；needs_review 只由 conflicts/rejected/incomplete 推出，不含语义；精确 claim 比较不是通用语义去重；snapshot 只覆盖 app/tests/docs；policy/limits 不是聚合器执行。pi_runner 本地进程组 SIGTERM→3 秒 SIGKILL 不等于完整模型预算、远端取消或全局 Token 账。
+- 实验①–⑤必做全部实测，⑥真实 pi parallel/chain 可选待验证；真实运行命令先读 setup/pi_runner，角色同名拒绝覆盖，但中途失败可能已有部分角色写入，课件已提示。通过条件 Q1–Q2 全对+Q3–Q10≥7/8、实验①–⑤、2 分钟主链、章复习 Q9–Q17。下一课 0025 前 2 题建议重测「字段存在≠限制生效」「字面核验≠语义成立」。
 
 ## 0006 测后反馈（2026-09-26，81% / 17-21）
 

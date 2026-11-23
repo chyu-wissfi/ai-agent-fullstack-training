@@ -63,6 +63,9 @@
   Week05 术语、学习预期与验收标准的第一材料；5.1 在行 75–268，本章总结与 56 道复习题在文末。命令与历史结果不自动视为本机已复现。
 - [5.1 教师 PPT（Markdown）](./course_code/week05/5-ppt/5.1%20PPT.md) + [5-1.pdf](./course_materials/week05/5-1.pdf)
   拆分判断、三种模式、依赖与隔离、pi parallel 委托演示的补充材料。
+- [5.2 教师 PPT（Markdown）](./course_code/week05/5-ppt/5.2%20PPT.md) + [5-2.pdf](./course_materials/week05/5-2.pdf)
+  九项任务契约、模型与程序可信字段分工、五步聚合、冲突仲裁、chain 与失败分类的补充材料。第一材料仍是学习笔记 5.2（行 272–517）及章复习 Q9–Q17。
+- 课程代码：`course_code/week05/5-2/demo/`（2026-11-23 核对）。`delegation.py` / `common.py` 实现任务关联、字面证据、冲突/未完成出口与快照失效；`inject_demo.py` 主动构造错误样本；`probe_orders.py` 用真实 SQLite 行为补证。小型聚合器不执行权限/预算、不做语义判断，`incomplete` 当前只存任务 ID，不能外推为完整委托平台。
 - [Week05 README](./course_code/week05/README.md)
   五个小节与各代码目录的总览；5-1/5-2 共用订单审查案例，5-4 使用 eval_lab.zip，5-5 使用 EvalLab。
 - [pi 官方 Subagent 示例 README（固定版本）](https://github.com/earendil-works/pi/blob/9c4652688590abb836b40ebd1e4725ecf9a7c7d1/packages/coding-agent/examples/extensions/subagent/README.md)
