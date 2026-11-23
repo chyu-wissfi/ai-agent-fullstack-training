@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>速查卡 · Multi-Agent / Subagent 拆分与治理清单</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main>
+<p class="lesson-kicker">Reference · Week05 5-1 · 固定术语来自第五章学习笔记</p>
+<h1>Multi-Agent / Subagent 拆分与治理清单</h1>
+<div class="lesson-meta">
+  <strong>用途</strong>：拿到一项任务时，按本卡快速判断「该不该拆、怎样调度、谁来强制、拿什么验收」。<br>
+  <strong>配套课程</strong>：<a href="../lessons/0023-multi-agent-subagent.html">0023 Multi-Agent 与 Subagent</a>；<strong>第一材料</strong>：<a href="../course_code/week05/第五章 学习笔记.md">第五章学习笔记</a> 5.1（行 75–268）。
+</div>
+
+<h2>1. 先过三问，再算收益与成本</h2>
+<ol>
+  <li>子任务能否<strong>独立产出可验收结果</strong>？</li>
+  <li>各自需要的<strong>信息或检查视角</strong>是否明显不同？</li>
+  <li>结果能否按<strong>统一规则合并</strong>？</li>
+</ol>
+<p>任一问答不清，先完善单 Agent 流程和工具。三问通过后，还要确认：<strong>分工收益 &gt; 协调成本</strong>。</p>
+<table>
+  <tr><th>可能收益</th><th>对应代价</th><th>启动前必须说清</th></tr>
+  <tr><td>独立调查并行</td><td>依赖、排队、结果等待</td><td>检查哪些对象</td></tr>
+  <tr><td>中间历史留在子任务</td><td>上下文复制、摘要信息损失</td><td>回答什么问题</td></tr>
+  <tr><td>独立视角或工具范围</td><td>额外调用与独立复核</td><td>能用什么工具</td></tr>
+  <tr><td>更清楚的职责边界</td><td>版本交接、冲突与失败传播</td><td>交回什么证据、何时停止</td></tr>
+</table>
+<p><strong>反例：</strong>补一个过滤条件后跑测试，读→改→测紧密依赖，通常单 Agent 更短。文件多只是阅读范围，<strong>依赖关系才决定并行</strong>。</p>
+
+<h2>2. 三个名词不混</h2>
+<table>
+  <tr><th>名词</th><th>判断依据</th><th>不要求 / 不证明</th></tr>
+  <tr><td>Multi-Agent</td><td>多个 Agent 协作的形态</td><td>不证明角色越多质量越好</td></tr>
+  <tr><td>Subagent</td><td>主从委托；子 Agent 有独立任务状态与工具循环</td><td>不要求并行；同一模型也可运行多个</td></tr>
+  <tr><td>并行命令</td><td>普通程序执行确定动作</td><td>没有观察—决策循环就不算独立 Agent</td></tr>
+</table>
+<p>单个串行 Subagent 也可有价值：压缩主历史，或提供单独检查视角；但仍要计算额外调用与复核成本。</p>
+
+<h2>3. 三种模式各管一件事</h2>
+<ul>
+  <li><strong>Supervisor</strong>：拆分 → 依赖 → 收集 → 冲突 → 补查 → 复核后的建议。不是报告拼接器。</li>
+  <li><strong>Planner / Executor</strong>：步骤 / 依赖 / 验收 → 实际执行 → 执行事实回写 → 必要时重排。第一步失败不能机械执行原第二步。</li>
+  <li><strong>Reviewer</strong>：拿当前代码、真实 Diff、验收规则、对应测试证据复核。独立历史减少锚定，不消除共同错误；发现仍接程序校验、真实测试与必要人工判断。</li>
+</ul>
+
+<h2>4. 调度看 DAG，写入看快照</h2>
+<pre>冻结源码 / 规则 / 测试快照
+  ├─ Architecture ─┐
+  ├─ Test ─────────┼─→ 等齐 → 校验 → 冲突 / 补查 → Report
+  └─ Security ─────┘
+
+补丁成功 + 新快照 → 修复后的行为测试</pre>
+<ul>
+  <li>边表示「必须先有谁的什么产物」，不是角色数量。</li>
+  <li>多个写任务用独立目录或工作树，保留各自补丁与被测快照，按序集成并验证。</li>
+  <li><strong>工作树隔离文件版本，不等于操作系统 Sandbox。</strong></li>
+</ul>
+
+<h2>5. 三层隔离：信息、能力、实际副作用</h2>
+<table>
+  <tr><th>层</th><th>落实方式</th><th>不能替代什么</th></tr>
+  <tr><td>上下文</td><td>独立历史；交接摘要带来源；猜测标待核对</td><td>不限制工具与真实副作用</td></tr>
+  <tr><td>工具</td><td>只给任务需要的 read / search / test / write</td><td>工具白名单不等于路径、命令、网络权限</td></tr>
+  <tr><td>权限</td><td>Runtime / Sandbox 执行时检查路径、命令、网络、身份、写入</td><td>不能由 Prompt「只读」替代</td></tr>
+</table>
+<p>测试也可能写文件、访问网络或执行插件；只读工具清单不等于操作系统 Sandbox。</p>
+
+<h2>6. 两本账 + 实际取消</h2>
+<pre>局部：每个 child_usage ≤ child_limit
+全局：Supervisor + Σ(children) + Report + Retries + Review ≤ global_limit
+
+并行等待 ≠ Token 求和
+实际经过时间看依赖关键路径、排队与协调；Token / 费用看各次真实调用累计</pre>
+<ul>
+  <li>调度层关联父子运行，统一累计实际用量、分配剩余额度、执行停止。</li>
+  <li>证据不足可返回未完成与缺失材料，不能持续搜索耗尽预算。</li>
+  <li>取消传到模型流、工具与子进程；记录未启动、已停止、部分结果与未知。</li>
+  <li><strong>本地进程退出 ≠ 远端请求已停止 ≠ 写操作结果确定 ≠ 费用归零。</strong></li>
+</ul>
+
+<h2>7. 冲突不投票：范围 → 版本 → 行为证据</h2>
+<ol>
+  <li><strong>范围</strong>：两个结论是否其实同时成立？例如现有测试只测非空，安全结论关注跨用户。</li>
+  <li><strong>版本</strong>：当前规则、源码、Diff、测试是否指向同一快照？管理员与普通用户规则是否混用？</li>
+  <li><strong>行为证据</strong>：至少两名用户检查隔离；SELECT 计数检查 N+1。一个探针不能替代另一类检查。</li>
+  <li><strong>交接</strong>：权威规则仍不清时交有权确认的人，保留未完成项。</li>
+</ol>
+
+<h2>8. pi 示例：机制与边界（固定版本）</h2>
+<p>版本：<a href="https://github.com/earendil-works/pi/tree/9c4652688590abb836b40ebd1e4725ecf9a7c7d1/packages/coding-agent/examples/extensions/subagent"><code>earendil-works/pi@9c465268</code></a>，2026-11-22 核对。</p>
+<table>
+  <tr><th>机制</th><th>当前示例事实</th><th>仍未自动证明</th></tr>
+  <tr><td><code>runSingleAgent</code> / <code>spawn</code></td><td>每项启动独立 <code>pi --no-session</code> 子进程</td><td>不等于业务正确或 OS Sandbox</td></tr>
+  <tr><td>parallel</td><td>最多 8 项，同时 4 项；结果按输入下标写回</td><td>最多 8 不等于同时 8</td></tr>
+  <tr><td>取消</td><td>AbortSignal → SIGTERM，5 秒后必要时 SIGKILL</td><td>不证明远端请求与费用状态</td></tr>
+  <tr><td>usage</td><td>子用量展示在 details，不加入父会话 usage</td><td>全局预算仍需 Harness 汇总</td></tr>
+</table>
+<p><strong>真实委托三处证据：</strong>① subagent 工具调用；② parallel 的 tasks 数组及任务内容；③ 各自结果与执行关联。模型说「我会并行」不是证据。只读委托未执行测试，不能宣称业务验收通过。</p>
+
+<h2>9. 两分钟复述骨架</h2>
+<blockquote>三问筛选并比较协调成本 → Subagent 的独立状态与三种收益 → Supervisor / Planner-Executor / Reviewer → 依赖 DAG 与快照 → 上下文 / 工具 / 权限三层隔离 → 局部 / 全局两本账 → 取消传播与远端未知 → 范围 / 版本 / 行为证据仲裁 → subagent 调用、tasks 参数、各自结果三处验收。</blockquote>
+
+<div class="ask-reminder"><strong>使用提醒</strong>：速查卡帮助回忆，不代替证据。真实任务中把「已拆、已并行、已隔离、已停止、已验证」分别对应到实际记录；任何没有回执的一项，都保持未完成或未知。不清楚时回到 <a href="../lessons/0023-multi-agent-subagent.html">0023</a> 做测验与实验，并向 agent 追问。</div>
+
+<div class="lesson-footer">来源：<a href="../course_code/week05/第五章 学习笔记.md">第五章学习笔记</a> 5.1 与章复习 Q1–Q8；pi 行为只描述上述固定版本，安装其他版本时重新核对源码与文档。</div>
+</main>
+</body>
+</html>

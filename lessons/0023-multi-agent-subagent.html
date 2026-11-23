@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week05 主题课 1/5 · Multi-Agent 与 Subagent：该拆才拆，拆了还要管得住</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 05 · 主题课 1 / 5 · 覆盖课程小节 5-1 · 版式：先讲后测，精讲与测验五五开</p>
+<h1>Multi-Agent 与 Subagent——该拆才拆，拆了还要管得住</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：Week05 第一课。Week04 让一个 Agent 获得足够、适用、可核对的信息；本课开始解决<strong>任务怎样分给合适的执行者</strong>。主线不是「多开几个角色」，而是：独立工作与不同视角带来收益，交接、隔离、预算、取消与冲突处理带来成本，<strong>收益超过协调成本才值得拆</strong>。<br>
+  <strong>材料定位</strong>：<a href="../course_code/week05/第五章 学习笔记.md"><code>第五章 学习笔记.md</code></a> 5.1 节（行 75–268，<strong>本课第一材料</strong>）+ 章首学习预期（行 31–59）+ 本章复习 Q1–Q8（题干行 2349–2365，答案行 2479–2511）+ 教师 PPT <a href="../course_code/week05/5-ppt/5.1 PPT.md"><code>5.1 PPT.md</code></a> 与 PDF <a href="../course_materials/week05/5-1.pdf"><code>5-1.pdf</code></a>。<br>
+  <strong>代码定位</strong>：<code>course_code/week05/5-1/demo/</code>——订单 fixture、真实 SQLite 探针与 11 条完整性测试；pi 侧核对的是 <a href="https://github.com/earendil-works/pi/tree/9c4652688590abb836b40ebd1e4725ecf9a7c7d1/packages/coding-agent/examples/extensions/subagent">官方 Subagent 示例</a>，固定版本 <code>9c465268</code>（2026-11-22 读取）。<br>
+  <strong>预计用时</strong>：精讲 45 分钟 + 测验 20 分钟 + 第二层实验 45 分钟<br>
+  <strong>本课验收标准</strong>（笔记行 260–268）：① 用三个问题解释为什么拆或不拆；② 区分 Multi-Agent、Subagent 与并行命令；③ 说清 Supervisor、Planner/Executor、Reviewer 的职责与证明边界；④ 按依赖排并行，用程序落实三层隔离、局部与全局预算及取消；⑤ 面对冲突回到范围、版本和行为证据；⑥ 从真实工具记录证明 pi 委托发生，而不是只看回答。
+</div>
+
+<h2>怎么用这一课</h2>
+<p><strong>先讲后测，五五开</strong>：第一部分按「是否值得拆 → 委托是什么 → 三种模式 → 依赖与隔离 → 预算与取消 → 冲突仲裁 → pi 真实链路」建地图；第二部分 10 题 = <strong>4 选择 + 6 简述</strong>。Q1–Q2 换形式重测 0022 的两条核心不变量（治理链不分叉、每层证据只证明自己的范围）；Q3–Q10 换形式覆盖本章复习 Q1–Q8。</p>
+<p><strong>三层定位</strong>：第一层能默画拆分决策树、依赖 DAG 和三层隔离图；第二层跑实验①–⑤，改造类<strong>先写预期再运行</strong>；第三层始终追问「多出的角色换来了什么」「这个限制由谁强制执行」「本地退出后远端是否仍未知」。实验⑥真实 pi 委托需本机安装 pi 与模型凭据，当前未执行，不计入必做。</p>
+<p class="sidenote">就业面试视角：「你们为什么用多 Agent」不是回答角色越多越好。高质量回答要先讲任务边界和收益，再讲独立状态、依赖调度、权限强制、全局账、实际取消与冲突证据。与你在 OpenViking 的 benchmark 工作同构：<strong>运行数量不是能力指标，结果质量、成本与可复核证据才是</strong>。</p>
+
+<nav class="toc">
+<strong>本课目录</strong>
+<ul>
+  <li><a href="#sec0">0. 开篇：先问该不该拆</a></li>
+  <li><a href="#sec1">1. 概念与收益：委托不等于并行</a></li>
+  <li><a href="#sec2">2. 三种模式：统筹、执行与复核</a></li>
+  <li><a href="#sec3">3. 并行与写入：依赖决定调度</a></li>
+  <li><a href="#sec4">4. 三层隔离：提示词不是权限</a></li>
+  <li><a href="#sec5">5. 预算与取消：局部合规仍会全局超限</a></li>
+  <li><a href="#sec6">6. 冲突仲裁：测试绿与越权可同时成立</a></li>
+  <li><a href="#sec7">7. pi 实现：独立进程、并发与取消</a></li>
+  <li><a href="#sec8">8. 面试视角：两分钟主链</a></li>
+  <li><a href="#part2">第二部分：检索式测验（10 题）</a></li>
+  <li><a href="#part3">第三部分：第二层实验</a></li>
+</ul>
+</nav>
+
+<hr>
+
+<h2>第一部分：精讲（先读，测验在后）</h2>
+
+<h3 id="sec0">0. 开篇：先问该不该拆</h3>
+<p>第五章把前四章能力继续向外组织：</p>
+<pre>5-1 该不该分工？              → 分工方式、依赖关系、运行边界
+5-2 怎样交清楚并验收回来？    → 任务契约、结构化结果、聚合出口
+5-3 好方法怎样反复使用？      → 可发现、可加载、可验证的 Skill
+5-4 改动是否真的更好？        → 题集、Trace、评分器、采用决定
+5-5 怎样落进真实交付？        → Skills + Subagent + Eval 平台</pre>
+<p>先比较两个订单任务。<strong>「补上当前用户过滤并验证」</strong>围绕同一处代码，读取、修改、测试紧密依赖；拆成读源码、修改、测试三个 Agent，只会增加版本与结果交接。<strong>「综合审查可维护性」</strong>则可以把架构、测试、权限、性能作为不同调查线，各自产出发现，再按统一规则汇总。文件多不等于可并行：沿路由、Service、数据访问层解释一条调用链，仍可能只是同一条调查线（笔记行 92–110）。</p>
+
+<figure class="diagram" id="fig1">
+<svg viewBox="0 0 760 390" role="img" aria-label="是否拆分的三问决策树">
+  <defs><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">拆分三问：任何一问答不清，都先完善单 Agent 流程</text>
+  <rect class="dg-node-accent" x="210" y="48" width="340" height="48" rx="7"/>
+  <text class="dg-label" x="380" y="77" text-anchor="middle">候选子任务与预期交付</text>
+  <path class="dg-arrow" d="M380 96 L380 122" marker-end="url(#m1)"/>
+  <rect class="dg-node" x="190" y="124" width="380" height="52" rx="7"/>
+  <text class="dg-label" x="380" y="145" text-anchor="middle">① 能否独立产出可验收结果？</text>
+  <text class="dg-soft" x="380" y="164" text-anchor="middle">不是「读一些文件」，而是发现并附证据</text>
+  <path class="dg-arrow" d="M380 176 L380 202" marker-end="url(#m1)"/>
+  <text class="dg-soft" x="390" y="194">是</text>
+  <rect class="dg-node" x="190" y="204" width="380" height="52" rx="7"/>
+  <text class="dg-label" x="380" y="225" text-anchor="middle">② 信息或检查视角是否明显不同？</text>
+  <text class="dg-soft" x="380" y="244" text-anchor="middle">架构、测试、权限、性能，而非换角色名</text>
+  <path class="dg-arrow" d="M380 256 L380 282" marker-end="url(#m1)"/>
+  <text class="dg-soft" x="390" y="274">是</text>
+  <rect class="dg-node" x="190" y="284" width="380" height="52" rx="7"/>
+  <text class="dg-label" x="380" y="305" text-anchor="middle">③ 结果能否按统一规则合并？</text>
+  <text class="dg-soft" x="380" y="324" text-anchor="middle">同一快照、同一验收口径、冲突有出口</text>
+  <path class="dg-arrow" d="M570 150 L650 150 L650 330" marker-end="url(#m1)"/>
+  <path class="dg-arrow" d="M570 230 L630 230 L630 300 L650 300"/>
+  <text class="dg-soft" x="580" y="142">否 / 不清楚</text>
+  <rect class="dg-node-muted" x="650" y="270" width="100" height="88" rx="7"/>
+  <text class="dg-label" x="700" y="308" text-anchor="middle">先单 Agent</text>
+  <text class="dg-faint" x="700" y="330" text-anchor="middle">补工具与流程</text>
+  <path class="dg-arrow" d="M380 336 L380 360 L180 360" marker-end="url(#m1)"/>
+  <text class="dg-soft" x="390" y="355">是</text>
+  <rect class="dg-node-ok" x="20" y="338" width="160" height="44" rx="7"/>
+  <text class="dg-label" x="100" y="365" text-anchor="middle">再比较收益与成本</text>
+</svg>
+<figcaption>图 1 · 三问只是候选筛选，最后仍要判断分工收益是否超过协调成本（笔记行 79、100–110）。固定格式检查、类型检查、单元测试若动作确定，普通程序直接调度即可。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么不是「任务复杂就拆」？</strong> 多 Agent 的收益是独立调查并行、压缩主历史、增加单独检查视角；代价是重复装配上下文、额外模型调用、结果合并、版本对齐、失败传播与复核。拆得不好时，这些成本真实发生，独立产出却不存在。当前任务只是补一个过滤条件，因此单 Agent 的短链路更合适；综合审查才出现值得比较的独立工作。材料没有给统一的收益阈值，工程师要用实际耗时、Token、发现质量与协调失败记录判断。</div>
+
+<h3 id="sec1">1. 概念与收益：委托不等于并行</h3>
+<p><strong>Multi-Agent 描述多个 Agent 协作的形态；Subagent 强调主 Agent 委托子 Agent 的关系</strong>（笔记行 112–120）。主 Agent 保留整体目标，决定拆什么、等什么、怎样汇总、是否补查；子 Agent 在自己的任务状态与工具循环中，根据观察继续选择动作。同一个模型可以运行多个子 Agent；同一次模型调用换几个角色名称，不会自动形成多个 Agent。三个并行命令也只是三个确定任务，除非每个执行单元有自己的观察—决策循环。</p>
+<p><strong>Subagent 不要求并行</strong>。主 Agent 只委托一个子任务并等待返回，仍然是委托。它可能为了让子 Agent 阅读大量测试、把中间搜索留在自己的历史里，只交回覆盖项、缺失项与来源位置；也可能为了获得只读 Reviewer 的单独视角。收益要和额外调用与复核成本一起比较。</p>
+
+<figure class="diagram" id="fig2">
+<svg viewBox="0 0 760 330" role="img" aria-label="Multi-Agent、Subagent 与并行命令的区别">
+  <defs><marker id="m2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">同样是「多个执行单元」，内部决策结构不同</text>
+  <rect class="dg-zone" x="20" y="46" width="350" height="260" rx="8"/>
+  <text class="dg-label" x="195" y="72" text-anchor="middle">Subagent：主从委托</text>
+  <rect class="dg-node-accent" x="95" y="88" width="200" height="42" rx="6"/>
+  <text class="dg-label" x="195" y="114" text-anchor="middle">主 Agent：整体目标与汇总</text>
+  <path class="dg-arrow" d="M165 130 L125 160" marker-end="url(#m2)"/>
+  <path class="dg-arrow" d="M225 130 L265 160" marker-end="url(#m2)"/>
+  <rect class="dg-node" x="42" y="164" width="166" height="88" rx="6"/>
+  <text class="dg-label" x="125" y="187" text-anchor="middle">子 Agent A</text>
+  <text class="dg-soft" x="125" y="208" text-anchor="middle">独立任务状态</text>
+  <text class="dg-soft" x="125" y="228" text-anchor="middle">观察 → 选择 → 工具循环</text>
+  <rect class="dg-node" x="224" y="164" width="130" height="88" rx="6"/>
+  <text class="dg-label" x="289" y="187" text-anchor="middle">子 Agent B</text>
+  <text class="dg-soft" x="289" y="208" text-anchor="middle">独立任务状态</text>
+  <text class="dg-soft" x="289" y="228" text-anchor="middle">独立工具循环</text>
+  <text class="dg-faint" x="195" y="278" text-anchor="middle">可并行，也可只委托一个并等待</text>
+  <rect class="dg-zone" x="394" y="46" width="346" height="260" rx="8"/>
+  <text class="dg-label" x="567" y="72" text-anchor="middle">并行命令：确定动作</text>
+  <rect class="dg-node-accent" x="472" y="88" width="190" height="42" rx="6"/>
+  <text class="dg-label" x="567" y="114" text-anchor="middle">普通程序调度器</text>
+  <path class="dg-arrow" d="M510 130 L480 160" marker-end="url(#m2)"/>
+  <path class="dg-arrow" d="M567 130 L567 160" marker-end="url(#m2)"/>
+  <path class="dg-arrow" d="M624 130 L654 160" marker-end="url(#m2)"/>
+  <rect class="dg-node" x="412" y="164" width="136" height="54" rx="6"/>
+  <text class="dg-label" x="480" y="196" text-anchor="middle">格式检查</text>
+  <rect class="dg-node" x="500" y="238" width="136" height="54" rx="6"/>
+  <text class="dg-label" x="568" y="270" text-anchor="middle">类型检查</text>
+  <rect class="dg-node" x="588" y="164" width="136" height="54" rx="6"/>
+  <text class="dg-label" x="656" y="196" text-anchor="middle">单元测试</text>
+  <path class="dg-arrow" d="M567 130 L567 238" marker-end="url(#m2)"/>
+  <text class="dg-faint" x="412" y="232">没有根据观察另选下一步</text>
+  <text class="dg-faint" x="412" y="250">就不需要为每条命令造 Agent</text>
+</svg>
+<figcaption>图 2 · 判断 Subagent 看独立任务状态与工具循环，不看模型名、角色名或返回报告份数（笔记行 110–120）。Multi-Agent 是更宽的协作形态，Subagent 是其中的主从关系。</figcaption>
+</figure>
+
+<p>子任务上下文要<strong>够用而不扩权</strong>：当前需求、源码与测试入口、当前规则、快照标识；主 Agent 的猜测可标为待核对线索，但不必附上全部历史讨论。即使框架支持继承历史，也要按任务选范围——独立检查的一部分价值，正是减少未经复核结论的锚定（笔记行 136–140，承接 0017 的「本轮适用性」）。启动前至少能说清：检查哪些对象、回答什么问题、可用什么工具、交回什么证据、何时停止。</p>
+
+<div class="why-box"><strong>为什么「只交回摘要」不是丢信息？</strong> 它是有意的上下文分工：大量 grep、阅读与试错留在子历史，主 Agent 只接收带来源的覆盖项、缺失项和待验证事项，避免主历史被中间搜索淹没。代价是主 Agent 不再天然拥有全部细节，所以摘要必须保留来源，关键结论仍能回读原文；不能为了短而只剩「已检查、无问题」。</div>
+
+<h3 id="sec2">2. 三种模式：统筹、执行与复核</h3>
+<table>
+  <tr><th>模式</th><th>解决的问题</th><th>订单案例中的交付</th><th>不能自动证明</th></tr>
+  <tr><td>Supervisor</td><td>拆分、调度、收集、冲突识别、补查</td><td>问题 / 证据 / 影响 / 优先级 / 验证方式</td><td>四份报告拼起来就已复核</td></tr>
+  <tr><td>Planner / Executor</td><td>计划与实际执行衔接，按事实修订</td><td>当前步骤、实际结果、后续计划变化</td><td>计划写完就等于按现场调整</td></tr>
+  <tr><td>Reviewer</td><td>按独立标准复核当前产物</td><td>有支持的结论、遗漏、待验证项</td><td>独立会话就必然正确</td></tr>
+</table>
+
+<figure class="diagram" id="fig3">
+<svg viewBox="0 0 760 360" role="img" aria-label="Supervisor、Planner Executor 与 Reviewer 三种模式">
+  <defs><marker id="m3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">三种模式可以组合，但先把一条明确流程跑通</text>
+  <rect class="dg-zone" x="20" y="48" width="230" height="286" rx="8"/>
+  <text class="dg-label" x="135" y="74" text-anchor="middle">Supervisor：统筹</text>
+  <rect class="dg-node-accent" x="55" y="92" width="160" height="42" rx="6"/>
+  <text class="dg-label" x="135" y="118" text-anchor="middle">目标与依赖</text>
+  <path class="dg-arrow" d="M135 134 L135 158" marker-end="url(#m3)"/>
+  <rect class="dg-node" x="40" y="160" width="85" height="44" rx="6"/>
+  <text class="dg-soft" x="82" y="187" text-anchor="middle">架构 / 测试</text>
+  <rect class="dg-node" x="145" y="160" width="85" height="44" rx="6"/>
+  <text class="dg-soft" x="187" y="187" text-anchor="middle">权限 / 性能</text>
+  <path class="dg-arrow" d="M135 204 L135 232" marker-end="url(#m3)"/>
+  <rect class="dg-node-ok" x="45" y="234" width="180" height="70" rx="6"/>
+  <text class="dg-label" x="135" y="258" text-anchor="middle">复核后的建议</text>
+  <text class="dg-soft" x="135" y="279" text-anchor="middle">去重、冲突、补查</text>
+  <text class="dg-faint" x="135" y="297" text-anchor="middle">不是报告拼接器</text>
+  <rect class="dg-zone" x="270" y="48" width="230" height="286" rx="8"/>
+  <text class="dg-label" x="385" y="74" text-anchor="middle">Planner / Executor</text>
+  <rect class="dg-node-accent" x="300" y="92" width="170" height="48" rx="6"/>
+  <text class="dg-label" x="385" y="121" text-anchor="middle">步骤 / 依赖 / 验收</text>
+  <path class="dg-arrow" d="M385 140 L385 164" marker-end="url(#m3)"/>
+  <rect class="dg-node" x="300" y="166" width="170" height="48" rx="6"/>
+  <text class="dg-label" x="385" y="195" text-anchor="middle">读取 / 修改 / 测试</text>
+  <path class="dg-arrow" d="M385 214 L385 238" marker-end="url(#m3)"/>
+  <rect class="dg-node-warn" x="300" y="240" width="170" height="62" rx="6"/>
+  <text class="dg-label" x="385" y="263" text-anchor="middle">执行事实回写</text>
+  <text class="dg-soft" x="385" y="284" text-anchor="middle">失败或新证据 → 重排</text>
+  <path class="dg-arrow" d="M300 190 C270 190 270 250 296 260" marker-end="url(#m3)"/>
+  <rect class="dg-zone" x="520" y="48" width="220" height="286" rx="8"/>
+  <text class="dg-label" x="630" y="74" text-anchor="middle">Reviewer：复核</text>
+  <rect class="dg-node" x="545" y="92" width="170" height="74" rx="6"/>
+  <text class="dg-label" x="630" y="116" text-anchor="middle">当前代码 + 真实 Diff</text>
+  <text class="dg-soft" x="630" y="137" text-anchor="middle">验收规则 + 测试证据</text>
+  <text class="dg-faint" x="630" y="155" text-anchor="middle">不是「我已修好，请确认」</text>
+  <path class="dg-arrow" d="M630 166 L630 192" marker-end="url(#m3)"/>
+  <rect class="dg-node-accent" x="545" y="194" width="170" height="48" rx="6"/>
+  <text class="dg-label" x="630" y="223" text-anchor="middle">独立发现与遗漏</text>
+  <path class="dg-arrow" d="M630 242 L630 268" marker-end="url(#m3)"/>
+  <rect class="dg-node-ok" x="545" y="270" width="170" height="44" rx="6"/>
+  <text class="dg-soft" x="630" y="297" text-anchor="middle">程序校验 / 真实测试 / 人</text>
+</svg>
+<figcaption>图 3 · Supervisor 管全局，Planner/Executor 管计划随事实变化，Reviewer 管产物复核（笔记行 142–172）。三者是职责模式，不是必须启动三套独立进程。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么 Reviewer 不能当最终裁判？</strong> 独立会话减少执行者先前结论的干扰，这是收益；但同模型可能重复相同错误，不同模型也可能共同误解业务规则。让它只看「已经修好」的叙述会进一步削弱独立性，因此要提供当前代码、真实 Diff、规则与测试证据，并把发现接回程序检查、行为测试和必要人工判断。多一层意见增加了检查机会，不等于创造一个绝对正确的真相源。</div>
+
+<h3 id="sec3">3. 并行与写入：依赖决定调度</h3>
+<p><strong>谁能并行，由数据依赖决定，不由角色数量决定</strong>（笔记行 174–192）。架构与测试静态检查可读同一冻结快照；报告依赖专家结果，必须等待；修复后的测试依赖补丁成功，也必须等待。把「同时启动」当目标，会制造旧代码测试、新补丁报告这种版本错位。</p>
+
+<figure class="diagram" id="fig4">
+<svg viewBox="0 0 760 330" role="img" aria-label="订单审查依赖 DAG">
+  <defs><marker id="m4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">同一冻结快照上的独立检查可并行，汇总与修复测试必须等待</text>
+  <rect class="dg-node-accent" x="275" y="48" width="210" height="48" rx="6"/>
+  <text class="dg-label" x="380" y="77" text-anchor="middle">冻结源码 / 规则 / 测试快照</text>
+  <path class="dg-arrow" d="M350 96 L140 132" marker-end="url(#m4)"/>
+  <path class="dg-arrow" d="M380 96 L380 132" marker-end="url(#m4)"/>
+  <path class="dg-arrow" d="M410 96 L620 132" marker-end="url(#m4)"/>
+  <rect class="dg-node" x="50" y="134" width="180" height="64" rx="6"/>
+  <text class="dg-label" x="140" y="160" text-anchor="middle">Architecture</text>
+  <text class="dg-soft" x="140" y="181" text-anchor="middle">模块与调用依赖</text>
+  <rect class="dg-node" x="290" y="134" width="180" height="64" rx="6"/>
+  <text class="dg-label" x="380" y="160" text-anchor="middle">Test</text>
+  <text class="dg-soft" x="380" y="181" text-anchor="middle">规则覆盖与缺口</text>
+  <rect class="dg-node" x="530" y="134" width="180" height="64" rx="6"/>
+  <text class="dg-label" x="620" y="160" text-anchor="middle">Security</text>
+  <text class="dg-soft" x="620" y="181" text-anchor="middle">用户隔离与权限</text>
+  <path class="dg-arrow" d="M140 198 L330 246" marker-end="url(#m4)"/>
+  <path class="dg-arrow" d="M380 198 L380 246" marker-end="url(#m4)"/>
+  <path class="dg-arrow" d="M620 198 L430 246" marker-end="url(#m4)"/>
+  <rect class="dg-node-accent" x="265" y="248" width="230" height="58" rx="6"/>
+  <text class="dg-label" x="380" y="272" text-anchor="middle">Supervisor / Report</text>
+  <text class="dg-soft" x="380" y="292" text-anchor="middle">等齐 → 校验 → 冲突与补查 → 建议</text>
+  <rect class="dg-node-muted" x="545" y="248" width="185" height="58" rx="6"/>
+  <text class="dg-label" x="637" y="272" text-anchor="middle">修复后的行为测试</text>
+  <text class="dg-soft" x="637" y="292" text-anchor="middle">另等补丁成功与新快照</text>
+</svg>
+<figcaption>图 4 · DAG 的边表示「必须先有谁的什么产物」，不是组织架构图。局部完成可以先记录，但最终汇总不能把未完成依赖静默丢掉。</figcaption>
+</figure>
+
+<p>多个 Agent 确实需要修改代码时，使用独立工作目录或工作树，各自保留补丁与被测快照，再按顺序集成并验证。<strong>工作树隔离的是文件版本，不自动隔离进程、网络、凭据和系统资源</strong>；写入范围仍要由执行机制控制。不要让修改 Agent 与测试 Agent 在同一个可变目录里一边改一边测，再把两份「完成」拼成验收结论。</p>
+
+<div class="why-box"><strong>为什么冻结快照比「大家都读最新文件」更可靠？</strong> 后者看似减少同步，实际让不同角色在同一任务中看到不同输入，证据无法指向同一版本。冻结快照牺牲一点获取最新改动的灵活性，换来发现可比较、结果可复现。确实需要新改动时，应显式创建新快照、使旧证据失效并重验，而不是让文件在调查期间悄悄变化——与 0017 的 revision、0019 的旧证据失效同构。</div>
+
+<h3 id="sec4">4. 三层隔离：提示词不是权限</h3>
+<p>隔离至少分三层（笔记行 182–192）：</p>
+<ul>
+  <li><strong>上下文隔离</strong>：各自消息历史，交接使用带来源的结果摘要；不要把其他角色未复核结论默认当事实。</li>
+  <li><strong>工具隔离</strong>：每个角色只获得任务需要的读取、搜索、测试或写入工具；没有 write 工具是能力收窄。</li>
+  <li><strong>权限隔离</strong>：执行时检查实际路径、命令、网络、身份和写入范围；即使工具有写能力，也只能在授权范围内生效。</li>
+</ul>
+
+<figure class="diagram" id="fig5">
+<svg viewBox="0 0 760 350" role="img" aria-label="上下文、工具、权限三层隔离">
+  <defs><marker id="m5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">三层各管一种泄漏：信息、能力、实际副作用</text>
+  <rect class="dg-node-accent" x="35" y="52" width="180" height="58" rx="7"/>
+  <text class="dg-label" x="125" y="76" text-anchor="middle">委托材料</text>
+  <text class="dg-soft" x="125" y="96" text-anchor="middle">规则 / 入口 / 快照 / 线索</text>
+  <path class="dg-arrow" d="M215 81 L260 81" marker-end="url(#m5)"/>
+  <rect class="dg-node" x="262" y="42" width="205" height="78" rx="7"/>
+  <text class="dg-label" x="364" y="66" text-anchor="middle">① 上下文隔离</text>
+  <text class="dg-soft" x="364" y="87" text-anchor="middle">独立历史 + 带来源交接</text>
+  <text class="dg-faint" x="364" y="106" text-anchor="middle">防无关历史与未复核猜测扩散</text>
+  <path class="dg-arrow" d="M467 81 L512 81" marker-end="url(#m5)"/>
+  <rect class="dg-node" x="514" y="42" width="205" height="78" rx="7"/>
+  <text class="dg-label" x="616" y="66" text-anchor="middle">② 工具隔离</text>
+  <text class="dg-soft" x="616" y="87" text-anchor="middle">read / grep / find / ls</text>
+  <text class="dg-faint" x="616" y="106" text-anchor="middle">不授予任务不需要的写工具</text>
+  <path class="dg-arrow" d="M616 120 L616 156" marker-end="url(#m5)"/>
+  <rect class="dg-node-warn" x="514" y="158" width="205" height="88" rx="7"/>
+  <text class="dg-label" x="616" y="182" text-anchor="middle">③ 权限隔离</text>
+  <text class="dg-soft" x="616" y="203" text-anchor="middle">Runtime / Sandbox 执行时检查</text>
+  <text class="dg-faint" x="616" y="222" text-anchor="middle">路径 / 命令 / 网络 / 身份 / 写入</text>
+  <text class="dg-faint" x="616" y="239" text-anchor="middle">测试与插件的副作用也算</text>
+  <path class="dg-arrow" d="M514 202 L450 202" marker-end="url(#m5)"/>
+  <rect class="dg-node-ok" x="245" y="166" width="203" height="72" rx="7"/>
+  <text class="dg-label" x="346" y="192" text-anchor="middle">允许范围内的真实执行</text>
+  <text class="dg-soft" x="346" y="216" text-anchor="middle">拒绝留回执，不静默越界</text>
+  <rect class="dg-node-warn" x="35" y="274" width="684" height="54" rx="7"/>
+  <text class="dg-label" x="377" y="297" text-anchor="middle">反例：Prompt 写「只读」 + 宿主仍暴露写能力</text>
+  <text class="dg-soft" x="377" y="318" text-anchor="middle">文字约束不能撤销权限；工具清单也不等于操作系统 Sandbox</text>
+</svg>
+<figcaption>图 5 · 「模型应当不做什么」「模型能调用什么」「执行最终允许什么」是三件事。三层可组合，不能拿其中一层替代另外两层（笔记行 188–192）。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么有了工具白名单还要执行时权限？</strong> 工具白名单减少可达动作，但同一个 write 或 bash 工具仍能接受不同路径、命令和参数；测试命令也可能写缓存、访问网络或加载插件。把检查放进 Prompt，依赖模型自觉遵守；放进 Runtime/Sandbox，才能把实际副作用拦在边界上。代价是策略与运行环境更复杂，但这是从「能力收窄」走向「后果受控」必须付的成本，与 0008/0013 的门禁和 Sandbox 同构。</div>
+
+<h3 id="sec5">5. 预算与取消：局部合规仍会全局超限</h3>
+<p>每个子任务要有时间、模型调用、工具调用与 Token 上限；主任务还要有全局预算，包含 Supervisor、所有专家、报告、重试与复核（笔记行 196–202）。<strong>并行可能缩短等待，不保证减少 Token</strong>：每个角色都要装配上下文、调用模型、输出结果，主 Agent 还要读取与整理结果。</p>
+<pre>局部检查：每个 child_usage ≤ child_limit
+全局账目：Supervisor + Σ(children) + Report + Retries + Review ≤ global_limit
+
+时间：由依赖图关键路径、排队与协调成本共同决定
+Token / 费用：各次真实调用累计；不能用并行后的墙钟时间代替求和</pre>
+
+<figure class="diagram" id="fig6">
+<svg viewBox="0 0 760 350" role="img" aria-label="局部预算与全局预算两本账">
+  <defs><marker id="m6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">每个专家都低于 800 Token，合计仍可能超过全局 2000</text>
+  <rect class="dg-node-accent" x="35" y="52" width="150" height="48" rx="6"/>
+  <text class="dg-label" x="110" y="81" text-anchor="middle">Supervisor 400</text>
+  <rect class="dg-node" x="230" y="42" width="140" height="48" rx="6"/>
+  <text class="dg-label" x="300" y="71" text-anchor="middle">Architecture 600</text>
+  <rect class="dg-node" x="230" y="102" width="140" height="48" rx="6"/>
+  <text class="dg-label" x="300" y="131" text-anchor="middle">Test 500</text>
+  <rect class="dg-node" x="230" y="162" width="140" height="48" rx="6"/>
+  <text class="dg-label" x="300" y="191" text-anchor="middle">Security 400</text>
+  <rect class="dg-node" x="420" y="72" width="140" height="48" rx="6"/>
+  <text class="dg-label" x="490" y="101" text-anchor="middle">Report 200</text>
+  <rect class="dg-node" x="420" y="142" width="140" height="48" rx="6"/>
+  <text class="dg-label" x="490" y="171" text-anchor="middle">Review 100</text>
+  <path class="dg-arrow" d="M370 66 L585 66" marker-end="url(#m6)"/>
+  <path class="dg-arrow" d="M370 126 L585 126" marker-end="url(#m6)"/>
+  <path class="dg-arrow" d="M370 186 L585 186" marker-end="url(#m6)"/>
+  <path class="dg-arrow" d="M185 76 L215 76 L215 232 L585 232" marker-end="url(#m6)"/>
+  <path class="dg-arrow" d="M560 96 L585 96" marker-end="url(#m6)"/>
+  <path class="dg-arrow" d="M560 166 L585 166" marker-end="url(#m6)"/>
+  <rect class="dg-node-warn" x="587" y="52" width="150" height="194" rx="7"/>
+  <text class="dg-label" x="662" y="82" text-anchor="middle">全局累计 2200</text>
+  <text class="dg-soft" x="662" y="108" text-anchor="middle">子项局部全合规</text>
+  <text class="dg-soft" x="662" y="134" text-anchor="middle">全局 2000 超限</text>
+  <text class="dg-faint" x="662" y="164" text-anchor="middle">还要记：谁已运行</text>
+  <text class="dg-faint" x="662" y="184" text-anchor="middle">谁未启动 / 已取消</text>
+  <text class="dg-faint" x="662" y="204" text-anchor="middle">哪些结果仍未知</text>
+  <text class="dg-faint" x="662" y="230" text-anchor="middle">不能继续盲搜耗预算</text>
+  <rect class="dg-node-muted" x="35" y="278" width="702" height="48" rx="6"/>
+  <text class="dg-label" x="386" y="298" text-anchor="middle">调度层：父子运行关联 → 统一累计 → 分配剩余额度 → 执行停止</text>
+  <text class="dg-soft" x="386" y="318" text-anchor="middle">分别记录各任务耗时与整次任务实际经过时间；两本账不能互相替代</text>
+</svg>
+<figcaption>图 6 · 数字是本课实验④构造的反例，不是订单项目实测 Token。它证明的是预算不变量：local_limit 不会自动推出 global_limit。</figcaption>
+</figure>
+
+<p>证据不足时可以返回未完成和缺失材料，不能持续搜索耗尽全部预算。全局预算需要调度层真正记账与执行停止；只在 JSON 里写 <code>limits</code> 或提示词里写「节约 Token」不构成限制生效（5-2 会继续展开任务契约）。</p>
+
+<figure class="diagram" id="fig7">
+<svg viewBox="0 0 760 300" role="img" aria-label="取消传播与未知边界">
+  <defs><marker id="m7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">「停止等待」与「实际停止」之间还有一整条取消链</text>
+  <path class="dg-line" d="M70 90 L710 90"/>
+  <text class="dg-soft" x="70" y="76">主 Agent / Harness</text>
+  <text class="dg-soft" x="70" y="112">决定取消</text>
+  <path class="dg-arrow-warn" d="M160 90 L240 90" marker-end="url(#m7)"/>
+  <text class="dg-soft" x="250" y="76">模型流 / 子 Agent</text>
+  <text class="dg-soft" x="250" y="112">收到 AbortSignal</text>
+  <path class="dg-arrow-warn" d="M390 90 L470 90" marker-end="url(#m7)"/>
+  <text class="dg-soft" x="480" y="76">工具 / 子进程</text>
+  <text class="dg-soft" x="480" y="112">SIGTERM → 必要时 SIGKILL</text>
+  <path class="dg-arrow" d="M630 90 L700 90" marker-end="url(#m7)"/>
+  <rect class="dg-node-ok" x="570" y="140" width="160" height="58" rx="6"/>
+  <text class="dg-label" x="650" y="165" text-anchor="middle">本地进程退出回执</text>
+  <text class="dg-soft" x="650" y="185" text-anchor="middle">记录退出码 / 信号 / 部分结果</text>
+  <rect class="dg-node-warn" x="40" y="140" width="470" height="100" rx="6"/>
+  <text class="dg-label" x="275" y="165" text-anchor="middle">仍不能直接下的结论</text>
+  <text class="dg-soft" x="60" y="190">• 远端模型请求是否已经停止</text>
+  <text class="dg-soft" x="60" y="212">• 已发出的写操作究竟未执行、已执行，还是结果未知</text>
+  <text class="dg-soft" x="60" y="234">• 远端费用是否立即归零</text>
+  <text class="dg-faint" x="40" y="274">取消要记录「已停止 / 未启动 / 仍不确定」，不能只把 pending 改成 failed。</text>
+</svg>
+<figcaption>图 7 · 笔记行 204–208。停止等待异步结果，不一定终止后台命令；本地退出也不能直接证明远端停止或费用归零。涉及副作用时仍需执行记录或下游状态核对。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么预算与取消要放在同一节？</strong> 预算决定「还能继续多少」，取消决定「超过以后是否真的停下」。只有阈值没有取消传播，超限后子进程仍运行；只有本地 kill 没有全局账，也无法判断其他角色、重试和复核是否继续消耗。两者共同保证系统能可靠结束。代价是必须维护父子运行关联和部分结果状态，而不是简单 Promise.all 等所有任务。</div>
+
+<h3 id="sec6">6. 冲突仲裁：测试绿与越权可同时成立</h3>
+<p>Test Agent 说「现有测试通过」，Security Agent 说「没有用户过滤」，两者并不必然矛盾：<strong>现有测试可能根本没有跨用户场景</strong>。本课 fixture 正是这样：<code>test_list_not_empty</code> 只断言列表非空；真实 SQLite 探针却返回用户 10 和 20 的订单，查询次数从 4 增至 7。性能角色提出 N+1 风险，也要用 SELECT 计数独立验证，不能拿用户隔离探针代替性能检查（笔记行 210–216）。</p>
+
+<figure class="diagram" id="fig8">
+<svg viewBox="0 0 760 360" role="img" aria-label="冲突仲裁四步与订单实测">
+  <defs><marker id="m8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">冲突不靠投票：先核对各自证明范围，再用行为探针补证</text>
+  <rect class="dg-node" x="35" y="50" width="260" height="76" rx="7"/>
+  <text class="dg-label" x="165" y="75" text-anchor="middle">Test Agent：现有测试 1/1 通过</text>
+  <text class="dg-soft" x="165" y="97" text-anchor="middle">证明：这条「非空」断言通过</text>
+  <text class="dg-faint" x="165" y="116" text-anchor="middle">不证明：跨用户隔离与查询上限</text>
+  <rect class="dg-node" x="465" y="50" width="260" height="76" rx="7"/>
+  <text class="dg-label" x="595" y="75" text-anchor="middle">Security Agent：没有用户过滤</text>
+  <text class="dg-soft" x="595" y="97" text-anchor="middle">源码证据：SELECT 无 user_id 条件</text>
+  <text class="dg-faint" x="595" y="116" text-anchor="middle">待独立核对：真实返回与规则版本</text>
+  <path class="dg-arrow" d="M165 126 L165 154 L330 154" marker-end="url(#m8)"/>
+  <path class="dg-arrow" d="M595 126 L595 154 L430 154" marker-end="url(#m8)"/>
+  <rect class="dg-node-accent" x="245" y="156" width="270" height="56" rx="7"/>
+  <text class="dg-label" x="380" y="180" text-anchor="middle">范围 → 版本 → 行为证据</text>
+  <text class="dg-soft" x="380" y="200" text-anchor="middle">不是两个结论二选一，更不是多数票</text>
+  <path class="dg-arrow" d="M380 212 L380 240" marker-end="url(#m8)"/>
+  <rect class="dg-node-warn" x="140" y="242" width="480" height="88" rx="7"/>
+  <text class="dg-label" x="380" y="266" text-anchor="middle">本机真实 SQLite 探针（2026-11-22）</text>
+  <text class="dg-soft" x="380" y="289" text-anchor="middle">返回 user_id = [10, 20]；SELECT 从 4 增至 7</text>
+  <text class="dg-soft" x="380" y="311" text-anchor="middle">only_current_user=false；bounded_queries=false</text>
+  <text class="dg-faint" x="380" y="347" text-anchor="middle">规则仍不清楚或管理员 / 普通用户范围冲突时，交有权者确认并保留未完成项</text>
+</svg>
+<figcaption>图 8 · 绿色测试与安全缺陷同时为真，因为它们的验收范围不同。先核对当前规则、输入快照与各结论覆盖范围，再为争议行为设计探针；行为证据也不会自动覆盖所有漏洞。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么冲突处理不是「让 Supervisor 再判断一下」？</strong> 多一次模型判断仍可能误读同一材料，投票更会把证据问题变成人数问题。先拆范围与版本，可以识别「两个结论其实都成立」；再做行为探针，可以把静态猜测变成实际观察；权威规则仍不清时，升级给有权确认的人。代价是增加定向验证与等待，但避免把冲突悄悄压成一份貌似一致的报告。</div>
+
+<h3 id="sec7">7. pi 实现：独立进程、并发与取消</h3>
+<p>课程材料给了两种入口：PPT 使用 <code>pi install npm:pi-subagent-extension</code>，学习笔记使用 <code>pi -e "$PI_SOURCE/.../subagent/index.ts"</code>。本课实际核对的是<strong>官方源码示例</strong>，不是据此推断所有同名 npm 包或旧版本行为。固定阅读版本：<a href="https://github.com/earendil-works/pi/tree/9c4652688590abb836b40ebd1e4725ecf9a7c7d1/packages/coding-agent/examples/extensions/subagent"><code>earendil-works/pi@9c465268</code></a>。官方 README 明确：每个子 Agent 是独立 <code>pi</code> 进程，具备独立上下文、流式输出与取消支持；parallel 为最多 8 项、同时 4 项。</p>
+
+<table>
+  <tr><th>源码位置（固定版本）</th><th>本课需要理解的职责</th><th>不要误读成</th></tr>
+  <tr><td><a href="https://github.com/earendil-works/pi/blob/9c4652688590abb836b40ebd1e4725ecf9a7c7d1/packages/coding-agent/examples/extensions/subagent/index.ts#L362-L560"><code>runSingleAgent</code></a></td><td>组装 <code>--mode json -p --no-session</code>、角色工具与模型参数，启动并收集一个子 Agent</td><td>只是同一会话里换 system prompt</td></tr>
+  <tr><td><a href="https://github.com/earendil-works/pi/blob/9c4652688590abb836b40ebd1e4725ecf9a7c7d1/packages/coding-agent/examples/extensions/subagent/index.ts#L488-L535"><code>spawn</code> 与 abort</a></td><td>独立子进程；取消先 SIGTERM，5 秒未退出再 SIGKILL；保留状态与错误</td><td>停止等待就等于所有远端工作停止</td></tr>
+  <tr><td><a href="https://github.com/earendil-works/pi/blob/9c4652688590abb836b40ebd1e4725ecf9a7c7d1/packages/coding-agent/examples/extensions/subagent/index.ts#L262-L280"><code>mapWithConcurrencyLimit</code></a></td><td>worker 数量受上限约束，结果按输入下标写回，保持结果顺序</td><td>最多 8 项就等于同时跑 8 项</td></tr>
+  <tr><td><a href="https://github.com/earendil-works/pi/blob/9c4652688590abb836b40ebd1e4725ecf9a7c7d1/packages/coding-agent/examples/extensions/subagent/README.md#limitations"><code>Limitations</code></a></td><td>每项输出有 50 KB 上限；子用量展示在 details，<strong>不自动加入父会话 usage</strong></td><td>示例已经实现完整全局预算与 Sandbox</td></tr>
+</table>
+
+<p>因此图 6 的全局账在示例上仍要由 Harness 补：父会话 usage 不包含子任务总量，必须关联父子运行、读取各子任务 usage 后统一累计。当前源码还显示：未指定模型时子 Agent 继承调度会话模型与 thinking level；项目级角色默认不加载，启用时需注意仓库提示词来源与确认机制。角色文件里的 <code>tools: read, grep, find, ls</code> 是工具范围，不是操作系统 Sandbox。</p>
+
+<pre>主 Agent 的模型调用
+  └─ subagent 工具调用（真实事件，不是文字计划）
+      └─ parallel: tasks = [task A, task B]（最多 8 项）
+          └─ mapWithConcurrencyLimit（同时最多 4 项）
+              └─ runSingleAgent → spawn 独立 pi 子进程
+                  ├─ 独立任务状态、消息历史与工具循环
+                  ├─ AbortSignal → SIGTERM → 5s 后 SIGKILL
+                  └─ 返回各自状态、结果、错误与 usage
+  └─ 主 Agent / Harness 复核：来源、冲突、未完成、全局预算</pre>
+
+<p><strong>怎样证明委托确实发生？</strong> 至少看三处（笔记行 244–254）：① 实际记录出现 <code>subagent</code> 工具调用；② 参数以 <code>tasks</code> 数组传入两项任务；③ 返回结果分别保留两项检查，并能关联各自执行。模型说「我会并行」只是计划。若没有工具调用，先查扩展注册、加载错误与工具可见性，不把普通回答当演示成功。这次演示只证明委托与结果返回；没执行测试就不能宣称业务验收通过。</p>
+
+<div class="why-box"><strong>为什么要从实现确认「独立状态」？</strong> 界面同时出现两个角色卡片，可能只是同一模型输出排版；源码中每个任务启动独立 <code>pi --no-session</code> 子进程，才为这份示例的独立上下文提供机制依据。相反，独立进程并不自动提供业务正确、全局预算或操作系统隔离。阅读实现的目的不是背 API，而是把每个宣传词落到具体机制与未覆盖边界。</div>
+
+<h3 id="sec8">8. 面试视角：两分钟主链 + 追问链</h3>
+<p><strong>两分钟主链（先脱稿，再对照）</strong>：</p>
+<blockquote>我会先判断任务是否值得拆，而不是先选多 Agent 框架。筛选看三点：子任务能否独立产出可验收结果、信息或视角是否明显不同、结果能否按统一规则合并；最后还要比较并行、上下文压缩和独立检查的收益是否超过交接成本。Subagent 是主 Agent 委托具有独立任务状态和工具循环的子 Agent，不要求并行，同一个模型也能跑多个子 Agent。模式上，Supervisor 管拆分、依赖、汇总与补查，Planner/Executor 让计划随执行事实调整，Reviewer 复核当前产物，但独立意见仍要接回程序和行为验证。调度看依赖 DAG，隔离分上下文、工具、权限三层，写任务用独立工作树与快照。预算同时记局部和全局两本账，取消传到模型流、工具和子进程，并保留远端未知。冲突不投票，先核对范围与版本，再用真实行为探针补证。最后在工具记录里确认 subagent 调用、tasks 参数和各自结果，而不是相信一句「已并行」。</blockquote>
+<p><strong>面试官可能继续追问</strong>：</p>
+<ol>
+  <li>「文件很多，为什么不直接拆？」——文件数量是阅读范围，数据依赖才决定并行；一条调用链仍可能适合单 Agent。</li>
+  <li>「只起一个 Subagent 有什么意义？」——可以隔离大量中间历史或提供单独检查视角，但要算额外调用与复核成本。</li>
+  <li>「Reviewer 独立了，为什么还要测试？」——独立减少锚定，不消除共同误判；最终发现仍需规则、程序校验和真实行为支持。</li>
+  <li>「每个子 Agent 都限 1000 Token，为什么还会超？」——父 Agent、所有子项、报告、重试和复核是另一本全局账。</li>
+  <li>「你已经 cancel，为什么结果仍 unknown？」——本地等待或进程停止，不证明远端请求、已发写操作和费用状态都确定。</li>
+</ol>
+
+<hr>
+
+<h2 id="part2">第二部分：检索式测验（10 题 = 4 选择 + 6 简述）</h2>
+<p>Q1–Q2 重测 0022 核心不变量；Q3–Q4 考本课的拆分判断与委托证据。简述 Q5–Q10 合并覆盖本章复习 Q1–Q8：先脱稿写，再对照关键得分点；漏掉「为什么」「谁强制执行」或「证明边界」都算部分对。</p>
+<div id="quiz"></div>
+
+<hr>
+
+<h2 id="part3">第三部分：第二层练习——把分工原则变成可复核回执</h2>
+<p>实验①–⑤<strong>必做且全部离线可跑</strong>，实验⑥真实 pi 委托为<strong>可选加餐，本机待验证</strong>。命令均从本课程仓库开始；除实验⑥外只用系统 <code>python3</code>（本机 3.9.6）与标准库，<strong>不需要安装 demo/requirements.txt 的 openai</strong>。本机 2026-11-22 实测：实验①完整性测试 11/11、fixture 既有测试 1/1；实验②–⑤输出与下方预期一致。计时数字以当次为准，不变量断言才决定是否通过。</p>
+
+<h3>实验 ①：双侧基线——完整性测试与项目既有测试（必做）</h3>
+<ul>
+  <li><strong>先写预期</strong>：demo 的 11 条完整性测试与订单项目自己的 1 条测试分别证明什么？后者通过能否证明用户隔离正确？</li>
+  <li><pre>cd /Users/chyu-wissfi/Projects/ai-agent-fullstack-training/course_code/week05/5-1/demo
+python3 -m unittest discover -s tests -v
+cd fixtures/project
+python3 -m unittest discover -s tests -v</pre><strong>本机实测</strong>：demo <strong>11/11 OK</strong>，覆盖证据越界拒绝、旧快照失效、冲突保留、绿色测试不隐藏越权、修复验收、受保护测试变更、Token 去重与未完成工具等；fixture <strong>1/1 OK</strong>，唯一用例是 <code>test_list_not_empty</code>。第二条命令必须在 fixture 根目录运行，否则 <code>from app.orders</code> 找不到项目包。</li>
+</ul>
+
+<h3>实验 ②：冲突现场——绿色测试与真实越权、N+1 同时成立（必做）</h3>
+<ul>
+  <li><strong>先写预期</strong>：两名用户数据下会返回哪些 user_id？小 / 大数据集各有几次 SELECT？这与实验①的绿色测试矛盾吗？</li>
+  <li><pre>cd /Users/chyu-wissfi/Projects/ai-agent-fullstack-training/course_code/week05/5-1/demo
+python3 scripts/probe_orders.py --project fixtures/project &gt; /tmp/orders-probe-0023.json
+python3 -I - &lt;&lt;'PY'
+import json
+r = json.load(open('/tmp/orders-probe-0023.json'))
+v = r['values']
+print({
+    'returned_user_ids': sorted({o['user_id'] for o in v['orders']}),
+    'small_queries': v['small_queries'],
+    'large_queries': v['large_queries'],
+    'only_current_user': r['only_current_user'],
+    'bounded_queries': r['bounded_queries'],
+})
+assert not r['only_current_user']
+assert not r['bounded_queries']
+assert v['large_queries'] &gt; v['small_queries']
+PY</pre><strong>本机实测</strong>：<code>returned_user_ids=[10,20]</code>、<code>small_queries=4</code>、<code>large_queries=7</code>、两个布尔均 false。结论要写成两句：<strong>现有测试通过</strong>；<strong>当前规则下的用户隔离和查询上限未通过</strong>。探针只证明这些行为，不证明所有 SQL 注入或权限问题都已排除。</li>
+</ul>
+
+<h3>实验 ③：依赖调度与并发上限——改 2 为 1，变化的是速度不是依赖（必做）</h3>
+<ul>
+  <li><strong>先写预期</strong>：limit=2 与 limit=1 的 peak 各是多少？report 能否在任一专家结束前开始？结果顺序会不会随完成先后变化？</li>
+  <li><pre>python3 -I - &lt;&lt;'PY'
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
+from time import monotonic, sleep
+
+TASKS = {
+    'freeze': ([], 0.02),
+    'architecture': (['freeze'], 0.12),
+    'test': (['freeze'], 0.16),
+    'security': (['freeze'], 0.10),
+    'report': (['architecture', 'test', 'security'], 0.03),
+}
+
+def schedule(limit):
+    active = peak = 0
+    lock = Lock()
+    started = monotonic()
+    timeline = {}
+    def run(name):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        begin = monotonic() - started
+        sleep(TASKS[name][1])
+        end = monotonic() - started
+        with lock:
+            active -= 1
+        timeline[name] = (round(begin, 3), round(end, 3))
+        return name + '-result'
+    remaining = set(TASKS)
+    results = {}
+    while remaining:
+        ready = [name for name in TASKS if name in remaining
+                 and all(dep in results for dep in TASKS[name][0])]
+        assert ready, '依赖图存在环或缺失节点'
+        with ThreadPoolExecutor(max_workers=min(limit, len(ready))) as pool:
+            for name, value in zip(ready, pool.map(run, ready)):
+                results[name] = value
+                remaining.remove(name)
+    assert timeline['report'][0] &gt;= max(timeline[n][1] for n in ('architecture', 'test', 'security'))
+    return {'limit': limit, 'peak': peak, 'elapsed': round(monotonic() - started, 3),
+            'report_start': timeline['report'][0], 'result_order': list(results)}
+
+print(schedule(2))
+print(schedule(1))
+PY</pre><strong>本机一次实测</strong>：limit 2 → peak 2、约 0.287 秒；limit 1 → peak 1、约 0.454 秒；两种情况下 report 都等三类检查结束，<code>result_order</code> 都按 DAG 定义顺序。这个脚本只是本地教学调度器，不是 pi 实现：它演示依赖与上限，不证明模型子进程治理已经完整。</li>
+</ul>
+
+<h3>实验 ④：隔离与全局预算——Prompt 只读仍被写，局部合规全局超限（必做）</h3>
+<ul>
+  <li><strong>先写预期</strong>：只有「只读」提示词时测试文件会不会改变？没有 write 工具和路径穿越分别得到什么拒绝？每个子任务 ≤800，为什么总量仍可能 >2000？</li>
+  <li><pre>python3 -I - &lt;&lt;'PY'
+from pathlib import Path
+import tempfile
+
+root = Path(tempfile.mkdtemp(prefix='isolation-0023-'))
+target = root / 'tests' / 'test_orders.py'
+target.parent.mkdir()
+target.write_text('original')
+
+# 只有提示词「只读」，宿主仍给了可直接写文件的能力。
+target.write_text('changed')
+prompt_only_changed = target.read_text() == 'changed'
+
+def guarded_write(tools, root, relative, content):
+    if 'write' not in tools:
+        return 'TOOL_NOT_GRANTED'
+    path = (root / relative).resolve()
+    if not path.is_relative_to(root):
+        return 'PATH_DENIED'
+    path.write_text(content)
+    return 'WRITTEN'
+
+scout_result = guarded_write({'read', 'grep'}, root, 'tests/test_orders.py', 'blocked')
+escape_result = guarded_write({'write'}, root, '../outside.txt', 'blocked')
+usage = {'supervisor': 400, 'architecture': 600, 'test': 500,
+         'security': 400, 'report': 200, 'review': 100}
+local_limit = 800
+global_limit = 2000
+children = ['architecture', 'test', 'security']
+local_ok = all(usage[name] &lt;= local_limit for name in children)
+total = sum(usage.values())
+print({'prompt_only_test_changed': prompt_only_changed,
+       'scout_write': scout_result, 'escape_write': escape_result,
+       'each_child_within_800': local_ok, 'total_tokens': total,
+       'global_within_2000': total &lt;= global_limit})
+assert prompt_only_changed
+assert scout_result == 'TOOL_NOT_GRANTED'
+assert escape_result == 'PATH_DENIED'
+assert local_ok and total &gt; global_limit
+PY</pre><strong>本机实测</strong>：prompt-only 文件被改 true；scout 写请求 <code>TOOL_NOT_GRANTED</code>；有 write 但越界 <code>PATH_DENIED</code>；子项都 ≤800，总计 <strong>2200>2000</strong>。所有写入仅发生在自动创建的 /tmp 目录。这里的 guarded_write 是教学探针，不是 Sandbox；它演示「工具检查 + 路径检查」，不隔离恶意代码、网络或系统资源。</li>
+</ul>
+
+<h3>实验 ⑤：取消与源码对照——本地退出有回执，远端状态仍未知（必做）</h3>
+<ul>
+  <li><strong>先写预期</strong>：SIGTERM 后子进程 returncode 是什么？脚本能否断言远端请求已经停止、费用已经归零？</li>
+  <li><pre>python3 -I - &lt;&lt;'PY'
+import subprocess
+import sys
+import time
+
+proc = subprocess.Popen([sys.executable, '-I', '-c', 'import time; time.sleep(30)'])
+time.sleep(0.1)
+proc.terminate()
+try:
+    returncode = proc.wait(timeout=1)
+    escalated = False
+except subprocess.TimeoutExpired:
+    proc.kill()
+    returncode = proc.wait(timeout=1)
+    escalated = True
+print({'local_process_exited': returncode is not None,
+       'returncode': returncode, 'sigkill_escalated': escalated,
+       'remote_request_stopped': 'unknown'})
+assert returncode is not None
+PY</pre><strong>本机实测</strong>：本地进程退出，returncode <code>-15</code>（POSIX SIGTERM），1 秒内退出所以未升级 SIGKILL；远端请求状态明确保留 unknown。若你的环境需要升级，记录 <code>sigkill_escalated=true</code>，仍不能把远端 unknown 改成 true。</li>
+  <li><strong>对照官方固定版本源码</strong>（需网络与 gh 登录；只读，不运行下载代码）：<pre>PI_COMMIT=9c4652688590abb836b40ebd1e4725ecf9a7c7d1
+mkdir -p /tmp/pi-source-0023
+gh api "repos/earendil-works/pi/contents/packages/coding-agent/examples/extensions/subagent/index.ts?ref=$PI_COMMIT" \
+  --jq .content | base64 --decode &gt; /tmp/pi-source-0023/index.ts
+rg -n 'MAX_PARALLEL_TASKS|MAX_CONCURRENCY|runSingleAgent|mapWithConcurrencyLimit|SIGTERM|SIGKILL|--no-session' \
+  /tmp/pi-source-0023/index.ts</pre>逐项回答：独立状态由什么机制提供？结果顺序怎样保持？取消先发送什么信号？这些机制哪些没有自动提供全局预算和操作系统 Sandbox？</li>
+</ul>
+
+<h3>实验 ⑥：真实 pi parallel 委托——本机未执行，需 pi 与模型凭据（可选加餐）</h3>
+<ul>
+  <li>本机 2026-11-22 检查：<code>pi</code> 不在 PATH，常见模型 API key 环境变量均未配置，<strong>未执行真实委托，以下结果全部待验证</strong>。准备已检出的 pi 源码与可用模型后，按笔记行 224–256 操作：<pre>cd /Users/chyu-wissfi/Projects/ai-agent-fullstack-training
+export PI_SOURCE="/absolute/path/to/pi"
+export PROJECT_DIR="$PWD/course_code/week05/5-1/demo/fixtures/project"
+export AGENT_FILE="$HOME/.pi/agent/agents/course-scout.md"
+mkdir -p "$HOME/.pi/agent/agents"
+if [ -e "$AGENT_FILE" ]; then
+  printf '已有 %s，请先阅读并改用其他角色名，勿覆盖。\n' "$AGENT_FILE"
+  exit 1
+fi
+cat &gt; "$AGENT_FILE" &lt;&lt;'EOF'
+---
+name: course-scout
+description: 只读检查订单源码或测试，返回可核对的发现。
+tools: read, grep, find, ls
+---
+按委托范围读取文件。结论附文件位置与原文摘要。
+不修改文件，不执行命令。不把未测试写成测试通过。
+EOF
+cd "$PROJECT_DIR"
+pi --version
+pi -e "$PI_SOURCE/packages/coding-agent/examples/extensions/subagent/index.ts"</pre></li>
+  <li>进入界面后输入：<pre>使用 subagent 工具的 parallel 模式，委托两个 course-scout：
+第一个检查 app/orders.py 是否按当前用户过滤；
+第二个检查 tests/test_orders.py 是否覆盖用户隔离、明细完整性和查询次数。
+共同规则取 docs/current.md：只返回当前用户订单，完整返回明细，SELECT 最多两次。
+只读取，不修改，不运行命令。
+每项返回：已读取文件、具体发现、证据、没有验证的事项。
+主 Agent 收集后解释两份发现能否互相支持，不得声称已经修复或测试通过。</pre><strong>先写预期</strong>：事件里应该出现什么工具名、什么参数形状、几份独立结果？<strong>验收</strong>：核对 subagent 实际调用、tasks 数组两项、两项结果与各自执行关联；若只有「我会并行」文字，实验不通过。该角色没有测试工具，所以本实验不证明业务验收通过，只证明委托、独立上下文与结果返回。</li>
+</ul>
+
+<h2>回读与验证指引</h2>
+<ul>
+  <li><strong>本课原题回读</strong>：<a href="../course_code/week05/第五章 学习笔记.md">第五章笔记</a> 5.1 一至六（行 77–258）。本章复习 Q1–Q8 已全部换形式纳入：Q1/Q2→本课 Q5，Q3/Q4→Q6，Q5/Q6→Q7，Q7→Q8，Q8→Q9；冲突与 pi 证明边界在 Q3/Q4/Q10 加练。参考答案在笔记行 2481–2511。</li>
+  <li><strong>代码回读</strong>：<a href="../course_code/week05/5-1/demo/fixtures/project/app/orders.py"><code>fixtures/project/app/orders.py</code></a>（无用户过滤与逐单查询）、<a href="../course_code/week05/5-1/demo/fixtures/project/tests/test_orders.py"><code>tests/test_orders.py</code></a>（只测非空）、<a href="../course_code/week05/5-1/demo/scripts/probe_orders.py"><code>scripts/probe_orders.py</code></a> 与 <a href="../course_code/week05/5-1/demo/scripts/acceptance.py"><code>acceptance.py</code></a>（真实行为与 SELECT 计数）。注意 acceptance 的 <code>coverage_note</code> 明说：参数绑定与其他漏洞仍需源码审查，探针不是完整安全证明。</li>
+  <li><strong>跨课连线</strong>：0017（子任务输入也要按适用性装配，不能继承全部历史）；0018/0019（当前任务状态与长期知识不因委托而混写）；0020/0022（Trace 与行为证据决定结论，工具能返回不等于接入完整）；0008/0013（工具白名单不是执行权限，工作树不是 Sandbox）；0014（Reviewer 模型建议，程序与真实测试把关）。下一课 5-2 将本课「交回什么证据」展开成九项任务契约与结构化聚合出口。</li>
+  <li><strong>口径提醒</strong>：① PPT 的 npm 安装与笔记的源码 <code>-e</code> 是材料给出的不同加载入口，本课只核实官方源码示例，未验证同名 npm 包；② <code>MAX_PARALLEL_TASKS=8</code> 与 <code>MAX_CONCURRENCY=4</code> 是固定版本 <code>9c465268</code> 的当前实现，不外推到旧版；③ 官方示例的 child usage 不自动加入父会话 usage，全局预算需要另做；④ 本机没有 pi 与模型 key，真实 parallel 未运行，页面中的真实机制结论来自固定源码，订单行为数字来自本地探针，两类证据不混写；⑤ 实验③④⑤是教学探针，不宣称验证 pi 本身；⑥ 笔记行 92 写旧文档 <code>docs/old.md</code>，实际 fixture 文件名是 <a href="../course_code/week05/5-1/demo/fixtures/project/docs/legacy.md"><code>docs/legacy.md</code></a>，两者都指废弃规则，当前验收只认 <code>docs/current.md</code>。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<ul>
+  <li><a href="../course_code/week05/第五章 学习笔记.md"><code>course_code/week05/第五章 学习笔记.md</code></a> 5.1（行 75–268）+ 章复习 Q1–Q8 与答案（学生版学习笔记，术语与验收第一材料）</li>
+  <li><a href="../course_code/week05/5-ppt/5.1 PPT.md"><code>5-ppt/5.1 PPT.md</code></a> + <a href="../course_materials/week05/5-1.pdf"><code>course_materials/week05/5-1.pdf</code></a>（教师材料，补充图示与真实 pi 操作）</li>
+  <li><a href="https://github.com/earendil-works/pi/blob/9c4652688590abb836b40ebd1e4725ecf9a7c7d1/packages/coding-agent/examples/extensions/subagent/README.md">pi 官方 Subagent 示例 README</a> 与 <a href="https://github.com/earendil-works/pi/blob/9c4652688590abb836b40ebd1e4725ecf9a7c7d1/packages/coding-agent/examples/extensions/subagent/index.ts">实现 index.ts</a>（固定版本，独立进程、模式、上限、取消与已知限制的直接出处）</li>
+</ul>
+
+<p>速查卡：<a href="../reference/multi-agent-subagent.html"><strong>Multi-Agent / Subagent 拆分与治理清单</strong></a>——复习时先看三问、两本账、三层隔离和证明边界，再回本课做检索练习。</p>
+
+<div class="ask-reminder">
+  <strong>卡住了就问你的 agent。</strong>为什么只委托一个子任务也有价值、为什么独立 Reviewer 仍会错、为什么子任务都没超预算整体还会超、为什么本地 kill 后远端仍 unknown、为什么测试绿和越权可以同时成立——任何一处不清楚，都直接回来问。也可以贴出你的一项真实任务，我们按「三问 → DAG → 隔离 → 两本账 → 验收证据」一起判断要不要拆。
+</div>
+
+<div class="lesson-footer">
+  Week05 主题课序列：<strong>1/5 Multi-Agent 与 Subagent（本课，5-1）</strong> · 2/5 Subagent 任务委托（0024，待生成） · 3/5 Skill（待生成） · 4/5 Agent 评测（待生成） · 5/5 项目五（待生成）<br>
+  前课回顾：<a href="./0022-project4-capstone.html">0022 项目四</a> 解决「一个 Agent 怎样获得并治理信息」；本课开始解决「工作怎样分给多个执行者，仍能保持边界与证据」。<br>
+  <strong>本课通过条件</strong>：① Q1–Q2 重测全对，Q3–Q10 至少答对 7/8；② 完成必做实验①–⑤，实验③–⑤先写预期再运行；③ 不看稿 2 分钟讲清「三问 → 委托与三种收益 → 三种模式 → DAG 与三层隔离 → 两本账与实际取消 → 冲突行为证据 → pi 三处记录」；④ 对照本章复习 Q1–Q8 脱稿自测。实验⑥真实 pi 为可选加餐，不用未运行结果冒充完成。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  questions: [
+    {
+      type: 'choice',
+      concept: '【重测·0022】治理链不分叉',
+      section: '0022 间隔重测',
+      notesRef: '0022 精讲第 2 节 + 第四章复习 Q32',
+      question: '给 Codebase Agent 新增记忆写入能力，怎样接才不会绕过既有权限、审批与审计？',
+      options: [
+        '直接写入文件，事后再补一条审计',
+        '模型自报权限，随后就直接写文件',
+        '通过统一运行时校验授权后再写入',
+        '先查询记忆，随后就绕过审批写入'
+      ],
+      answer: 2,
+      explanation: '新增工具也必须进入既有 ToolRegistry 与 Runtime 治理链，经过参数、白名单、RBAC、审批与审计。模型建议不代替程序授权，事后补审计无法撤销已经发生的越权写入。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·0022】证明边界',
+      section: '0022 间隔重测',
+      notesRef: '0022 精讲第 4/7 节：已实现、已验证、尚未证明',
+      question: '关于「验证过了」的表述，哪一句严格符合每层证据的证明范围？',
+      options: [
+        '每一层的回执只覆盖对应证明范围',
+        '跨进程的读取成功就等于注入成功',
+        '单元测试全部通过就等于真实运行',
+        '引用格式完整就等于业务结论正确'
+      ],
+      answer: 0,
+      explanation: '跨进程召回证明跨进程读取，不证明实际模型请求已注入；单测不代替真实 Run；引用格式不代替结论支持。已实现、已验证、尚未证明必须分开。'
+    },
+    {
+      type: 'choice',
+      concept: '拆分收益与依赖',
+      section: '5-1 一',
+      notesRef: '第五章笔记行 92–110 + 复习 Q1–Q2',
+      question: '任务只是「给 list_orders 补当前用户过滤，再运行相关测试」，哪种执行方式通常更合理？',
+      options: [
+        '读取修改测试分别交给三个角色',
+        '架构权限性能同时启动后再合并',
+        '复制完整历史给三个只读审查者',
+        '由单个代理连续读取修改并验证'
+      ],
+      answer: 3,
+      explanation: '读取、修改和验证围绕同一处代码，测试依赖补丁成功，独立工作很少。拆三个角色会增加源码版本、测试结果与未完成事项的交接成本。'
+    },
+    {
+      type: 'choice',
+      concept: '委托确实发生的证据',
+      section: '5-1 六',
+      notesRef: '第五章笔记行 244–256',
+      question: '最终回答说「两个子 Agent 已并行完成」，但记录里没有 subagent 工具调用。能得出什么结论？',
+      options: [
+        '出现两个角色名称即可证明委托',
+        '没有工具记录就不能证明已委托',
+        '同一模型的回答必然形成子代理',
+        '返回两份报告即可证明已经并行'
+      ],
+      answer: 1,
+      explanation: '模型文字只是声明。至少要看到 subagent 实际调用、tasks 数组中的任务、各自结果与执行关联；否则先查扩展注册、加载错误与工具可见性。'
+    },
+    {
+      type: 'short',
+      concept: '拆分三问与协调成本',
+      section: '5-1 一',
+      notesRef: '第五章笔记行 77–110 + 复习 Q1–Q2（答案行 2481–2487）',
+      question: '为什么「补用户过滤」通常不值得拆成三个 Agent？为什么「要读很多文件」仍不是充分拆分理由？用三个问题给出你的判断流程，并说明协调成本。',
+      hint: '分别回答任务集中在哪里、后一步依赖什么、三问如何筛选，以及多拆后会多出哪些交接。',
+      modelAnswer: '<strong>得分点：</strong>① 补过滤围绕同一处代码，读取→修改→测试紧密依赖，测试必须等补丁成功，单 Agent 连续完成更短；② 文件多只说明阅读范围，调用链调查仍可能是一条线，<strong>依赖关系才决定并行</strong>；③ 三问是能否独立产出可验收结果、信息或视角是否明显不同、结果能否按统一规则合并；④ 最后比较并行、历史压缩、独立视角的收益与上下文复制、版本交接、结果合并、额外调用、冲突复核的成本。漏掉「收益超过协调成本」或「依赖而非文件数」算部分对。'
+    },
+    {
+      type: 'short',
+      concept: 'Multi-Agent、Subagent 与并行命令',
+      section: '5-1 二',
+      notesRef: '第五章笔记行 110–140 + 复习 Q3–Q4（答案行 2489–2495）',
+      question: '怎样区分 Multi-Agent、Subagent 与并行命令？只委托一个子任务、主 Agent 等待返回，是否仍可能有价值？',
+      hint: '判断依据不是模型名称或并发数量，而是任务状态与工具循环。',
+      modelAnswer: '<strong>得分点：</strong>① Multi-Agent 是多个 Agent 协作的形态，Subagent 是其中主 Agent 委托子 Agent 的关系；② 子 Agent 有<strong>独立任务状态和工具循环</strong>，会根据观察选择下一步，同一模型也可运行多个；③ 并行格式检查、类型检查等确定动作由普通程序执行，不因数量多就成为多 Agent；④ 单个串行委托仍有价值：把大量中间搜索留在子历史，只交回带来源的覆盖项与缺失项，或提供独立检查视角与工具范围；⑤ 同时比较额外调用和复核成本。漏掉独立状态或「不必并行」算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '三种模式与 Reviewer 边界',
+      section: '5-1 三',
+      notesRef: '第五章笔记行 142–172 + 复习 Q5–Q6（答案行 2497–2503）',
+      question: 'Supervisor、Planner/Executor、Reviewer 分别解决什么？为什么独立 Reviewer 不能自动保证正确，应该给它什么材料、把结论接回哪里？',
+      hint: '按统筹、计划执行衔接、产物复核三条职责回答。',
+      modelAnswer: '<strong>得分点：</strong>① Supervisor 拆分、安排依赖、收集结果、识别冲突并决定补查，交付复核后的建议而非拼接报告；② Planner 定步骤、依赖和验收，Executor 执行并回写事实，失败或新证据会重排后续计划；③ Reviewer 按独立标准复核当前产物；④ 独立历史只减少先前结论干扰，同模型或不同模型都可能共同犯错；⑤ 给它<strong>当前代码、真实 Diff、验收规则与对应测试证据</strong>，发现仍接回程序校验、真实行为测试与必要人工判断。只写「Reviewer 再检查一遍」不算完整。'
+    },
+    {
+      type: 'short',
+      concept: '依赖并行与三层隔离',
+      section: '5-1 四',
+      notesRef: '第五章笔记行 174–192 + 复习 Q7（答案行 2505–2507）',
+      question: '一个包含冻结快照、架构检查、测试检查、安全检查、报告和修复后测试的任务，哪些能并行、哪些必须等待？上下文、工具、权限三层隔离分别怎样落实？',
+      hint: '先画 DAG，再逐层回答「信息、能力、实际副作用」由谁隔离。',
+      modelAnswer: '<strong>得分点：</strong>① 架构、测试、安全检查读同一冻结快照可并行；报告等所需专家结果，修复后测试等补丁成功与新快照；② 多个写任务用独立目录或工作树，保留各自补丁和被测快照，按序集成验证；③ 上下文靠独立历史与带来源摘要；④ 工具靠每角色只获得所需 read/search/test/write 能力；⑤ 权限靠 Runtime/Sandbox 在执行时检查实际路径、命令、网络、身份与写入范围，测试副作用也算；⑥ <strong>Prompt 只读不撤权，工具清单不等于操作系统 Sandbox</strong>。漏掉程序强制层算部分对。'
+    },
+    {
+      type: 'short',
+      concept: '两本账与实际取消',
+      section: '5-1 五',
+      notesRef: '第五章笔记行 194–208 + 复习 Q8（答案行 2509–2511）+ pi README Limitations',
+      question: '多个专家各自不超预算，整体为什么仍可能超限？取消时为什么「停止等待」不够？结合 pi 示例说明 Harness 还要补什么。',
+      hint: '全局账要列全参与者；本地进程退出与远端请求状态要分开。',
+      modelAnswer: '<strong>得分点：</strong>① 全局包括 Supervisor、所有子任务、Report、重试和复核，局部上限不会自动求和成全局约束；并行主要可能缩短等待，Token 仍需累计；② 调度层关联父子运行、统一累计实际用量、分配剩余额度并执行停止；③ 当前 pi 示例的 child usage 展示在 details，<strong>不自动加入父会话 usage</strong>，所以 Harness 必须另做全局汇总；④ 取消传到模型流、工具和子进程，记录未启动、已停止与部分结果；⑤ 本地退出不证明远端请求停止、已发写操作结果确定或费用归零，相关项保留 unknown。只说「设 max_tokens」不算全局预算。'
+    },
+    {
+      type: 'short',
+      concept: '冲突仲裁与证明边界',
+      section: '5-1 五/六',
+      notesRef: '第五章笔记行 210–258；本课实验②与⑥',
+      question: 'Test Agent 说「测试通过」，Security Agent 说「会返回他人订单」，Supervisor 应怎样处理？真实 pi 演示又凭什么只能证明委托，不能证明业务验收通过？',
+      hint: '先判断两个结论是否真的互斥，再说探针、规则交接与工具证据。',
+      modelAnswer: '<strong>得分点：</strong>① 两者可同时成立，现有测试可能只测非空、没有跨用户断言；② 先核对<strong>范围、当前规则与快照版本</strong>，再用至少两名用户数据调用函数，检查真实返回；N+1 另做 SELECT 计数，不能用隔离探针替代性能检查；③ 管理员与普通用户规则仍冲突时交有权者确认，保留未完成；④ pi 侧要有 subagent 实际调用、tasks 数组与各自结果关联，文字「已并行」不算证据；⑤ 只读 course-scout 没有测试工具，演示只证明委托与结果返回，<strong>没有行为测试就不能宣称业务验收通过</strong>。漏掉探针范围或演示证明边界算部分对。'
+    }
+  ]
+});
+</script>
+</body>
+</html>

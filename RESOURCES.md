@@ -57,6 +57,20 @@
   官方文档：`thread_id` 与持久化、跨进程恢复；`thread_id` 是存档键，不是权限。
 - 课程代码：`course_code/week03/3-6/release_pipeline/`（顶层完整案例）与 `demos/01_minimal`–`06_visualize`（每层自带 pytest 验收；必须逐目录运行，避免同名模块冲突）。
 
+## Week05 Knowledge（2026-11-22）
+
+- [第五章 学习笔记.md](./course_code/week05/第五章%20学习笔记.md)（学生版，覆盖 5-1 至 5-5）
+  Week05 术语、学习预期与验收标准的第一材料；5.1 在行 75–268，本章总结与 56 道复习题在文末。命令与历史结果不自动视为本机已复现。
+- [5.1 教师 PPT（Markdown）](./course_code/week05/5-ppt/5.1%20PPT.md) + [5-1.pdf](./course_materials/week05/5-1.pdf)
+  拆分判断、三种模式、依赖与隔离、pi parallel 委托演示的补充材料。
+- [Week05 README](./course_code/week05/README.md)
+  五个小节与各代码目录的总览；5-1/5-2 共用订单审查案例，5-4 使用 eval_lab.zip，5-5 使用 EvalLab。
+- [pi 官方 Subagent 示例 README（固定版本）](https://github.com/earendil-works/pi/blob/9c4652688590abb836b40ebd1e4725ecf9a7c7d1/packages/coding-agent/examples/extensions/subagent/README.md)
+  独立 pi 子进程、single/parallel/chain、最多 8 项/同时 4 项、输出上限、取消和「子用量不加入父会话 usage」的直接出处。
+- [pi 官方 Subagent 示例 index.ts（固定版本）](https://github.com/earendil-works/pi/blob/9c4652688590abb836b40ebd1e4725ecf9a7c7d1/packages/coding-agent/examples/extensions/subagent/index.ts)
+  `runSingleAgent`、`spawn`、`mapWithConcurrencyLimit`、AbortSignal、SIGTERM/SIGKILL 的实现；阅读版本为 `9c4652688590abb836b40ebd1e4725ecf9a7c7d1`，其他安装版本须重新核对。
+- 课程代码：`course_code/week05/5-1/demo/`（订单 fixture、SQLite 行为探针与 11 条完整性测试）。离线实验只用 Python 标准库，真实 pi 委托需另行安装与配置模型。
+
 ## Wisdom (Communities)
 
 - OpenViking 团队同事与导师

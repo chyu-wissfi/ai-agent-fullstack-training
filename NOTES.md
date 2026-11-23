@@ -52,6 +52,7 @@
 | 0020 | Week04 4-4 | RAG：先找到证据，再检查回答 | **2026-11-22 生成**（0020-rag-pipeline.html）；10 题（4 选择 + 6 简述）；Q1–Q2 重测 0019，Q3–Q10 换形式覆盖章复习 Q18–Q27；8 张 SVG；实验①–⑤全部本机实测（gold 探针/runs 精读/RRF 复算/真实 verify/BM25 探针），MiniMax/BGE 实跑标待验证；笔记与 runs 汇总数字漂移已列清单 |
 | 0021 | Week04 4-5 | LLM Wiki：知识资产的来源、更新与权限治理 | **2026-11-22 生成**（0021-llm-wiki.html）；10 题（4 选择 + 6 简述）；Q1–Q2 重测 0020，Q4/Q6/Q7/Q8 换形式覆盖章复习 Q28–Q31；8 张 SVG；纯快照阅读，六实验全部本机实测（diff/哈希/依赖传播/60·30·90/换词检索/权限闸口模拟） |
 | 0022 | Week04 4-6 | 项目四：给 Codebase Agent 装上记忆和检索（结课课） | **2026-11-22 生成**（0022-project4-capstone.html）；**Week04 结课课**；10 题（4 选择 + 6 简述）；Q1–Q2 重测 0021，Q4/Q5 换形式覆盖章复习 Q32/Q33；8 张 SVG；结课专属「已实现/已验证/尚未证明」三分清单 + 33 题全量自测分布表；实验①–⑤必做全部本机实测（npm 基线/记忆 CLI 全链路/rag.python 改造/纯检索/基线 diff 与 Trace 归因），⑥真实 Run 无 key 标可选加餐待验证 |
+| 0023 | Week05 5-1 | Multi-Agent 与 Subagent：该拆才拆，拆了还要管得住 | **2026-11-22 生成**；Week05 第一课；10 题（4 选择 + 6 简述）；Q1–Q2 重测 0022，Q5–Q10 换形式覆盖章复习 Q1–Q8；8 张 SVG；实验①–⑤全部本机实测（11 条基线/真实 SQLite 冲突探针/依赖与并发/隔离与全局预算/实际取消），⑥真实 pi 无 CLI+无 key 标待验证；官方 pi 示例固定 9c465268 核对，新增 reference/multi-agent-subagent.html 速查卡 |
 
 ## 0014 生成记录（2026-11-02）
 
@@ -154,6 +155,23 @@
 - **口径差七条（已写入课件回读指引）**：①project4/README 标题仍写 project3、L22 命令路径错误（实际 project4/v2，笔记行 2427 同口径）；②两份提示词 md 在 project4/ 内（week04 README L45 列法易误导）；③login-flow.md `type: |-` 块标量解析合法但值含换行，index 分裂两组、log 破损 Update——0019「格式≠事实」现成缺陷现场，实验用新 id+副本未修复未污染；④rag/requirements openai==3.24.0 与 llama-index-llms-openai 0.7.10 冲突 ResolutionImpossible，/tmp 放宽清单实装 2.54.0 不改原文件；⑤`python: python` 实测解析到 conda base 3.14.7（不是不存在），失败形态是 RAG_BAD_OUTPUT 非 ENOENT；⑥eval 原稿数字（11999/1424/8057）与教师机路径是那次运行的证据，本机数字单独标注；⑦4-6 storage 是 SimpleVectorStore JSON+pkl 不是 4-4 Milvus Lite，两节存储口径不混。
 - **章复习覆盖进度：Q1–Q33 全部纳入，Week04 六课（0017–0022）全部生成完毕**。结课通过条件四条：重测全对+正题 85%、必做实验①–⑤（⑤A/B 至少一项）、不看稿 2 分钟主链、33 题全量自测。Week05 衔接建议已写入课件（MISSION 追加 Week05 目标口径/环境复用/单 Run 验收→分布级验收），**是否更新 MISSION.md 由用户决定，本课未改动**。
 - 遗留：实验产物 rag/.venv、v2/node_modules、v2/config/platform.exp.yaml、v2/data、project4/.eval-runs 已登记 .git/info/exclude（不改 .gitignore）；/tmp/okf-exp-0022、/tmp/bugfix-lab-0022、/tmp/eval-0022 为练习产物；0017/0018 footer 中 0018/0019 的「待生成」属历史遗留（本次只收口 0020/0021/0022 三处字样），0020/0021 footer 的「即将生成/暂不可达」占位字样已于同日收口清理，两课 footer 六课链接全部生效。
+
+## Week05 材料与节奏（2026-11-22 用户明确进入第五章）
+
+- **第一材料**：`course_code/week05/第五章 学习笔记.md`（覆盖 5-1 至 5-5），术语与验收以笔记为准；教师 PDF `course_materials/week05/5-1.pdf` 至 `5-5.pdf` 与 `course_code/week05/5-ppt/` 的 Markdown PPT 作补充；`course_code/week05/README.md` 为目录总览。
+- **五节主线**：5-1 判断是否分工及运行边界 → 5-2 九项委托契约与结果聚合 → 5-3 Skill 复用与渐进披露 → 5-4 标准对齐、分层评测与版本比较 → 5-5 Skills + 多 Agent 开发 Eval Web 平台。对应主题课 0023–0027，5-5 为结课课。
+- **笔记末尾三块**：①本章总结五条判断（行 2321–2331）；②本章复习 **56 题**（行 2347 起），5-1 为 Q1–Q8（题干行 2349–2365、答案行 2479–2511）；③附录一按问题选源码入口、附录二内容覆盖索引。各课换形式纳入对应复习题，0027 集中收口。
+- **环境口径**：系统 python3=3.9.6，5-1 离线实验纯标准库可跑；本机 `pi` 不在 PATH，DEEPSEEK/MINIMAX/OPENAI/ANTHROPIC key 环境变量均未配置，真实 pi/live 一律标待验证。PPT 的 `pi install npm:pi-subagent-extension` 与笔记的源码 `-e` 是材料给出的不同入口，未验证同名 npm 包，不混写为同一实现。
+- **官方源码核对纪律**：pi 行为以 `earendil-works/pi@9c4652688590abb836b40ebd1e4725ecf9a7c7d1`（2026-11-22 读取）为准；官方示例每个子 Agent 独立 `pi --no-session` 子进程，parallel 最多 8 项/同时 4 项，取消 SIGTERM→5s 后 SIGKILL，child usage 不自动加入父会话 usage。下载源码只读不执行，固定 commit permalink 写入课件与 RESOURCES。
+- MISSION 已按用户「开始第五章」明确指示更新到 Week05，保留全部教学偏好与工程纪律；新增 `reference/multi-agent-subagent.html` 作为后续 5-2/5-5 可复用速查卡。
+
+## 0023 生成记录（2026-11-22，Week05 第一课）
+
+- 0022 分数未报，Q1–Q2 按 0022 两条核心不变量（新能力必须走同一 Runtime 治理链 / 每层回执只覆盖对应证明范围）换形式重测。Q3/Q4 考拆分与真实委托证据；简述 Q5–Q10 合并覆盖章复习 Q1–Q8：Q5=Q1/Q2，Q6=Q3/Q4，Q7=Q5/Q6，Q8=Q7，Q9=Q8，Q10 加练冲突仲裁与 pi 证明边界。4 选择 + 6 简述，选项等长自检通过，答案 C/A/D/B 打散。
+- 精讲主线：该不该拆三问与协调成本 → Multi-Agent/Subagent/并行命令 → 三种收益与单个子任务价值 → Supervisor/Planner-Executor/Reviewer → 依赖 DAG 与冻结快照 → 上下文/工具/权限三层隔离 → 局部/全局预算与取消 unknown → 范围/版本/行为证据仲裁 → pi 独立进程/并发/取消与三处记录 → 面试两分钟主链。8 张 SVG；why 均落取舍，承接 0017 revision、0008/0013 权限与 Sandbox、0014 模型建议程序把关、0022 证明边界。
+- **本机验证（全部离线，系统 Python 3.9.6 标准库）**：① demo 完整性 `python3 -m unittest discover -s tests -v` **11/11 OK**，fixture 根目录既有测试 **1/1 OK**；② probe_orders 真实 SQLite：返回 user_id=[10,20]、small_queries=4、large_queries=7、only_current_user=false、bounded_queries=false——绿色测试与越权/N+1 同时成立；③ DAG 调度 limit=2 peak=2、一次 0.287s，limit=1 peak=1、一次 0.454s，report 都等三专家完成且结果顺序不变（时间只作一次记录）；④ Prompt-only 测试文件被改 true、无 write→TOOL_NOT_GRANTED、越界→PATH_DENIED、子项均≤800 但全局 2200>2000；⑤ 本地 sleep 子进程 SIGTERM returncode=-15、1 秒内退出未升级 SIGKILL、远端请求停止仍 unknown。课件 heredoc 与本次实测一致，写入仅在 /tmp。
+- **材料/实现口径差**：①笔记行 92 的旧文档写 `docs/old.md`，fixture 实际为 `docs/legacy.md`，当前规则仍为 docs/current.md；②PPT npm 安装与笔记源码加载未混同；③官方当前 README 的 parallel 上限、子用量边界和输出上限已写入精讲，不把示例当完整 Harness/Sandbox；④实验③④⑤是教学探针，不宣称验证 pi 本身；⑤fixture 测试须在 fixture 根目录运行，否则 app 包导入失败，已写入实验①。
+- 实验①–⑤必做全部实测，⑥真实 pi parallel 可选待验证；通过条件 Q1–Q2 全对+Q3–Q10≥7/8、实验①–⑤、2 分钟主链、章复习 Q1–Q8。新增速查卡 `reference/multi-agent-subagent.html`，HTML 本地链接/锚点、SVG 数、题型数、JS 语法与选项长度均做静态校验。
 
 ## 0006 测后反馈（2026-09-26，81% / 17-21）
 

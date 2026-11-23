@@ -1,0 +1,9 @@
+# 0018 Week05 第一课：Multi-Agent 与 Subagent——该拆才拆，拆了还要管得住
+
+**Evidence**: 2026-11-22 用户明确开始第五章，生成 `lessons/0023-multi-agent-subagent.html`（5-1，Week05 主题课 1/5）与 `reference/multi-agent-subagent.html` 速查卡；MISSION 已切换到 Week05，RESOURCES/NOTES 同步。第一材料为 `course_code/week05/第五章 学习笔记.md` 5.1（行 75–268）+ 章首学习预期 + 章复习 Q1–Q8（题干行 2349–2365、答案行 2479–2511），辅以 5.1 PPT/PDF 与 `5-1/demo/`。官方 pi 机制固定在 `earendil-works/pi@9c4652688590abb836b40ebd1e4725ecf9a7c7d1`：每项独立 `pi --no-session` 子进程，parallel 最多 8 项/同时 4 项，`mapWithConcurrencyLimit` 按输入下标保留结果顺序，取消 SIGTERM→5 秒未退出再 SIGKILL，child usage 不自动加入父会话 usage。离线实测：demo 完整性 **11/11 OK**、fixture 既有测试 **1/1 OK**；真实 SQLite 探针返回 user_id=[10,20]、SELECT 从 4 增至 7、only_current_user/bounded_queries 均 false；DAG limit 2/1 的 peak 分别 2/1 且 report 均等待三类检查；Prompt-only 文件可改、无 write 工具拒绝、路径穿越拒绝、子项均≤800 但总量 2200>2000；本地子进程 SIGTERM returncode=-15，远端停止仍 unknown。真实 pi 未运行（本机无 pi、无模型 key）。
+
+**Diagnosis**: 0022 分数未报，前 2 题按「治理链不分叉」「每层回执只证明自己的范围」兜底重测。5-1 的主要学习风险不是概念陌生，而是把「多角色界面」误当多 Agent、把「并行」误当委托的必要条件、把「Prompt 只读」误当权限、把「每子项有限额」误当全局预算、把「本地 cancel」误当远端停止，以及把 Reviewer/绿色测试当绝对正确。订单 fixture 是很好的反例：既有测试只测非空，安全探针却证明返回他人订单，两个结论可以同时成立。真实 pi 不可用，因此机制事实只能来自固定版本官方源码，不能写成已在本机验证的委托运行。
+
+**教学决策**: 精讲按「三问与协调成本 → 委托定义和三种收益 → 三种模式 → DAG 与快照 → 三层隔离 → 两本账与取消 → 冲突仲裁 → pi 实现与三处记录」展开，配 8 张 SVG 与面试两分钟主链。测验 10 题=4 选择+6 简述，Q5–Q10 合并覆盖本章复习 Q1–Q8，参考答案列关键得分点。实验①–⑤必做且全部本机实测，③–⑤先写预期再跑；⑥真实 pi parallel 可选待验证。明确教学探针≠pi 验证、工作树≠Sandbox、只读工具清单≠业务验收、源码阅读≠本机真实 Run。材料口径差已写入课件：笔记 `docs/old.md` 对应实际 `docs/legacy.md`；PPT npm 安装与笔记源码 `-e` 不混为同一已验证实现。
+
+**Implications**: Week05 后续应复用本课的不变量：5-2 把「检查哪些对象、交回什么证据」落成九项任务契约，程序注入身份/快照/权限/用量字段，并保留冲突与未完成出口；5-3 的 Skill 不能借材料提示词扩大子任务权限；5-4 将单 Run 的 Trace/Outcome 验收升级为固定题集、多次 Trial、Rubric/Judge 校准与版本比较，和用户的 OpenViking benchmark 工作直接合流；5-5 必须区分「开发时用了多 Agent」与「平台能评测多 Agent」。下一课 0024 前 2 题换形式重测本课「三层隔离由程序落实」「局部合规不等于全局合规」，0023 的实际测验收据待用户完成后补记。
