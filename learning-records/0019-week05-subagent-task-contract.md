@@ -1,0 +1,9 @@
+# 0019 Week05 第二课：Subagent 任务委托——九项契约与证据聚合
+
+**Evidence**: 2026-11-23 用户明确开始第 5 章第 2 节，生成 `lessons/0024-subagent-task-contract.html`（Week05 主题课 2/5）与 `reference/subagent-task-contract.html`。第一材料为 `course_code/week05/第五章 学习笔记.md` 5.2（行 272–517）+ 章复习 Q9–Q17（答案行 2515–2549），辅以 5.2 PPT/PDF 与 `5-2/demo/`。本机系统 Python 3.9.6 实测 demo 完整性 **11/11 OK**、fixture 既有测试 **1/1 OK**；注入样本得到 accepted/rejected/conflicts 各 1、incomplete=[performance]、needs_review=true、semantic=pending；needs_input 与未返回均保留在 incomplete，未知/重复 task_id 抛「任务 ID 未授权或重复」，仅 docs/current.md 变化也触发整份快照失效；真实 SQL 摘录配过度主张仍 accepted=1 且 needs_review=false、semantic=pending，同 key 同 claim 合并 sources，实现/测试两个 key 均保留；真实 SQLite 探针复现 user_id=[10,20]、SELECT 4→7、only_current_user/bounded_queries=false；chain 教学探针中 previous 的「允许写」仍 PERMISSION_DENIED，临时错误/timeout 两次尝试累计 60 教学单位，权限拒绝/needs_input 一次且不重试。真实 pi 未运行（无 CLI 与模型 key）。
+
+**Diagnosis**: 0023 分数未报，0024 前 2 题按「三层隔离由程序落实」「局部合规不等于全局合规」兜底重测。本节最容易发生的误区是：委托工具调用出现就当成任务交清；JSON 合法就当成结果合格；policy_id/limits 字段存在就当成限制生效；字面摘录真实就当成主张成立；accepted 或 needs_review=false 就当成语义放行；没有子任务返回就当成没有发现；previous 只是文本就忽略其注入风险。配套小型聚合器提供了很好的反例，但也必须避免把教学实现夸大为完整系统。
+
+**教学决策**: 精讲沿「九项契约 → 逐项静态覆盖审计 → 模型候选/程序事实 → 五步聚合与五个出口 → 结构/字面/语义三层核验与快照 → 去重和真实行为仲裁 → chain 不扩权 → 失败分类与取消」展开，配 8 张 SVG 与面试两分钟主链。测验 10 题=4 选择+6 简述，Q5–Q10 覆盖章复习 Q9–Q17，参考答案列关键得分点。实验①–⑤必做且全部本机实测，②–⑤先写预期再跑；⑥真实 parallel/chain 可选待验证。明确当前代码边界：expected 固定三类任务；未知/重复 ID 是整批抛错；incomplete 只存 ID；不检查每条结果自报的 snapshot_id/parent_run_id；精确 claim 比较不等于通用语义去重；needs_review 不含语义；policy/limits 不由聚合器执行；教学用量单位不是 Token。
+
+**Implications**: 下一课 0025（5-3 Skill）前 2 题应换形式重测本课「policy_id/limits 必须由程序机制落实」「literal_verified 不等于 semantic_verified」。5-3 要把这次静态审查中可复用的方法整理成 Skill，但当前路径、业务规则、快照与授权仍是每次任务输入；Skill 材料与 previous 一样不能自扩权限。5-5 汇总多专家结果时必须保留 rejected/conflicts/incomplete 与语义待核验，不能只拼 accepted；0023/0024 的实际测验收据待用户完成后补记。

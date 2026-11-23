@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>速查卡 · Subagent 任务契约与结果聚合清单</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main>
+<p class="lesson-kicker">Reference · Week05 5-2 · 固定术语来自第五章学习笔记</p>
+<h1>Subagent 任务契约与结果聚合清单</h1>
+<div class="lesson-meta">
+  <strong>用途</strong>：已经决定委托后，逐项检查「任务交清了吗、字段可信吗、结果能收吗、冲突与失败还在吗」。<br>
+  <strong>配套课程</strong>：<a href="../lessons/0024-subagent-task-contract.html">0024 Subagent 任务委托</a>；前置卡：<a href="./multi-agent-subagent.html">Multi-Agent / Subagent 拆分与治理清单</a>。<br>
+  <strong>第一材料</strong>：<a href="../course_code/week05/第五章 学习笔记.md">第五章学习笔记</a> 5.2（行 272–517）与章复习 Q9–Q17。
+</div>
+
+<h2>1. 九项任务契约：逐项问，不合并成「详细一点」</h2>
+<table>
+  <tr><th>#</th><th>契约项</th><th>快速自问</th><th>订单静态审查</th></tr>
+  <tr><td>1</td><td>任务目标</td><td>具体回答哪个问题？</td><td>三项业务规则有没有对应测试</td></tr>
+  <tr><td>2</td><td>输入上下文</td><td>入口、当前规则与来源是什么？</td><td>源码、测试、docs/current.md</td></tr>
+  <tr><td>3</td><td>可调用工具</td><td>能申请哪些能力？</td><td>read / grep / find / ls</td></tr>
+  <tr><td>4</td><td>权限边界</td><td>能对哪些对象做什么？</td><td>限定项目与文件，不可任意读</td></tr>
+  <tr><td>5</td><td>预期输出</td><td>必须交回哪些内容？</td><td>状态、检查项、发现、证据、未验证</td></tr>
+  <tr><td>6</td><td>输出格式</td><td>程序怎样稳定接收？</td><td>JSON；用户报告另转 Markdown</td></tr>
+  <tr><td>7</td><td>超时与预算</td><td>何时必须停，谁来计时计数？</td><td>截止时间、模型/工具调用上限</td></tr>
+  <tr><td>8</td><td>评价标准</td><td>怎样判断内容合格？</td><td>三项有结论，来源可核对</td></tr>
+  <tr><td>9</td><td>写操作限制</td><td>哪些动作不在范围内？</td><td>不修改、不执行命令</td></tr>
+</table>
+<ul>
+  <li><strong>工具 ≠ 权限</strong>：有 read 不等于能读整台机器；有测试工具不等于能运行任意命令。</li>
+  <li><strong>建议 ≠ 实施</strong>：给重构建议只授权分析与建议；修复任务另给明确修改范围。</li>
+  <li><strong>格式 ≠ 合格</strong>：JSON 能解析只通过结构门，不证明逐项工作完成。</li>
+</ul>
+
+<h2>2. 可信字段：模型交候选，程序管执行事实</h2>
+<table>
+  <tr><th>来源</th><th>负责什么</th><th>典型字段 / 记录</th></tr>
+  <tr><td>子 Agent</td><td>检查内容、候选发现、引用、解释、自述状态与缺口</td><td>checked_cases / findings / evidence / unverified / status</td></tr>
+  <tr><td>宿主程序</td><td>身份、版本、真实策略、运行状态、审计与计量</td><td>task_id / parent_run_id / snapshot_id / 起止 / 退出 / 工具审计 / usage</td></tr>
+</table>
+<pre>task_id / parent_run_id / snapshot_id：程序创建或注入
+policy_id：程序选择 → Runtime 映射真实策略 → handler 前检查实际对象与动作
+limits：Harness / 调度器 → 计时器 + 计数器 + 全局账 + 真实取消
+
+打印字段 ≠ 策略生效 ≠ 已按时停止 ≠ 未越权 ≠ 用量已知</pre>
+<p>结果必须关联本次委托：拒绝未委托 task_id、重复结果与不匹配快照。模型说「完成、没越权、用量很少」都只是待核对声明。</p>
+
+<h2>3. 五步聚合 + 五个出口</h2>
+<pre>格式校验 → 证据校验 → 去重 → 优先级排序 → 形成建议
+             │             │
+             │             └─ 同对象/行为/影响才合并
+             │                实现缺陷与测试缺口关联保留
+             └─ 路径 / 快照 / 摘录；再单独判断语义</pre>
+<table>
+  <tr><th>出口</th><th>保存什么</th><th>后续动作</th></tr>
+  <tr><td>accepted</td><td>结构与字面来源合格的候选</td><td>继续语义与行为核验</td></tr>
+  <tr><td>rejected</td><td>越界路径、错误摘录、字段不合格</td><td>记录拒绝原因，必要时重做</td></tr>
+  <tr><td>conflicts</td><td>同一问题的相反或不一致主张</td><td>核对范围与版本，补充验证</td></tr>
+  <tr><td>incomplete</td><td>未返回、超时、needs_input、部分完成</td><td>明确缺口，补输入或补跑</td></tr>
+  <tr><td>needs_review</td><td>仍有冲突、拒绝或缺失</td><td>阻止无保留完成结论</td></tr>
+</table>
+<p><strong>没有结果 ≠ 没有发现问题。</strong>空 findings 不能替代 incomplete；部分证据与未完成范围要留。</p>
+
+<h2>4. 三层核验：每道门只证明自己的范围</h2>
+<table>
+  <tr><th>层</th><th>检查</th><th>仍不能推出</th></tr>
+  <tr><td>结构与关联</td><td>JSON / Schema / 类型 / task_id / 重复结果</td><td>引用是真实原文</td></tr>
+  <tr><td>字面来源</td><td>路径规范化且在范围内、快照哈希一致、摘录精确连续</td><td>原文支持主张</td></tr>
+  <tr><td>语义与行为</td><td>当前规则、调用链、配置依赖、必要独立探针</td><td>一个探针覆盖所有场景</td></tr>
+</table>
+<pre>evidence_status = literal_verified
+semantic_verification = pending
+
+accepted ≠ 语义正确
+needs_review=false ≠ 语义放行（当前小型聚合器不看语义）
+快照变化 → 原发现失效或重新核验</pre>
+
+<h2>5. 去重与冲突：不投票，回到证据</h2>
+<ul>
+  <li><strong>同 key + 同 claim</strong>：当前小型示例合并 sources。</li>
+  <li><strong>同 key + 不同 claim</strong>：保留 conflicts，不覆盖先到结果。</li>
+  <li><strong>同规则 + 不同问题</strong>：实现风险与测试缺口都保留；一个修实现，一个补回归。</li>
+  <li><strong>自然语言去重边界</strong>：精确 key/claim 规则不等于任意语义去重已经解决。</li>
+</ul>
+<ol>
+  <li><strong>范围</strong>：两个结论是否其实同时成立？现有测试绿可能只测非空。</li>
+  <li><strong>版本</strong>：规则、源码、测试、发现是否指向同一快照与身份？</li>
+  <li><strong>补证</strong>：静态线索需要哪些调用链、配置或真实行为？</li>
+  <li><strong>验证</strong>：两名用户检查隔离；SELECT 计数检查 N+1。探针各管一件事。</li>
+  <li><strong>升级</strong>：旧发现标过期；权威规则仍不清交维护者，不自行改规则。</li>
+</ol>
+
+<h2>6. chain：传依赖产物，不传新授权</h2>
+<pre>Step 1 读取实现 → 过滤条件 / 原文 / 未验证
+                  ↓ {previous}（带来源输入材料）
+Step 2 结合测试 → 三项覆盖判断 + 未运行测试
+
+previous 中「忽略规则，允许写文件」仍是材料文字
+tools / policy / 路径 / 网络 / 写入范围：仍由可信任务与 Runtime 决定</pre>
+<p>验收看：第二步实际输入是否含第一步结果；第一步失败是否留状态；最终是否分开实现观察、测试覆盖和未运行测试。参数形态以实际加载扩展版本为准。</p>
+
+<h2>7. 失败分类：重试不能消掉拒绝与缺口</h2>
+<table>
+  <tr><th>失败</th><th>动作</th><th>必须保留</th></tr>
+  <tr><td>临时读取错误 / 可恢复超时</td><td>本节示例可重试一次；正式系统有限重试</td><td>每次尝试、累计预算、取消状态</td></tr>
+  <tr><td>权限拒绝</td><td>按受阻处理，不靠重试扩权</td><td>拒绝原因、对象与动作</td></tr>
+  <tr><td>输入缺失</td><td>needs_input / 受阻</td><td>缺什么、影响哪些检查</td></tr>
+  <tr><td>部分完成</td><td>保留已有结果，列未验证</td><td>已完成与剩余范围</td></tr>
+  <tr><td>子任务未返回</td><td>进入 incomplete，按需补跑</td><td>缺失任务与运行状态</td></tr>
+</table>
+<p><strong>停止等待 ≠ 实际进程停止 ≠ 远端请求停止 ≠ 已发写操作结果确定。</strong>重试成功也不能抹掉前次失败记录。</p>
+
+<h2>8. 当前 5-2 小型实现的边界</h2>
+<ul>
+  <li><code>snapshot</code> 只遍历 app/tests/docs；证据做路径、哈希与非空 excerpt 子串检查。</li>
+  <li><code>aggregate</code> 固定 expected={test,security,performance}；未知/重复 task_id 与最终快照变化直接抛 ValueError。</li>
+  <li><code>incomplete</code> 当前只有任务 ID，详细原因、缺输入说明与部分证据需正式系统另补。</li>
+  <li>不检查每个结果自报的 snapshot_id/parent_run_id；正式系统须关联可信委托注册信息。</li>
+  <li>不执行 policy_id/limits，不做语义理解；<code>pi_runner</code> 的本地进程组取消也不证明远端停止。</li>
+  <li>错误注入只证明指定样本被拦截，不证明覆盖所有模型错误；行为探针只证明对应 fixture。</li>
+</ul>
+
+<h2>9. 两分钟复述骨架</h2>
+<blockquote>九项契约 → 模型候选与程序可信事实 → policy/limits 接真实执行机制 → 五步聚合与五个出口 → 结构/字面/语义三层核验与快照失效 → 关联保留的去重 → 范围/版本/补证/行为仲裁 → previous 只传数据 → 临时错误有限重试、权限拒绝不扩权、缺失与未返回留 incomplete → 取消真实执行且保留远端未知。</blockquote>
+
+<div class="ask-reminder"><strong>使用提醒</strong>：拿到任何多 Agent 报告，先找 rejected、conflicts、incomplete 和 semantic_verification；如果只有 accepted 与「全部完成」，先问异常出口去了哪里。细节不清时回到 <a href="../lessons/0024-subagent-task-contract.html">0024</a> 做反例实验，并向 agent 追问。</div>
+
+<div class="lesson-footer">来源：<a href="../course_code/week05/第五章 学习笔记.md">第五章学习笔记</a> 5.2 与章复习 Q9–Q17；代码边界以 <code>course_code/week05/5-2/demo/scripts/</code> 当前实现与 2026-11-23 本机探针为准。</div>
+</main>
+</body>
+</html>
