@@ -66,6 +66,16 @@
 - [5.2 教师 PPT（Markdown）](./course_code/week05/5-ppt/5.2%20PPT.md) + [5-2.pdf](./course_materials/week05/5-2.pdf)
   九项任务契约、模型与程序可信字段分工、五步聚合、冲突仲裁、chain 与失败分类的补充材料。第一材料仍是学习笔记 5.2（行 272–517）及章复习 Q9–Q17。
 - 课程代码：`course_code/week05/5-2/demo/`（2026-11-23 核对）。`delegation.py` / `common.py` 实现任务关联、字面证据、冲突/未完成出口与快照失效；`inject_demo.py` 主动构造错误样本；`probe_orders.py` 用真实 SQLite 行为补证。小型聚合器不执行权限/预算、不做语义判断，`incomplete` 当前只存任务 ID，不能外推为完整委托平台。
+- [5.3 教师 PPT（Markdown）](./course_code/week05/5-ppt/5.3%20PPT%20.md) + [5-3.pdf](./course_materials/week05/5-3.pdf)
+  Skill 能力包、显式/自动加载、渐进披露、三层权限、四类验证、五步编写与 Skills-as-Code 的补充材料。第一材料仍是学习笔记 5.3（行 521–851）及章复习 Q18–Q27；PPT 中社区项目作者身份、热度与安装命令不作为已验证事实。
+- 课程代码：`course_code/week05/5-3/project/` + `course_code/week05/5-2/demo/scripts/`（2026-11-24 核对）。前者只有订单目标工程；`setup_demo.py` 实际生成 v1/v2 简化 SKILL.md 与 output.md，不含笔记示例 check_orders.py。`skill_manifest.py` 做整包哈希与符号链接拒绝；`skill_selection.py` 的 read/SKILL.md 判定不核对目标路径、不识别显式展开或 bash；`probe_orders.py` 上限硬编码 2；`graders.py` 是固定课程规则。真实 pi 加载本机未运行。
+- [5.4 教师 PPT（Markdown）](./course_code/week05/5-ppt/5.4%20PPT/5.4%20PPT.md) + [5-4.pdf](./course_materials/week05/5-4.pdf)
+  完整系统与四层验收、业务指标、人工对齐与 Judge 校准、两种 Harness、Trace 归因、多次 Trial、五步测试设计和双闭环的补充材料。第一材料仍是学习笔记 5.4（行 855–1738）及章复习 Q28–Q44；PPT 中教学数字不自动视为本机实测成绩。
+- 课程代码：`course_code/week05/5-4/eval_lab.zip`（2026-11-24 解压核对，库存预占评测实验包）。Python 3.10+ 标准库；真实运行另需 Node 22+ 与固定 pi 1.2.0，`--offline` 不禁止模型 API。Task/Trial/Trace/Outcome 以 JSON、run 目录和 JSONL 表达，执行字段是 `run_status`；release gate 分 accept/reject/pending。`forbidden_paths` 当前未接入硬编码 boundary_check，证据包非签名/防篡改，也不是 OS Sandbox；CLI 比较 n=k，无置信区间。step_11 只生成 designed_not_executed，影子重放不是线上 A/B。包内 README 的无 live 声明与后续归档 pi_live 材料需按时间/证据边界理解；历史比较不作为本机复现。解压使用独立空目录，不覆盖仓库快照；真实 pi/live Judge 本机未运行。
+- [pi 官方 Skill 发现与目录格式 skills.ts（固定版本）](https://github.com/earendil-works/pi/blob/9c4652688590abb836b40ebd1e4725ecf9a7c7d1/packages/coding-agent/src/core/skills.ts)
+  `loadSkillFromFile` 与 `formatSkillsForPrompt`：程序读取解析、保存名称/描述/路径等字段，模型目录含名称/描述/位置，disable-model-invocation 只过滤自动目录；只读源码核对，不代替实际运行证据。
+- [pi 官方显式 Skill 展开 agent-session.ts（固定版本）](https://github.com/earendil-works/pi/blob/9c4652688590abb836b40ebd1e4725ecf9a7c7d1/packages/coding-agent/src/core/agent-session.ts#L2309-L2338)
+  `_expandSkillCommand` 读取正文、去 frontmatter、附 baseDir 与参数展开；固定版按第一个普通空格拆名称和参数，仓库多行 skill-explicit.txt 不应直接当作已验证显式调用。
 - [Week05 README](./course_code/week05/README.md)
   五个小节与各代码目录的总览；5-1/5-2 共用订单审查案例，5-4 使用 eval_lab.zip，5-5 使用 EvalLab。
 - [pi 官方 Subagent 示例 README（固定版本）](https://github.com/earendil-works/pi/blob/9c4652688590abb836b40ebd1e4725ecf9a7c7d1/packages/coding-agent/examples/extensions/subagent/README.md)

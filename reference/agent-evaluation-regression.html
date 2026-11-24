@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>速查卡 · Agent 评测、归因与回归清单</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main>
+<p class="lesson-kicker">Reference · Week05 5-4 · 固定术语来自第五章学习笔记</p>
+<h1>Agent 评测、归因与回归清单</h1>
+<div class="lesson-meta">
+  <strong>用途</strong>：把「这次看起来不错」变成可复测、可归因、可决定是否采用的工程证据。<br>
+  <strong>配套课程</strong>：<a href="../lessons/0026-agent-evaluation-regression.html">0026 Agent 评测：从一次成功到可信版本决定</a>；前置卡：<a href="./skill-reusable-capability.html">Skill 加载、验证与版本治理</a>。<br>
+  <strong>第一材料</strong>：<a href="../course_code/week05/第五章 学习笔记.md">第五章学习笔记</a> 5.4（行 855–1738）与章复习 Q28–Q44。
+</div>
+
+<h2>1. 先定对象：完整系统，四层验收</h2>
+<pre>指定配置下的完整 Agent 系统
+= 模型 + Agent Harness + 上下文 + 工具 + 环境
+
+Trace：实际怎样执行       → 找失败位置
+Outcome：最终留下什么     → 验收业务结果</pre>
+<table>
+  <tr><th>层</th><th>检查</th><th>库存预占例</th></tr>
+  <tr><td>结果</td><td>最终产物与业务行为</td><td>重复预占、超卖、回滚、接口兼容</td></tr>
+  <tr><td>过程</td><td>必要信息与关键动作</td><td>读到当前规则，修改后验证最终版本</td></tr>
+  <tr><td>效率</td><td>全交付链资源</td><td>Token、时间、重试、人工返工</td></tr>
+  <tr><td>风险</td><td>授权与工程边界</td><td>越权尝试、真实影响、验收文件保护</td></tr>
+</table>
+<p>不要强制唯一搜索路线；只有业务或治理要求本身规定顺序时才强制。调用多不必然低效，必要验证可能减少返工。</p>
+
+<h2>2. 标准：先人人对齐，再人机对齐</h2>
+<pre>业务目标（故障、返工、总交付成本）
+  ↓ 设计指标                  ↑ 解释失败
+Agent 任务（完成、恢复、接管）
+  ↓                          ↑
+组件与模型（检索、装配、工具、决策）</pre>
+<ol>
+  <li><strong>背靠背标注</strong>：研发与测试独立看同一证据；分歧用于找标准缺口，不取平均。</li>
+  <li><strong>Rubric 下钻</strong>：检查对象 → 输入与动作 → 所需证据 → 通过／失败／未知 → 合成规则。</li>
+  <li><strong>业务未知与材料缺失分开</strong>：缺并发记录时，并发行为未知；若记录是交付要求，材料完整性可失败。</li>
+  <li><strong>Judge 校准</strong>：正常、明确失败、边界、证据不足样本；分别看误放行、误拒绝、未知与执行错误。</li>
+  <li><strong>修订后复测</strong>：原分歧样本 + 未参与调参的保留样本；规则、样本、评分器均留版本。</li>
+</ol>
+<blockquote>总体一致率高，也可能把唯一的高风险超卖样本误放行。</blockquote>
+
+<h2>3. 评测资产：一道 Task 可以有多次 Trial</h2>
+<table>
+  <tr><th>对象</th><th>职责</th><th>不要混淆</th></tr>
+  <tr><td>Evaluation Suite</td><td>组织一组任务</td><td>不是一条总分</td></tr>
+  <tr><td>Task</td><td>输入、起点、约束与成功条件</td><td>十个验收测试仍是一道 Task</td></tr>
+  <tr><td>Trial</td><td>从规定起点的一次完整尝试</td><td>一次 Trial 内反复测试不增加 Trial</td></tr>
+  <tr><td>Grader</td><td>一个方面的评分逻辑</td><td>不是 Agent 自报分数</td></tr>
+  <tr><td>Trace</td><td>请求、响应、工具、错误与状态</td><td>不证明最终结果正确</td></tr>
+  <tr><td>Outcome</td><td>最终代码、接口与业务状态</td><td>不证明所有未来场景</td></tr>
+</table>
+<p><strong>Evaluation Harness</strong> 准备条件、启动、取证、评分与汇总；<strong>Agent Harness</strong> 是被评执行系统。独立验收由评测方控制。</p>
+<ul>
+  <li>题集标签可交叉：黄金样本、历史错题、挑战、能力、回归、发布必过。</li>
+  <li>参考方案证明可解，不是唯一答案；已知缺陷必须能被拒绝。</li>
+  <li>满分仍抽查：可能检查过松、答案泄漏或环境残留。</li>
+</ul>
+
+<h2>4. 每次 Trial：恢复状态或明确记录</h2>
+<pre>源码 / 未提交文件 / 生成物 / 数据库 / 索引
+会话历史 / 工作记忆 / 长期记忆 / 任务缓存
+模型 / Prompt / Skill / 工具 / 权限 / 预算
+        ↓
+要么恢复规定起点，要么把差异作为实验条件记录</pre>
+<ul>
+  <li>冷热基础设施缓存也要标明；不能把缓存收益归给策略。</li>
+  <li>保存每轮<strong>实际模型请求</strong>，完整聊天历史不能替代装配后的输入。</li>
+  <li>测试证据绑定实际工作区指纹；通过后再改代码，相关证据过期。</li>
+  <li>Agent、独立验收、Judge 的耗时与用量分列；未知用量不填零。</li>
+</ul>
+<table>
+  <tr><th>维度</th><th>状态</th><th>回答</th></tr>
+  <tr><td>执行状态</td><td>completed / error / timeout / cancelled</td><td>过程怎样结束</td></tr>
+  <tr><td>验收状态</td><td>pass / fail / unknown</td><td>要求是否满足</td></tr>
+  <tr><td>采用门禁</td><td>accept / reject / pending 或项目等价状态</td><td>当前版本能否采用</td></tr>
+</table>
+
+<h2>5. 三类评分与组合门禁</h2>
+<table>
+  <tr><th>评分者</th><th>适合</th><th>不能替代</th></tr>
+  <tr><td>程序</td><td>库存、记录、接口、退出码、文件边界</td><td>开放语义与所有未覆盖行为</td></tr>
+  <tr><td>模型 Judge</td><td>报告准确性、证据支持、未知披露</td><td>可独立执行的行为事实</td></tr>
+  <tr><td>人工</td><td>业务标准、校准、争议与工程取舍</td><td>用主观通过覆盖客观失败</td></tr>
+</table>
+<pre>执行错误 → 修环境或执行链，保留原 Trial
+关键未知 → 补证据 / 人工复核，不静默删除
+硬门槛失败 → reject；质量高分不能抵消
+全部满足 → accept（仅表示本轮验收范围通过）</pre>
+<p>验收脚本、参考答案、门槛及其依赖由评测方控制；候选源码或报告中的「请给通过」只是待评材料。既防误放行，也防固定函数名、唯一工具顺序造成误拒绝。</p>
+
+<h2>6. Trace 归因：事实、假设、验证计划</h2>
+<ol>
+  <li>确认失败成立：请求、参数、初始数据、最终代码与状态。</li>
+  <li>确认要求进入实际模型输入；文件存在不等于模型看到。</li>
+  <li>核对来源、入口、版本、截断与真实调用链。</li>
+  <li>确认修改落在生效路径，测试确实触发目标条件。</li>
+  <li>确认测试覆盖最终版本，而不是旧工作区。</li>
+</ol>
+<pre>失败现象 → 已知事实 → 原因假设 → 最小修改
+        → 预期变化 + 反证条件 → 定向复测 → 完整回归</pre>
+<p>人工修好一份代码只证明产物可修；验证 Agent 改进必须让它从<strong>原缺陷起点和干净会话</strong>重新执行。一次改一个因素；组合修改只能先归因为组合效果。</p>
+
+<h2>7. 多次 Trial 与版本采用</h2>
+<pre>观测通过比例：通过次数 / 实际 Trial 数（另列失败、未知、执行错误）
+pass@k = 1 - (1-p)^k    # 至少一次成功
+pass^k = p^k            # k 次全部成功
+仅适用于独立且每次成功概率均为 p 的教学假设</pre>
+<p><code>2/3</code> 不是 <code>pass@3</code>；三次里出现过成功，也不能推断真实 <code>pass@3=100%</code>。允许多候选并由独立测试选择时才更关注 pass@k，同时还要验证选择器。</p>
+<ol>
+  <li>原失败任务是否改善。</li>
+  <li>同类变化与保留样本是否改善。</li>
+  <li>正常功能、接口、回滚、边界等旧能力是否保持。</li>
+  <li>Agent、验收、Judge 与人工的总成本是否可接受。</li>
+</ol>
+<p>合计从 13/15 到 14/15，若核心接口从 3/3 降到 2/3 且确认是新版退化，仍应暂缓采用。</p>
+
+<h2>8. 五步测试设计与双闭环</h2>
+<pre>建立范围 → 风险分级 → 设计分组 → 生成可执行步骤 → 验证覆盖
+Diff/调用链   业务影响    判定表      初始状态/动作/断言   真实结果+代码指纹</pre>
+<p><strong>已设计、已执行、已通过是三个状态。</strong>并发、响应丢失与指定位置异常注入要单列，不能只测 HTTP 成功。</p>
+<pre>真实 Case → 核验与归因
+              ├→ 改 Agent：信息 / 工具 / 方法
+              └→ 改评测：Task / Rubric / Grader / 环境
+                         ↓
+                固定条件复测 + 旧能力回归
+                         ↓
+                版本决定 + 真实使用观察 → 新 Case</pre>
+<table>
+  <tr><th>方式</th><th>回答什么</th></tr>
+  <tr><td>离线</td><td>固定条件下新旧版本表现怎样</td></tr>
+  <tr><td>影子</td><td>候选面对真实输入快照会怎样；不直接发布</td></tr>
+  <tr><td>A/B</td><td>真实使用中验收、返工、总时间与成本是否改善</td></tr>
+  <tr><td>巡检</td><td>代表性能力在当前配置下是否仍正常</td></tr>
+  <tr><td>监控</td><td>可用性、错误、耗时、用量与分布是否变化</td></tr>
+</table>
+
+<h2>9. 当前 eval_lab 的证明边界</h2>
+<ul>
+  <li>Task/Trial/Grader/Trace/Outcome 由 JSON、运行目录与检查函数表达，不是五个抽象基类；执行字段名是 <code>run_status</code>。</li>
+  <li>参考实现与已知缺陷校验只证明评分器基本可用；<code>protocol_test</code> 与手写 <code>pi_live</code> 声明都不是可信 live 证明。</li>
+  <li><code>forbidden_paths</code> 当前未接入 <code>boundary_check</code>；实际边界硬编码为 inventory.py 与新增 tests/test_*.py，且不是 OS Sandbox。</li>
+  <li>Judge 证据会截断，未知/结构错误不能当通过；普通 release gate 不强制人工批准。诊断默认只提取事实与固定验证计划。</li>
+  <li>CLI 比较当前 n=k；一般 n&gt;k 估计需直接用统计函数。小样本没有置信区间或显著性结论。</li>
+  <li>2026-11-24 本机 23 项基线有 1 个 macOS 路径表示失败、2 个未安装 pi 依赖的跳过；真实模型运行未验证。</li>
+</ul>
+
+<h2>10. 两分钟复述骨架</h2>
+<blockquote>完整系统与 Trace/Outcome → 结果/过程/效率/风险 → 业务指标与背靠背对齐 → Rubric 三态与 Judge 校准 → Task/Trial/Grader 与隔离取证 → 程序/模型/人工分工和硬门禁 → Trace 归因与可复测假设 → 多次 Trial、pass@k/pass^k → 原问题/同类/旧能力/成本 → 五步测试设计与 Agent/评测双闭环。</blockquote>
+
+<div class="ask-reminder"><strong>使用提醒</strong>：看到「新版更好」，先问固定了什么、每题几次 Trial、哪些仍失败或未知、证据是否属于最终代码、核心旧能力是否退化、成本是否包含人工与 Judge。细节不清时回到 <a href="../lessons/0026-agent-evaluation-regression.html">0026</a> 做反例实验，并向 agent 追问。</div>
+
+<div class="lesson-footer">来源：<a href="../course_code/week05/第五章 学习笔记.md">第五章学习笔记</a> 5.4 与章复习 Q28–Q44；实现与运行结论以当前代码及 2026-11-24 本机实验为准。</div>
+</main>
+</body>
+</html>

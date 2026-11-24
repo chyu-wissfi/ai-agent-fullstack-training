@@ -54,6 +54,8 @@
 | 0022 | Week04 4-6 | 项目四：给 Codebase Agent 装上记忆和检索（结课课） | **2026-11-22 生成**（0022-project4-capstone.html）；**Week04 结课课**；10 题（4 选择 + 6 简述）；Q1–Q2 重测 0021，Q4/Q5 换形式覆盖章复习 Q32/Q33；8 张 SVG；结课专属「已实现/已验证/尚未证明」三分清单 + 33 题全量自测分布表；实验①–⑤必做全部本机实测（npm 基线/记忆 CLI 全链路/rag.python 改造/纯检索/基线 diff 与 Trace 归因），⑥真实 Run 无 key 标可选加餐待验证 |
 | 0023 | Week05 5-1 | Multi-Agent 与 Subagent：该拆才拆，拆了还要管得住 | **2026-11-22 生成**；Week05 第一课；10 题（4 选择 + 6 简述）；Q1–Q2 重测 0022，Q5–Q10 换形式覆盖章复习 Q1–Q8；8 张 SVG；实验①–⑤全部本机实测（11 条基线/真实 SQLite 冲突探针/依赖与并发/隔离与全局预算/实际取消），⑥真实 pi 无 CLI+无 key 标待验证；官方 pi 示例固定 9c465268 核对，新增 reference/multi-agent-subagent.html 速查卡 |
 | 0024 | Week05 5-2 | Subagent 任务委托：九项契约与证据聚合 | **2026-11-23 生成**；10 题（4 选择 + 6 简述）；Q1–Q2 重测 0023，Q5–Q10 换形式覆盖章复习 Q9–Q17；8 张 SVG；实验①–⑤全部本机实测（11+1 基线/错误注入/未知与重复 ID+快照/字面语义与去重+行为探针/chain 与重试账），⑥真实 pi 待验证；新增 reference/subagent-task-contract.html；明确 accepted≠语义通过、needs_review=false 不含语义、incomplete 只有 ID 等实现边界 |
+| 0025 | Week05 5-3 | Skill：把经验变成可复用能力 | **2026-11-24 生成**；10 题（4 选择 + 6 简述）；Q1–Q2 重测 0024，Q3–Q10 换形式覆盖章复习 Q18–Q27；8 张 SVG；实验①–⑤全部本机实测（11+1 基线/规则与硬编码探针/Trace 误报漏报/包指纹/报告诚实性），⑥真实 pi 待验证；新增 reference/skill-reusable-capability.html；明确目录≠正文、exited≠pass、版本字段≠实际生效及选择检测器等实现边界 |
+| 0026 | Week05 5-4 | Agent 评测：从一次成功到可信版本决定 | **2026-11-24 生成**；10 题（4 选择 + 6 简述）；Q1–Q2 重测 0025，Q3–Q10 换形式覆盖章复习 Q28–Q44；9 张 SVG；实验①–⑤全部本机实测（评分器正反对照/历史校准离线审计+组合估计/门禁矩阵/字段接线+Trace/Case+影子），⑥真实 pi/Judge 待验证；新增 reference/agent-evaluation-regression.html；本地基线 1 个 macOS 路径失败、2 个 pi 依赖跳过，明确 forbidden_paths 未接线、CLI n=k 与历史材料边界 |
 
 ## 0014 生成记录（2026-11-02）
 
@@ -182,7 +184,27 @@
 - **实现边界（已写入精讲第 8 节与回读提醒）**：当前聚合器 expected 固定 test/security/performance；未知/重复 ID 直接 ValueError；incomplete 只有任务 ID，不存失败原因/缺输入/部分证据；不检查每个结果自报的 snapshot_id/parent_run_id；needs_review 只由 conflicts/rejected/incomplete 推出，不含语义；精确 claim 比较不是通用语义去重；snapshot 只覆盖 app/tests/docs；policy/limits 不是聚合器执行。pi_runner 本地进程组 SIGTERM→3 秒 SIGKILL 不等于完整模型预算、远端取消或全局 Token 账。
 - 实验①–⑤必做全部实测，⑥真实 pi parallel/chain 可选待验证；真实运行命令先读 setup/pi_runner，角色同名拒绝覆盖，但中途失败可能已有部分角色写入，课件已提示。通过条件 Q1–Q2 全对+Q3–Q10≥7/8、实验①–⑤、2 分钟主链、章复习 Q9–Q17。下一课 0025 前 2 题建议重测「字段存在≠限制生效」「字面核验≠语义成立」。
 
+## 0025 生成记录（2026-11-24，Week05 第三课）
+
+- 0024 分数未报，Q1–Q2 按 0024 两条核心不变量（policy_id/limits 字段必须接程序执行机制 / literal_verified 不等于语义与行为成立）换形式兜底重测。Q3 考显式展开 Trace，Q4 考 disable-model-invocation 非权限；简述 Q5–Q10 覆盖章复习 Q18–Q27：Q5=Q18/Q19，Q6=Q20–Q22，Q7=Q24/Q25，Q8=Q26+权限，Q9=Q27，Q10 综合两分钟主链与对照验收。4 选择+6 简述，选项均 12 字，答案 B/D/C/A 打散。
+- 精讲主线按笔记 5.3：一次经验为何复用 → 五对象分工 → 能力包与稳定方法/当前现场 → 先显式后干净会话自动选择 → 磁盘/程序对象/模型输入三状态与预算 → Skill/Runtime/Sandbox 三层权限 → 正/负/缺输入/执行失败 × 选对/做对/说对 → 五步提炼与 Skills-as-Code → 代码边界与面试主链。8 张 SVG；新增 `reference/skill-reusable-capability.html`。
+- **本机验证（全部离线，Python 3.9.6 标准库）**：demo 完整性 **11/11 OK**、setup 生成 fixture **1/1 OK**（须在 fixture 根目录跑）；v1/v2 只有 SKILL.md+references/output.md，包哈希前缀 d2d41062/3ee2ffbb；真实 SQLite 返回含 user_id=20、SELECT 4→7、only_current_user/bounded_queries=false；副本 current.md 上限 2→9 后 bounded_queries 仍 false，证实 probe 固定 <=2 且不读 docs；合成 Trace 的显式无 read/bash 均漏报，其他 SKILL.md 也误算 did_select，pending 无 completed 且保留 unfinished_tool_calls；只改版本号或正文均改变包指纹，符号链接拒绝；honest static 报告通过，冒充 tested、非法 JSON、process_error 均拒绝。课件 heredoc 与实测一致，写入只在 /tmp。
+- **材料/实现边界（已写入精讲第 8 节与回读提醒）**：5-3/project 只有目标工程；笔记完整 check_orders.py 不在 setup 产物；skill_manifest 整包哈希≠pi_runner 的 SKILL.md 单文件哈希，项目 snapshot 不含 .pi/skills；选择检测不比较规范化目标路径、不识别显式/bash，未显式断言干净会话，也不做完整做对/说对；probe/grader 是固定课程规则，不是通用规则引擎或语义 Judge；历史 _smoke 正例/缺输入漏选、task_success=null，仅作历史材料；pi_runner 无 CLI 不生成替代回答。
+- 固定 pi `9c465268...` 的 skills.ts 与 agent-session.ts 已只读核对：目录只输出名称/描述/位置，显式去 frontmatter 并附 baseDir/参数展开，disable-model-invocation 只过滤自动目录。仓库 `prompts/skill-explicit.txt` 在命令后换行，而固定版按第一个普通空格拆名称/参数，静态模拟名称不匹配；可选实验改用 /tmp 单行 prompt，不把该静态问题写成 live 失败。真实 pi 仍未运行（无 CLI/模型 key）。
+- 实验①–⑤必做全部实测，⑥真实 pi 显式/自动可选待验证；通过条件 Q1–Q2 全对+Q3–Q10≥7/8、实验①–⑤、2 分钟主链、章复习 Q18–Q27。静态校验：99 个本地链接/锚点无错误、8 SVG、4 选择+6 简述、四道选项均 12 字、node --check OK、git diff --check OK、未改 course_code/course_materials。下一课 0026 前 2 题建议重测「目录发现/Skill 加载≠正文进入并正确执行」「exited/completed≠业务 pass」。
+
+## 0026 生成记录（2026-11-24，Week05 第四课）
+
+- 0025 分数未报，Q1–Q2 按「目录发现/Skill 加载不等于正文进入并正确执行」「exited/completed 不等于业务 pass」换形式兜底重测。Q3 考 Judge 高风险误放行，Q4 考 pass@k/pass^k；简述 Q5–Q10 覆盖章复习 Q28–Q44：Q5=Q28/Q29，Q6=Q30–Q32，Q7=Q33–Q37，Q8=Q38/Q39，Q9=Q40/Q41，Q10=Q42–Q44。4 选择+6 简述，四道选项均 12 字，答案 B/C/B/B。
+- 精讲主线按笔记 5.4：完整系统与结果/过程/效率/风险 → 业务指标与人人/人机对齐 → Rubric 三态 → Task/Trial/Grader/题集 → 两种 Harness/状态隔离/运行包 → 程序/Judge/人工与硬门禁 → Trace 事实/假设/验证 → 多次 Trial/四层修复/采用 → 五步测试与 Agent/评测双闭环。9 张 SVG；新增 `reference/agent-evaluation-regression.html`。
+- **本机验证（全部离线，写入只在 /tmp 解压副本）**：系统 Python 3.9.6 不满足包要求，使用 agentloop Python 3.12.14；缺陷工程 smoke **1/1 OK**；Task 校验 valid=true，参考实现八项全 pass，已知缺陷 duplicate/conflict/rollback 全 fail，duplicate 库存 6/记录 2。validate_local **23 项、1 failure、2 skipped**，不是全绿：shadow 测试在 macOS 比较 /var 与 /private/var 原始路径而失败，最小复现连续两次 2ms 红；探针证实 resolved_equal/samefile=true、原 run 未改，两个跳过因未 npm ci。
+- 归档校准仅离线审阅：vague 10/12，missing_evidence 的人工 unknown 被判 fail；clear 12/12 且保留两个 unknown。统计直接调用 summarize：n=4、两过、k=2 得 pass@2=5/6、pass^2=1/6；有 unknown 则估计 null；n=k=3 只表示该组 any/all。合成门禁 accept/reject/pending 矩阵与 stale 证据均符合源码；手写的 pi_live accept 只验分支，不冒充真实运行。
+- **实现边界（已写入精讲第 9 节与速查卡）**：Task 的 forbidden_paths 必填但 boundary_check 不读，改为禁止 inventory.py 后修改仍 pass；实际允许范围硬编码 inventory.py+新增 tests/test_*.py。source=pi_live 是 JSON 声明，证据哈希非签名，教学边界非 OS Sandbox；Judge 证据字段 24000 编码字符截断，普通门禁无强制人工批准；diagnose 默认事实+固定计划，--llm 才加引用证据的假设；step_11 只 designed_not_executed；CLI compare n=k 且无置信区间。
+- **材料/历史口径**：README 声明制作时无真实供应商 E2E，后续目录又有 pi_live/校准/比较归档，全部作为未由本课复现的历史材料；两份历史比较 v2 分别 2/3+1 unknown/hold 与 3/3/accept，不写新版必胜。真实 pi/live Judge 无 CLI、无 key，未运行；pi --offline 只关闭启动更新等活动，不禁止模型 API。
+- 实验①–⑤必做全部实测（评分器正反基线/归档校准+组合统计/门禁矩阵/字段接线+诊断/Case 准入+影子路径），⑥真实 pi/Judge/比较可选待验证；通过条件 Q1–Q2 全对+Q3–Q10≥7/8、实验①–⑤、2 分钟主链、章复习 Q28–Q44。静态校验：0023–0026 与新速查卡共 **122 个本地链接/锚点无错误**；本课 9 SVG、4 选择+6 简述、选项均 12 字、6 个 Python heredoc 可编译、inline JS `node --check` 通过、`git diff --check` 通过；未修改 course_code/course_materials。下一课 0027 前 2 题建议重测「completed≠pass 且人工不覆盖程序失败」「总分改善≠可采用」。
+
 ## 0006 测后反馈（2026-09-26，81% / 17-21）
+
 
 已讲透、待换形式重测（用户明确要求：不造新概念名词，全部用课程/笔记原词；已给出时间线画面和对比表讲解）：
 

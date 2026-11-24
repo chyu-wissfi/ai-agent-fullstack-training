@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>速查卡 · Skill 加载、验证与版本治理清单</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main>
+<p class="lesson-kicker">Reference · Week05 5-3 · 固定术语来自第五章学习笔记</p>
+<h1>Skill 加载、验证与版本治理清单</h1>
+<div class="lesson-meta">
+  <strong>用途</strong>：把一次成功方法沉淀为能力包时，快速检查「该复用什么、正文怎样进入输入、谁能执行、怎样证明有效」。<br>
+  <strong>配套课程</strong>：<a href="../lessons/0025-skill-reusable-capability.html">0025 Skill：把经验变成可复用能力</a>；前置卡：<a href="./subagent-task-contract.html">Subagent 任务契约与结果聚合</a>。<br>
+  <strong>第一材料</strong>：<a href="../course_code/week05/第五章 学习笔记.md">第五章学习笔记</a> 5.3（行 521–851）与章复习 Q18–Q27。
+</div>
+
+<h2>1. 五个对象：谁来做、怎样做、做什么动作</h2>
+<table>
+  <tr><th>对象</th><th>职责</th><th>不能推出</th></tr>
+  <tr><td>Tool</td><td>读、搜、运行等具体动作</td><td>知道完整审查方法</td></tr>
+  <tr><td>Prompt</td><td>表达本次目标、规则与限制</td><td>天然拥有发现、加载与版本机制</td></tr>
+  <tr><td>Skill</td><td>保存稳定方法、材料、边界与验收</td><td>自动执行、自动创建会话或扩权</td></tr>
+  <tr><td>Agent</td><td>按当前观察选择方法并处理结果</td><td>每次选择稳定正确</td></tr>
+  <tr><td>Subagent</td><td>独立执行受委托子任务</td><td>必须使用 Skill</td></tr>
+</table>
+<pre>主 Agent → 任务契约委托 Subagent
+              ├─ 当前目标 / 路径 / 规则 / 权限
+              └─ 加载 Skill 方法包
+                    └─ 通过受治理 Tool 获取证据</pre>
+
+<h2>2. 能力包：稳定方法与当前现场分开</h2>
+<pre>.pi/skills/order-list-review/
+├── SKILL.md                 # name / description / 方法 / 边界 / 验收
+├── references/...           # 报告模板与按需材料
+└── scripts/...              # 确定性检查，先独立验证接口</pre>
+<table>
+  <tr><th>写入 Skill</th><th>每次任务重新提供</th></tr>
+  <tr><td>确认入口、核对规则、分项检查、保留证据</td><td>当前源码与测试入口、代码版本</td></tr>
+  <tr><td>静态与运行分开、失败如实报告</td><td>当前业务规则及权威来源</td></tr>
+  <tr><td>报告字段与未知项要求</td><td>允许动作、预算、输出格式</td></tr>
+</table>
+<ul>
+  <li><code>description</code> 帮助选择；正文指导执行；模板填满不等于事实正确。</li>
+  <li>业务路径按项目根目录；Skill 的 references/scripts 按 <code>baseDir</code>。</li>
+  <li>「检查查询次数」是方法；「本项目最多 2 次」是本次规则。</li>
+  <li><code>metadata.version</code> 是声明，不自动形成发布或实际生效证明。</li>
+</ul>
+
+<h2>3. 两种加载入口与三种事实状态</h2>
+<table>
+  <tr><th>入口</th><th>谁决定读取正文</th><th>正文怎样进入模型输入</th><th>主要证据</th></tr>
+  <tr><td>显式 /skill:name</td><td>用户指定，宿主展开</td><td>本轮展开输入</td><td>实际请求、诊断；可无 read 记录</td></tr>
+  <tr><td>自动选择</td><td>模型按目录判断</td><td>文件读取工具结果</td><td>干净会话 + 目标正文读取 Trace</td></tr>
+</table>
+<pre>磁盘读取（可能读全文解析）
+  ≠ 程序对象保存全文
+  ≠ 本轮模型请求包含全文
+
+目录：name / description / location
+正文：显式展开 或 自动读取
+材料：按当前步骤继续读取；全部仍计输入预算</pre>
+<ul>
+  <li>先显式测通加载，再用干净会话测自动选择；旧正文会污染自动选择判断。</li>
+  <li>渐进披露减少无关输入，也增加漏选、漏读与多层定位失败。</li>
+  <li>目录过长可宿主筛选或检索，但要评测漏选、误选与实际成本。</li>
+</ul>
+
+<h2>4. 三层权限：方法文字不是授权</h2>
+<table>
+  <tr><th>层</th><th>负责</th><th>快速检查</th></tr>
+  <tr><td>Skill / Prompt</td><td>方法、范围与边界提醒</td><td>是否把静态/运行、建议/修改分开</td></tr>
+  <tr><td>宿主与工具治理</td><td>对象、动作、身份、批准、路径、命令、预算</td><td>handler 前是否真实检查并留审计</td></tr>
+  <tr><td>Sandbox</td><td>进程实际可访问的文件、网络与资源</td><td>挂载、用户、网络与资源限制是否有效</td></tr>
+</table>
+<ul>
+  <li>源码注释、工具输出和参考资料里的「允许」仍是材料数据。</li>
+  <li>允许一个脚本 ≠ 允许安装、修改、外发或连接生产。</li>
+  <li><code>disable-model-invocation</code> 只控制自动目录可见性，不是 ACL。</li>
+  <li>本地/远程不是风险判据；看对象、动作与影响。</li>
+</ul>
+
+<h2>5. 四类任务 × 三道验收门</h2>
+<table>
+  <tr><th>类型</th><th>预期</th><th>主要证据</th></tr>
+  <tr><td>正例</td><td>该选时选中，逐项执行并取证</td><td>目标正文 + 必要工具 + 正确报告</td></tr>
+  <tr><td>负例</td><td>不该选时不误用</td><td>无目标加载，任务仍正确完成</td></tr>
+  <tr><td>缺输入</td><td>查权威规则，仍缺则保留未知</td><td>缺什么、影响哪些检查</td></tr>
+  <tr><td>执行失败</td><td>如实受阻，不伪造、不扩权</td><td>错误、退出码、未完成范围</td></tr>
+</table>
+<pre>选对：显式看展开输入；自动看规范化目标路径 + 正文/指纹
+做对：当前规则与源码是否读取；必要动作是否实际成功
+说对：结论不超过证据；静态 / 运行 / 未知分开</pre>
+<p>每类用干净会话，保存任务、配置、版本、Trace 和报告。进程 <code>exited</code>、任务 <code>completed</code>、业务 <code>pass</code> 分开。无/有 Skill 对照要固定模型、项目、任务、权限和预算，比较发现、遗漏、误报、耗时与输入量，不看报告长度。</p>
+
+<h2>6. 五步提炼法</h2>
+<ol>
+  <li>找反复出现、易漏规则、需统一输出或共享工具的任务。</li>
+  <li>稳定方法写入 Skill；当前路径、规则、版本与权限由任务提供。</li>
+  <li>把提醒写成<strong>条件 → 动作 → 证据 → 判断</strong>。</li>
+  <li>确定事实交给脚本，报告组织交给模板；区分业务失败与执行错误。</li>
+  <li>漏选改描述/目录，漏做改步骤，夸大改证据边界；重跑四类与旧能力。</li>
+</ol>
+<blockquote>性能：发现循环逐单查询 → 记录查询方式 → 允许时统计 SELECT → 与当前上限比较。<br>幂等：同一业务编号与参数重复提交 → 核对最终状态、有效记录数与响应契约。</blockquote>
+
+<h2>7. Skills-as-Code：版本闭环</h2>
+<pre>领域 Owner / maintainers
+  → PR + Review
+  → CI：正例 / 负例 / 缺输入 / 执行失败
+  → 确定版本发布并接真实入口
+  → 运行记录：实际版本或包指纹 + 实际请求 + Trace + 结果
+  → 对照、回归、失败回流</pre>
+<p><strong>文件更新 ≠ 旧会话更新 ≠ 平台 worker 加载 ≠ 效果更好。</strong>包指纹证明内容，不证明评审、权限、加载与业务收益。先用种子团队验证高价值痛点，再推广。</p>
+
+<h2>8. 当前课程代码的证明边界</h2>
+<ul>
+  <li><code>setup_demo.py</code> 生成 v1/v2 简化 SKILL.md 与 output.md；没有笔记示例的 check_orders.py，也不自动安装到项目 .pi/skills。</li>
+  <li><code>skill_manifest.py</code> 哈希整包并拒绝符号链接；<code>pi_runner.py</code> 只记录 SKILL.md 哈希，项目 snapshot 只覆盖 app/tests/docs。</li>
+  <li><code>probe_orders.py</code> 上限固定 <=2，不读 docs；grader 也是课程固定规则，不是通用语义 Judge。</li>
+  <li><code>read_skill_paths</code> 只认已完成 read 且路径含 SKILL.md：显式/bash/pending 会漏，其他 Skill 会误算目标命中。</li>
+  <li>历史 _smoke 的正例/缺输入均漏选、task_success=null；不是本机 live 结果，exited 也不等于任务通过。</li>
+  <li>固定 pi 源码只读核对，真实 pi 与模型运行本机未验证。</li>
+</ul>
+
+<h2>9. 两分钟复述骨架</h2>
+<blockquote>五个对象 → 稳定方法与当前现场 → 元数据/正文/材料 → 先显式后干净会话自动选择 → 磁盘/对象/模型输入三状态与预算 → Skill、Runtime、Sandbox 三层边界 → 正/负/缺输入/失败 × 选对/做对/说对 → 五步提炼 → Owner/PR/CI/发布/运行指纹/回归。</blockquote>
+
+<div class="ask-reminder"><strong>使用提醒</strong>：看到「Skill 已生效」，先问实际请求里有没有正文、后续动作是否发生、报告是否超过证据、运行记录保存了哪个版本。细节不清时回到 <a href="../lessons/0025-skill-reusable-capability.html">0025</a> 做反例实验，并向 agent 追问。</div>
+
+<div class="lesson-footer">来源：<a href="../course_code/week05/第五章 学习笔记.md">第五章学习笔记</a> 5.3 与章复习 Q18–Q27；代码边界以当前实现、固定 pi 源码与 2026-11-24 本机离线探针为准。</div>
+</main>
+</body>
+</html>

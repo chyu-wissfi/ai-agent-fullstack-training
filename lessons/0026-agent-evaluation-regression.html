@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Week05 主题课 4/5 · Agent 评测：从一次成功到可信版本决定</title>
+<link rel="stylesheet" href="../assets/course.css">
+<script src="../assets/quiz.js"></script>
+</head>
+<body>
+<main>
+
+<p class="lesson-kicker">Week 05 · 主题课 4 / 5 · 覆盖课程小节 5-4 · 版式：先讲后测，精讲与测验五五开</p>
+<h1>Agent 评测——从一次成功到可信版本决定</h1>
+
+<div class="lesson-meta">
+  <strong>本课定位</strong>：Week05 第四课。0023–0025 解决「怎样分工、怎样委托、怎样复用方法」；本课回答<strong>怎样证明这些改动稳定改善了完整 Agent 系统，而不是只让一次演示或一份报告更好看</strong>。主线是：<strong>完整系统与四层验收 → 人工标准与 Rubric → Task/Trial/Grader → 隔离运行与完整证据 → 程序/Judge/人工分工 → Trace 归因 → 多次 Trial 与版本门禁 → 失败回流双闭环</strong>。<br>
+  <strong>材料定位</strong>：<a href="../course_code/week05/第五章 学习笔记.md"><code>第五章 学习笔记.md</code></a> 5.4 节（行 855–1738，<strong>本课第一材料</strong>）+ 本章复习 Q28–Q44（题干行 2409–2443，答案行 2593–2673）+ 教师 PPT <a href="../course_code/week05/5-ppt/5.4 PPT/5.4 PPT.md"><code>5.4 PPT.md</code></a> 与 PDF <a href="../course_materials/week05/5-4.pdf"><code>5-4.pdf</code></a>。<br>
+  <strong>代码定位</strong>：<a href="../course_code/week05/5-4/eval_lab.zip"><code>5-4/eval_lab.zip</code></a>，库存预占评测实验包。实验只解压到独立 <code>/tmp</code> 目录；真实 pi 与 live Judge 需要额外环境，本机未运行。<br>
+  <strong>预计用时</strong>：精讲 50 分钟 + 测验 25 分钟 + 第二层实验 50 分钟<br>
+  <strong>本课验收标准</strong>（笔记行 1730–1738）：能从结果、过程、效率、风险四层验收完整系统；能设计带证据的 Rubric 并校准 Judge；能区分 Task、Trial、Grader、Trace、Outcome 与两种 Harness；能固定环境并保存完整运行包；能分开执行错误、业务失败与未知；能沿 Trace 归因并用多次 Trial、原问题/同类/旧能力/成本四层验证形成具体版本建议；能解释五步测试设计与失败 Case 双闭环。
+</div>
+
+<h2>怎么用这一课</h2>
+<p><strong>先讲后测，五五开</strong>：第一部分沿库存预占重构走完一条评测与版本决策链；第二部分 10 题 = <strong>4 选择 + 6 简述</strong>。Q1–Q2 换形式重测 0025 的「发现/加载不等于正文正确执行」「exited/completed 不等于业务 pass」；Q3–Q10 换形式覆盖本章复习 Q28–Q44。</p>
+<p><strong>三层定位</strong>：第一层能默画评测对象、两类 Harness、三种评分者和双闭环；第二层在 <code>/tmp</code> 副本跑实验①–⑤，改造前<strong>先写预期再运行</strong>；第三层持续追问「这个分数由什么证据支持」「新旧版本是否同条件」「关键未知去了哪里」「总分会不会掩盖核心退化」。真实 pi/live 实验为可选加餐，不计入必做。</p>
+<p class="sidenote">就业面试视角：高质量回答不是「写测试再算准确率」，而是<strong>把业务标准变成独立可执行验收，把每次运行的条件与证据保存下来，再用分布、回归和成本决定是否采用</strong>。这正好连接 OpenViking benchmark：单条检索命中只是组件事实，最终还要回到固定题集、端到端任务、失败归因与新旧后端同条件比较。</p>
+
+<nav class="toc">
+<strong>本课目录</strong>
+<ul>
+  <li><a href="#sec0">0. 开篇：一次做好不等于稳定变好</a></li>
+  <li><a href="#sec1">1. 评测对象：完整系统与四层验收</a></li>
+  <li><a href="#sec2">2. 标准：先人人对齐，再人机对齐</a></li>
+  <li><a href="#sec3">3. 资产：Task、Trial、Grader 与题集</a></li>
+  <li><a href="#sec4">4. 运行：两种 Harness、隔离与证据包</a></li>
+  <li><a href="#sec5">5. 评分：程序、Judge、人工与门禁</a></li>
+  <li><a href="#sec6">6. 归因：从失败项回到原始证据</a></li>
+  <li><a href="#sec7">7. 比较：多次 Trial、回归与采用</a></li>
+  <li><a href="#sec8">8. 日常研发：五步测试与双闭环</a></li>
+  <li><a href="#sec9">9. 代码解剖：本课实际证明什么</a></li>
+  <li><a href="#sec10">10. 面试视角：两分钟主链</a></li>
+  <li><a href="#part2">第二部分：检索式测验（10 题）</a></li>
+  <li><a href="#part3">第三部分：第二层实验</a></li>
+</ul>
+</nav>
+
+<hr>
+
+<h2>第一部分：精讲（先读，测验在后）</h2>
+
+<h3 id="sec0">0. 开篇：一次做好不等于稳定变好</h3>
+<p>Agent 在库存重构后报告「已经增加幂等判断，测试全部通过」。这句话最多是一个<strong>待核验主张</strong>。如果初始库存 10，同一业务编号、相同商品和数量各预占 2，连续提交两次后库存却变成 6、有效预占记录有 2 条，业务结果就明确失败；报告再完整也不能抵消（笔记行 879–895）。</p>
+<p>即便这次真的修好了，也只能说明<strong>这一份最终产物在这个验证范围内通过</strong>。要证明新版 Agent 更值得采用，还要从原始缺陷工程、新会话和相同配置重新运行，观察同一任务多次 Trial、同类变化和旧能力回归。</p>
+
+<figure class="diagram" id="fig1">
+<svg viewBox="0 0 760 360" role="img" aria-label="从一次报告到可信版本决定">
+  <defs><marker id="e1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">「感觉变好」要经过五次证据转换</text>
+  <rect class="dg-node-warn" x="25" y="62" width="120" height="72" rx="7"/>
+  <text class="dg-label" x="85" y="91" text-anchor="middle">一次报告</text>
+  <text class="dg-soft" x="85" y="117" text-anchor="middle">自称修复</text>
+  <path class="dg-arrow-warn" d="M145 98 L175 98" marker-end="url(#e1)"/>
+  <rect class="dg-node" x="175" y="62" width="120" height="72" rx="7"/>
+  <text class="dg-label" x="235" y="91" text-anchor="middle">独立验收</text>
+  <text class="dg-soft" x="235" y="117" text-anchor="middle">产物与行为</text>
+  <path class="dg-arrow" d="M295 98 L325 98" marker-end="url(#e1)"/>
+  <rect class="dg-node" x="325" y="62" width="120" height="72" rx="7"/>
+  <text class="dg-label" x="385" y="91" text-anchor="middle">多次 Trial</text>
+  <text class="dg-soft" x="385" y="117" text-anchor="middle">稳定与未知</text>
+  <path class="dg-arrow" d="M445 98 L475 98" marker-end="url(#e1)"/>
+  <rect class="dg-node" x="475" y="62" width="120" height="72" rx="7"/>
+  <text class="dg-label" x="535" y="91" text-anchor="middle">同条件比较</text>
+  <text class="dg-soft" x="535" y="117" text-anchor="middle">改善与退化</text>
+  <path class="dg-arrow" d="M595 98 L625 98" marker-end="url(#e1)"/>
+  <rect class="dg-node-ok" x="625" y="62" width="110" height="72" rx="7"/>
+  <text class="dg-label" x="680" y="91" text-anchor="middle">版本决定</text>
+  <text class="dg-soft" x="680" y="117" text-anchor="middle">采用或暂缓</text>
+  <rect class="dg-zone" x="75" y="190" width="610" height="112" rx="8"/>
+  <text class="dg-label" x="380" y="220" text-anchor="middle">每一步都要保留自己的证据</text>
+  <text class="dg-soft" x="380" y="248" text-anchor="middle">任务与 Rubric · 实际请求与工具 · 最终代码与状态</text>
+  <text class="dg-soft" x="380" y="275" text-anchor="middle">逐次结果 · 失败/未知/执行错误 · 资源与人工返工</text>
+  <text class="dg-faint" x="380" y="338" text-anchor="middle">任何一步缺失，都只能缩小结论，不能用下一层的流畅报告补回来</text>
+</svg>
+<figcaption>图 1 · 本课的有形成果不是一个总分，而是一份能解释「比较了什么、改善与退化在哪里、为什么采用或暂缓」的版本建议。</figcaption>
+</figure>
+
+<div class="why-box"><strong>为什么不能把「验收一次任务」和「比较 Agent 版本」混为一谈？</strong>前者只需判断这份交付是否满足当前要求；后者还要控制模型、Prompt、Skill、工具、环境、题目与评分标准，并观察波动和旧能力。后者多出环境隔离、重复 Trial 和统计解释的成本，但没有这些成本，就只能得到一次演示，不能得到稳定改进的证据。</div>
+
+<h3 id="sec1">1. 评测对象：完整系统与四层验收</h3>
+<p>本课评的是<strong>指定配置下的完整执行系统</strong>：模型根据输入决定动作，Agent Harness 组织上下文与 Loop，工具真正读写和运行，环境提供代码、数据、依赖与资源。缺少并发验证，既可能是模型遗漏，也可能是规则没进入实际请求、执行权限不足或数据库没启动（笔记行 894–911）。</p>
+
+<figure class="diagram" id="fig2">
+<svg viewBox="0 0 760 405" role="img" aria-label="完整 Agent 系统与结果过程效率风险四层">
+  <defs><marker id="e2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">同一个失败，可能来自不同层；同一次运行，要看四种证据</text>
+  <rect class="dg-zone" x="28" y="50" width="704" height="120" rx="8"/>
+  <rect class="dg-node-accent" x="52" y="86" width="105" height="52" rx="6"/>
+  <text class="dg-label" x="104" y="117" text-anchor="middle">模型</text>
+  <rect class="dg-node-accent" x="178" y="86" width="120" height="52" rx="6"/>
+  <text class="dg-label" x="238" y="117" text-anchor="middle">Agent Harness</text>
+  <rect class="dg-node" x="319" y="86" width="105" height="52" rx="6"/>
+  <text class="dg-label" x="371" y="117" text-anchor="middle">上下文</text>
+  <rect class="dg-node" x="445" y="86" width="105" height="52" rx="6"/>
+  <text class="dg-label" x="497" y="117" text-anchor="middle">工具</text>
+  <rect class="dg-node" x="571" y="86" width="105" height="52" rx="6"/>
+  <text class="dg-label" x="623" y="117" text-anchor="middle">环境</text>
+  <path class="dg-arrow-accent" d="M380 170 L380 205" marker-end="url(#e2)"/>
+  <rect class="dg-node-ok" x="45" y="205" width="155" height="70" rx="6"/>
+  <text class="dg-label" x="122" y="235" text-anchor="middle">结果</text>
+  <text class="dg-soft" x="122" y="260" text-anchor="middle">代码 / 状态 / 接口</text>
+  <rect class="dg-node" x="218" y="205" width="155" height="70" rx="6"/>
+  <text class="dg-label" x="295" y="235" text-anchor="middle">过程</text>
+  <text class="dg-soft" x="295" y="260" text-anchor="middle">必要信息 / 关键动作</text>
+  <rect class="dg-node" x="391" y="205" width="155" height="70" rx="6"/>
+  <text class="dg-label" x="468" y="235" text-anchor="middle">效率</text>
+  <text class="dg-soft" x="468" y="260" text-anchor="middle">时间 / Token / 返工</text>
+  <rect class="dg-node-warn" x="564" y="205" width="155" height="70" rx="6"/>
+  <text class="dg-label" x="641" y="235" text-anchor="middle">风险</text>
+  <text class="dg-soft" x="641" y="260" text-anchor="middle">尝试 / 影响 / 边界</text>
+  <rect class="dg-node-muted" x="120" y="320" width="520" height="52" rx="6"/>
+  <text class="dg-soft" x="380" y="351" text-anchor="middle">Trace 解释怎样走到这里；Outcome 核对最后留下什么</text>
+</svg>
+<figcaption>图 2 · 结果层负责最终验收，过程层帮助解释，效率与风险决定是否值得采用；四层不能由一个「回答正确」代替。</figcaption>
+</figure>
+
+<table>
+  <tr><th>材料</th><th>能证明</th><th>不能单独证明</th></tr>
+  <tr><td>Trace</td><td>模型收到什么、调用了什么、工具实际返回什么</td><td>最终服务一定满足业务规则</td></tr>
+  <tr><td>Outcome</td><td>最终代码、库存、预占记录与接口行为</td><td>所有未来场景都可靠</td></tr>
+</table>
+<p>Trace 出现「运行测试」，先证明发起了调用；还要看真实执行、测试内容、退出状态与当时代码指纹。先测通过后把实现改坏，旧测试记录不能验收最终文件。<strong>越权尝试被拦截也保留两条事实</strong>：Agent 有越权尝试，治理机制成功阻止实际影响。</p>
+<div class="why-box"><strong>为什么过程验收不能强制唯一搜索路线？</strong>先读规则再定位代码、先找入口再回读规则都可能有效；强制唯一顺序会误拒绝合理实现，也让 Agent 学会表演路径。只强制业务或治理本身要求的顺序，例如审批先于执行；其余检查必要信息、关键动作和证据是否充分。</div>
+
+<h3 id="sec2">2. 标准：先人人对齐，再人机对齐</h3>
+<h4>2.1 指标从业务目标往下设计，失败从证据往上解释</h4>
+<p>业务层关心故障、人工返工与总交付时间；Agent 任务层关心能否稳定完成、恢复和准确接管；组件层用检索、装配、工具参数等事实解释任务表现。Agent 十分钟生成代码，工程师再花两小时补测和修接口，不能只报「生成提速」（笔记行 927–941）。</p>
+<p>旧规则被召回，只支持检索层判断；当前规则找到却没进请求，要查装配；进入请求却未使用，再看后续决策。<strong>组件指标是定位线索，不自动成为端到端业务收益。</strong></p>
+
+<h4>2.2 背靠背标注：分歧是标准缺口，不是噪声</h4>
+<p>先把同一份 Diff、请求、数据库状态和测试材料交给研发与测试独立判断。若库存只扣一次但重复请求返回服务器错误，研发可能说通过，测试可能说失败。不要平均；拆成「业务效果是否重复」与「重复请求响应是否符合契约」，分别判定，再把统一规则写回 Rubric（笔记行 943–963）。</p>
+<p>本教学案例约定：同编号同参数只能一次有效预占；同编号不同参数按接口契约拒绝；不同编号是不同请求。真实项目必须由业务与研发确认，不能把课程约定当普遍业务事实。</p>
+
+<figure class="diagram" id="fig3">
+<svg viewBox="0 0 760 425" role="img" aria-label="人工标准到 Rubric 再到 Judge 校准">
+  <defs><marker id="e3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">先统一人的判断，再校准机器；分歧回到规则和证据</text>
+  <rect class="dg-node-accent" x="35" y="55" width="165" height="70" rx="7"/>
+  <text class="dg-label" x="117" y="84" text-anchor="middle">业务与工程专家</text>
+  <text class="dg-soft" x="117" y="110" text-anchor="middle">范围 / 风险 / 隐含场景</text>
+  <path class="dg-arrow-accent" d="M200 90 L240 90" marker-end="url(#e3)"/>
+  <rect class="dg-node" x="240" y="55" width="165" height="70" rx="7"/>
+  <text class="dg-label" x="322" y="84" text-anchor="middle">背靠背标注</text>
+  <text class="dg-soft" x="322" y="110" text-anchor="middle">独立判断 / 暴露分歧</text>
+  <path class="dg-arrow" d="M405 90 L445 90" marker-end="url(#e3)"/>
+  <rect class="dg-node" x="445" y="55" width="165" height="70" rx="7"/>
+  <text class="dg-label" x="527" y="84" text-anchor="middle">Rubric 下钻</text>
+  <text class="dg-soft" x="527" y="110" text-anchor="middle">动作 / 证据 / 三态</text>
+  <path class="dg-arrow" d="M610 90 L650 90" marker-end="url(#e3)"/>
+  <rect class="dg-node" x="650" y="55" width="80" height="70" rx="7"/>
+  <text class="dg-label" x="690" y="84" text-anchor="middle">Judge</text>
+  <text class="dg-soft" x="690" y="110" text-anchor="middle">辅助评分</text>
+  <rect class="dg-zone" x="55" y="180" width="650" height="145" rx="8"/>
+  <text class="dg-label" x="380" y="209" text-anchor="middle">校准不只看总体一致率</text>
+  <rect class="dg-node-warn" x="90" y="232" width="170" height="58" rx="6"/>
+  <text class="dg-soft" x="175" y="257" text-anchor="middle">误放行：不合格却通过</text>
+  <text class="dg-faint" x="175" y="278" text-anchor="middle">优先看高风险失败</text>
+  <rect class="dg-node" x="295" y="232" width="170" height="58" rx="6"/>
+  <text class="dg-soft" x="380" y="257" text-anchor="middle">误拒绝：合格却被拒绝</text>
+  <text class="dg-faint" x="380" y="278" text-anchor="middle">检查是否过严</text>
+  <rect class="dg-node-muted" x="500" y="232" width="170" height="58" rx="6"/>
+  <text class="dg-soft" x="585" y="257" text-anchor="middle">未知：缺证据不猜通过</text>
+  <text class="dg-faint" x="585" y="278" text-anchor="middle">保留原因与动作</text>
+  <path class="dg-arrow" d="M380 325 L380 360 L175 360 L175 325" marker-end="url(#e3)"/>
+  <text class="dg-faint" x="380" y="390" text-anchor="middle">标准含糊 → 修 Rubric；证据不足 → 补取证；前两者明确后才调 Judge</text>
+</svg>
+<figcaption>图 3 · 人人一致或人机一致仍可能共同漏掉业务规则，所以还要真实故障、保留样本和专家复核。</figcaption>
+</figure>
+
+<h4>2.3 Rubric 三态：未知不能被静默消灭</h4>
+<p>把「重构质量高」拆成正常预占、相同请求重试、编号参数冲突、不同请求、并发竞争、异常回滚、接口兼容与修改边界。每项写清<strong>输入与动作、必须核对的结果、证据来源、通过/失败/未知和整体合成规则</strong>（笔记行 965–998）。</p>
+<table>
+  <tr><th>情况</th><th>「并发行为正确」</th><th>「必要材料齐全」</th></tr>
+  <tr><td>有证据证明满足</td><td>通过</td><td>通过</td></tr>
+  <tr><td>有证据证明违反</td><td>失败</td><td>失败</td></tr>
+  <tr><td>缺并发记录</td><td><strong>未知</strong></td><td>若记录是交付要求，则<strong>失败</strong></td></tr>
+</table>
+<p>只查「没有负库存」不够，还要核对成功承诺总量；只查「不超卖」也不够，拒绝全部请求会满足前者却破坏正常服务。<strong>既检查不该发生的事，也检查应当正常发生的事。</strong></p>
+<div class="why-box"><strong>为什么不把所有质量都强行二元化？</strong>库存数量、记录和退出码适合确定判断；维护性、方案取舍仍有语义维度。强行二元会减少主观漂移，却可能把复杂质量变成无意义打勾。课程选择「核心事实尽量明确，开放质量保留分维度与人工判断」，代价是仍需校准和复核。</div>
+
+<h3 id="sec3">3. 资产：Task、Trial、Grader 与题集</h3>
+<p>第一批任务从发布前人工检查、历史故障、Agent 真实失败与高质量完成样本开始。优先高频与高风险；20–50 个失败相关任务只是冷启动参考，不是门槛。同一道题换十种措辞，不自动增加十种业务风险覆盖（笔记行 1024–1043）。</p>
+<p>一道合格 Task 至少有：稳定 ID/版本/来源/负责人、任务说明、初始工程、必要上下文、操作约束、成功条件、评分配置、参考与反例、用途标签。<strong>交给 Agent 的部分必须包含目标、规则和边界；评测端另存初始数据、参考方案、独立检查与初始化方法。</strong>隐藏函数名或隐藏报告字段不能突然成为强制条件。</p>
+
+<figure class="diagram" id="fig4">
+<svg viewBox="0 0 760 400" role="img" aria-label="Task Trial Grader Trace Outcome 的关系">
+  <defs><marker id="e4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">任务、尝试、执行记录、实际结果与评分逻辑各管一件事</text>
+  <rect class="dg-node-accent" x="35" y="58" width="150" height="88" rx="7"/>
+  <text class="dg-label" x="110" y="87" text-anchor="middle">Task</text>
+  <text class="dg-soft" x="110" y="113" text-anchor="middle">输入 / 起点 / 约束</text>
+  <text class="dg-soft" x="110" y="135" text-anchor="middle">成功条件</text>
+  <path class="dg-arrow-accent" d="M185 102 L240 102" marker-end="url(#e4)"/>
+  <rect class="dg-node" x="240" y="58" width="150" height="88" rx="7"/>
+  <text class="dg-label" x="315" y="87" text-anchor="middle">Trial 1…k</text>
+  <text class="dg-soft" x="315" y="113" text-anchor="middle">每次从规定起点</text>
+  <text class="dg-soft" x="315" y="135" text-anchor="middle">独立运行一次</text>
+  <path class="dg-arrow" d="M390 102 L445 102" marker-end="url(#e4)"/>
+  <rect class="dg-node" x="445" y="45" width="260" height="52" rx="6"/>
+  <text class="dg-soft" x="575" y="76" text-anchor="middle">Trace：实际输入 / 响应 / 工具 / 错误</text>
+  <rect class="dg-node-ok" x="445" y="112" width="260" height="52" rx="6"/>
+  <text class="dg-soft" x="575" y="143" text-anchor="middle">Outcome：最终代码 / 状态 / 接口</text>
+  <path class="dg-arrow" d="M315 146 L315 210 L575 210 L575 164" marker-end="url(#e4)"/>
+  <rect class="dg-node-accent" x="155" y="240" width="450" height="70" rx="7"/>
+  <text class="dg-label" x="380" y="268" text-anchor="middle">多个 Grader 按各自证据评分</text>
+  <text class="dg-soft" x="380" y="294" text-anchor="middle">行为 / 接口 / 文件边界 / 说明质量 / 用量</text>
+  <path class="dg-arrow-accent" d="M575 164 L575 210 L605 210 L605 240" marker-end="url(#e4)"/>
+  <text class="dg-faint" x="380" y="355" text-anchor="middle">同一 Task 可多次 Trial；一次 Trial 可多个 Grader；十次测试仍是一道 Task</text>
+</svg>
+<figcaption>图 4 · Trial 的边界是「从规定起点的一次完整任务尝试」，不是模型调用数、工具重试数或测试数。</figcaption>
+</figure>
+
+<p>题集标签是<strong>可交叉维度</strong>：重复预占题可以同时是历史错题、能力题、黄金样本与发布必过项；修复稳定后再成为持续回归项。未修复问题先进入候选池，不能等修好才保存；也不能伪装成稳定通过的回归项。满分仍要抽查评分器是否过松、答案是否泄漏、环境是否残留。</p>
+<div class="why-box"><strong>为什么参考方案和已知缺陷都要先跑？</strong>正确实现通过，说明题目可解、环境和评分器基本可用；目标缺陷失败，说明检查确实能抓住问题。只做前者，可能出现「谁都能过」的空评分器；只做后者，可能把有效方案也全部错拒。两者仍不证明真实 Agent 得分。</div>
+
+<h3 id="sec4">4. 运行：两种 Harness、隔离与证据包</h3>
+<p><strong>Agent Harness 负责做任务，Evaluation Harness 负责规定条件、启动、取证、验收与汇总。</strong>两者可复用基础设施，但独立验收不能由被评 Agent 修改。一次 Trial 应从规定缺陷工程、新会话和初始数据开始；第二次要恢复起点，而不是把上次修改和答案留给下一次（笔记行 1125–1169）。</p>
+
+<figure class="diagram" id="fig5">
+<svg viewBox="0 0 760 440" role="img" aria-label="Evaluation Harness 组织隔离 Trial 与完整运行包">
+  <defs><marker id="e5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">Evaluation Harness 控制考试，Agent Harness 接受考试</text>
+  <rect class="dg-zone" x="30" y="50" width="700" height="310" rx="8"/>
+  <text class="dg-label" x="55" y="78">Evaluation Harness</text>
+  <rect class="dg-node-accent" x="60" y="98" width="165" height="64" rx="6"/>
+  <text class="dg-soft" x="142" y="124" text-anchor="middle">准备独立起点</text>
+  <text class="dg-soft" x="142" y="147" text-anchor="middle">源码 / 数据 / 会话</text>
+  <path class="dg-arrow-accent" d="M225 130 L270 130" marker-end="url(#e5)"/>
+  <rect class="dg-node" x="270" y="98" width="205" height="64" rx="6"/>
+  <text class="dg-soft" x="372" y="124" text-anchor="middle">启动被评 Agent Harness</text>
+  <text class="dg-soft" x="372" y="147" text-anchor="middle">固定模型 / 工具 / 预算</text>
+  <path class="dg-arrow" d="M475 130 L520 130" marker-end="url(#e5)"/>
+  <rect class="dg-node" x="520" y="98" width="165" height="64" rx="6"/>
+  <text class="dg-soft" x="602" y="124" text-anchor="middle">保存完整运行包</text>
+  <text class="dg-soft" x="602" y="147" text-anchor="middle">请求 / 工具 / 产物</text>
+  <rect class="dg-node" x="170" y="215" width="180" height="65" rx="6"/>
+  <text class="dg-soft" x="260" y="242" text-anchor="middle">复制最终交付物</text>
+  <text class="dg-soft" x="260" y="265" text-anchor="middle">绑定内容指纹</text>
+  <path class="dg-arrow" d="M602 162 L602 195 L260 195 L260 215" marker-end="url(#e5)"/>
+  <rect class="dg-node-ok" x="410" y="215" width="180" height="65" rx="6"/>
+  <text class="dg-soft" x="500" y="242" text-anchor="middle">独立受控验收</text>
+  <text class="dg-soft" x="500" y="265" text-anchor="middle">场景重置 / 汇总</text>
+  <path class="dg-arrow-accent" d="M350 247 L410 247" marker-end="url(#e5)"/>
+  <text class="dg-faint" x="380" y="325" text-anchor="middle">Agent 自述、候选源码与报告不能修改验收脚本、参考答案或门槛</text>
+  <rect class="dg-node-muted" x="120" y="380" width="520" height="38" rx="6"/>
+  <text class="dg-soft" x="380" y="404" text-anchor="middle">状态原则：影响结果的状态，要么恢复，要么作为条件记录</text>
+</svg>
+<figcaption>图 5 · 验收程序也会写数据库；先固定 Agent 最终产物，再复制到受控验收环境，按场景重置，避免检查互相污染。</figcaption>
+</figure>
+
+<h4>4.1 哪些状态必须恢复或记录？</h4>
+<p>源码、未提交文件、生成报告、数据库、索引、会话历史、工作记忆、长期记忆、任务缓存都要处理；模型、Prompt/Skill、工具、权限与预算也要固定或记录。任务本来测长期记忆，就给每次相同初始记忆，不继承上一轮正确答案。基础设施冷热缓存可能改变延迟与计价，要说明条件，不能把缓存收益归给策略。</p>
+<p>环境还要贴近真实使用：SQLite 局部测试不证明另一种数据库的事务与并发；绕过真实工具网关并放大 Shell 权限，也不再是同一配置。受控服务适合稳定比较局部能力，真实调用适合观察实际集成，二者分别标记。</p>
+
+<h4>4.2 完整运行包与三条独立状态</h4>
+<table>
+  <tr><th>证据</th><th>至少保存</th><th>回答</th></tr>
+  <tr><td>任务与配置</td><td>题目、初始快照、版本、权限、预算</td><td>比较条件是否相同</td></tr>
+  <tr><td>模型请求/响应</td><td>实际消息、工具定义、错误与流式状态</td><td>规则是否进入输入，响应是否完整</td></tr>
+  <tr><td>工具与检索</td><td>调用 ID、参数、结果、重试、来源及后续使用</td><td>请求与真实执行能否对上</td></tr>
+  <tr><td>最终产物与测试</td><td>最终文件、Diff、指纹、命令、退出码、断言</td><td>测试是否验证最终版本</td></tr>
+  <tr><td>实际状态</td><td>库存、预占记录、接口行为</td><td>业务要求是否实现</td></tr>
+  <tr><td>计量与停止</td><td>各阶段耗时、用量、费用、停止原因</td><td>资源与完成判断是否可信</td></tr>
+</table>
+<p><strong>完整聊天历史不等于每轮最终请求</strong>：中间可能裁剪、压缩、重排和筛选。Trace 只记录接口可观察事实，不要求获取模型未公开的内部推理。</p>
+<table>
+  <tr><th>维度</th><th>典型状态</th><th>不能被什么替代</th></tr>
+  <tr><td>执行状态</td><td>正常结束、执行错误、超时、取消</td><td>不能由「回答写完了」替代</td></tr>
+  <tr><td>验收状态</td><td>通过、失败、未知</td><td>不能由正常结束替代</td></tr>
+  <tr><td>版本门禁</td><td>采用、拒绝、待补证据/复核</td><td>不能由总分或人工一句话覆盖</td></tr>
+</table>
+<p>数据库不可用是环境故障；同一 Trial 中 Agent 未测试却声称全部通过，仍是可独立确认的陈述错误。环境故障的统计与重跑规则要预先约定，保留原 Trial 与原因，不能结果不好再临时删除。</p>
+<div class="why-box"><strong>为什么要把 Agent、独立验收与 Judge 的用量分列？</strong>否则无法知道成本来自做任务、验证还是评分，也无法比较新增验证是否值得。失败调用与重试要累计，未返回 usage 保留未知，估算费用标价格版本；总耗时说明是否含环境准备。多花验证成本可能换来更少返工，但必须把两本账都看见。</div>
+
+<h3 id="sec5">5. 评分：程序、Judge、人工与门禁</h3>
+<p>分配原则：<strong>可独立核验的确定事实优先程序；语义与开放质量由模型辅助；业务标准、校准和争议由人工负责</strong>（笔记行 1236–1341）。</p>
+<table>
+  <tr><th>方式</th><th>适合检查</th><th>证明边界</th></tr>
+  <tr><td>单元/集成/状态</td><td>局部逻辑、服务连接、库存与记录</td><td>只覆盖实际执行的条件</td></tr>
+  <tr><td>静态/工具/文件</td><td>类型、候选风险、实际参数、改动范围</td><td>不替代完整业务行为</td></tr>
+  <tr><td>Schema/Snapshot/契约</td><td>结构、稳定产物、接口兼容</td><td>结构合法不等于内容真实</td></tr>
+  <tr><td>LLM Judge</td><td>报告准确性、证据支持、未知披露</td><td>理由流畅不等于引用正确</td></tr>
+  <tr><td>人工</td><td>规则、校准、争议与工程取舍</td><td>不能覆盖客观失败</td></tr>
+</table>
+<p>修复任务分两组测试：<strong>目标测试</strong>原来失败、修复后应通过；<strong>保护测试</strong>原来已通过、修改后仍应通过。修改前状态要实际确认，不能只凭任务名称假设。Agent 可新增开发测试，独立验收仍放在它不能改的位置。</p>
+
+<figure class="diagram" id="fig6">
+<svg viewBox="0 0 760 420" role="img" aria-label="程序模型人工评分与硬门槛合成">
+  <defs><marker id="e6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">分项保留证据，整体规则防止高分掩盖核心失败</text>
+  <rect class="dg-node" x="35" y="55" width="180" height="74" rx="7"/>
+  <text class="dg-label" x="125" y="84" text-anchor="middle">程序 Grader</text>
+  <text class="dg-soft" x="125" y="110" text-anchor="middle">行为 / 接口 / 边界</text>
+  <rect class="dg-node-accent" x="290" y="55" width="180" height="74" rx="7"/>
+  <text class="dg-label" x="380" y="84" text-anchor="middle">模型 Judge</text>
+  <text class="dg-soft" x="380" y="110" text-anchor="middle">语义 / 证据支持</text>
+  <rect class="dg-node" x="545" y="55" width="180" height="74" rx="7"/>
+  <text class="dg-label" x="635" y="84" text-anchor="middle">人工复核</text>
+  <text class="dg-soft" x="635" y="110" text-anchor="middle">标准 / 争议 / 取舍</text>
+  <path class="dg-arrow" d="M125 129 L125 180 L300 180" marker-end="url(#e6)"/>
+  <path class="dg-arrow-accent" d="M380 129 L380 180" marker-end="url(#e6)"/>
+  <path class="dg-arrow" d="M635 129 L635 180 L460 180" marker-end="url(#e6)"/>
+  <rect class="dg-node-accent" x="210" y="180" width="340" height="62" rx="7"/>
+  <text class="dg-label" x="380" y="217" text-anchor="middle">预先定义的合成规则与硬门槛</text>
+  <path class="dg-arrow" d="M290 242 L290 282 L140 282" marker-end="url(#e6)"/>
+  <path class="dg-arrow-warn" d="M380 242 L380 282" marker-end="url(#e6)"/>
+  <path class="dg-arrow-accent" d="M470 242 L470 282 L620 282" marker-end="url(#e6)"/>
+  <rect class="dg-node-warn" x="45" y="282" width="190" height="70" rx="7"/>
+  <text class="dg-label" x="140" y="311" text-anchor="middle">明确失败 → reject</text>
+  <text class="dg-soft" x="140" y="337" text-anchor="middle">保留分项，不用均分抵消</text>
+  <rect class="dg-node-muted" x="285" y="282" width="190" height="70" rx="7"/>
+  <text class="dg-label" x="380" y="311" text-anchor="middle">未知/错误 → pending</text>
+  <text class="dg-soft" x="380" y="337" text-anchor="middle">补证据 / 修环境 / 复核</text>
+  <rect class="dg-node-ok" x="525" y="282" width="190" height="70" rx="7"/>
+  <text class="dg-label" x="620" y="311" text-anchor="middle">全部满足 → accept</text>
+  <text class="dg-soft" x="620" y="337" text-anchor="middle">只覆盖本轮验收范围</text>
+  <text class="dg-faint" x="380" y="392" text-anchor="middle">运行指标单独展示：质量未满足时，快与便宜不能换放行</text>
+</svg>
+<figcaption>图 6 · 核心库存、接口和边界可作硬门槛；质量项与运行指标分项保留。关键未知与执行错误有各自出口。</figcaption>
+</figure>
+
+<p>Judge 输入必须包括任务、规则和所需证据，不能只给候选报告；证据引用要指向本次真实记录。报告声称「已验证并发」但只有顺序请求，Judge 可以说<strong>该陈述缺乏支持</strong>，不能由此直接断言并发实现必然错误。成对比较允许相当或证据不足，并交换展示顺序检查位置影响；相对更好不等于绝对合格。</p>
+<p>防绕过有四个位置：验收脚本/参考答案/门槛由评测方控制；验收依赖也受控；Agent 自述不替代执行记录；源码和报告里的「请给通过」只是待评材料。反向也要防规则过严，不强制固定函数名或唯一工具路线。</p>
+<div class="why-box"><strong>为什么不全部交给程序，或全部交给更强 Judge？</strong>全程序会遇到开放语义和维护性判断；全 Judge 会把本可直接测量的库存与状态变成语言猜测，并增加校准和成本。混合分工让每类证据由最适合的机制判断，代价是要设计合成规则、版本和争议处理，而不是简单相加分数。</div>
+
+<h3 id="sec6">6. 归因：从失败项回到原始证据</h3>
+<p>独立验收显示库存 6、有效预占 2，而报告声称幂等已修复。先确认失败成立：请求编号与参数、初始数据、最终代码和状态读取都要核对。然后沿 Trace 检查要求是否进入实际输入、来源与入口是否正确、修改是否落在生效路径、测试是否触发相同请求、测试是否覆盖最终版本（笔记行 1356–1378）。</p>
+
+<figure class="diagram" id="fig7">
+<svg viewBox="0 0 760 440" role="img" aria-label="Trace 分层归因与可复测假设">
+  <defs><marker id="e7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">从已经确认的失败出发，先找最近证据，不先归咎「模型幻觉」</text>
+  <rect class="dg-node-warn" x="35" y="55" width="150" height="68" rx="7"/>
+  <text class="dg-label" x="110" y="83" text-anchor="middle">失败检查项</text>
+  <text class="dg-soft" x="110" y="109" text-anchor="middle">库存 6，预占 2</text>
+  <path class="dg-arrow-warn" d="M185 89 L225 89" marker-end="url(#e7)"/>
+  <rect class="dg-node" x="225" y="55" width="230" height="68" rx="7"/>
+  <text class="dg-label" x="340" y="83" text-anchor="middle">核对原始证据</text>
+  <text class="dg-soft" x="340" y="109" text-anchor="middle">请求 / 起点 / 最终代码 / 状态</text>
+  <path class="dg-arrow" d="M455 89 L495 89" marker-end="url(#e7)"/>
+  <rect class="dg-node-accent" x="495" y="55" width="225" height="68" rx="7"/>
+  <text class="dg-label" x="607" y="83" text-anchor="middle">沿调用与输入向前追</text>
+  <text class="dg-soft" x="607" y="109" text-anchor="middle">上下文 → 工具 → 修改 → 测试</text>
+  <rect class="dg-zone" x="45" y="175" width="670" height="95" rx="8"/>
+  <text class="dg-label" x="380" y="202" text-anchor="middle">可能同时成立的三项事实</text>
+  <text class="dg-soft" x="380" y="231" text-anchor="middle">实现偏差：每次新建查重集合　验证缺口：没有重复请求测试</text>
+  <text class="dg-soft" x="380" y="254" text-anchor="middle">陈述错误：未验证却声称已保证幂等</text>
+  <path class="dg-arrow-accent" d="M380 270 L380 305" marker-end="url(#e7)"/>
+  <rect class="dg-node" x="65" y="305" width="190" height="66" rx="7"/>
+  <text class="dg-label" x="160" y="333" text-anchor="middle">已知事实</text>
+  <text class="dg-soft" x="160" y="357" text-anchor="middle">可直接在原记录核对</text>
+  <rect class="dg-node-muted" x="285" y="305" width="190" height="66" rx="7"/>
+  <text class="dg-label" x="380" y="333" text-anchor="middle">原因假设</text>
+  <text class="dg-soft" x="380" y="357" text-anchor="middle">跨请求状态丢失导致重复</text>
+  <rect class="dg-node-ok" x="505" y="305" width="190" height="66" rx="7"/>
+  <text class="dg-label" x="600" y="333" text-anchor="middle">验证计划</text>
+  <text class="dg-soft" x="600" y="357" text-anchor="middle">最小复现 + 反证 + 回归</text>
+  <text class="dg-faint" x="380" y="414" text-anchor="middle">证据不足就写未知；「没看到」不等于「没发生」</text>
+</svg>
+<figcaption>图 7 · Trace 的价值是把一个笼统失败拆成可核对事实。原因仍是假设，直到最小修改与定向复测支持它。</figcaption>
+</figure>
+
+<p>需要时逐层检查 Prompt、上下文、检索、引用、工具选择、参数、权限、环境、Loop、子 Agent、模型与输出，以及题目/Rubric/Judge。<strong>合理权限拦截不能为了跑通而关闭</strong>；换模型后成功只说明该配置在本次条件下改善，不自动解释所有旧失败。</p>
+<p>把假设写成：失败现象、已知事实、实现假设、Agent 改进假设、预期变化、反证条件。人工修好代码支持「实现能修好」；验证 Agent 能力要让它从原缺陷起点重新执行。Skill 可增加相同编号重复请求与未测如实报告步骤，但最终业务结果仍交独立验收。</p>
+<div class="why-box"><strong>为什么一次只改一个因素？</strong>同时改 Prompt、检索和 Skill，即使整体变好，也不能把收益归给其中某一项。单因素便于归因，但可能慢且漏掉交互效果；组合方案可以评价，却只能先声称「组合有效」。需要单独验证时复制策略，只改目标因素，并保持其他条件与评分一致。</div>
+
+<h3 id="sec7">7. 比较：多次 Trial、回归与采用</h3>
+<p>比较前固定四组条件：<strong>题目与标准、起点与环境、执行配置、统计与决策</strong>。采用要求在看结果前写：目标问题改善、报告与证据一致、正常功能和接口保持、没有越权、开销可接受。外部服务波动可交错运行新旧版本，但仍要保存环境状态（笔记行 1428–1450）。</p>
+
+<figure class="diagram" id="fig8">
+<svg viewBox="0 0 760 430" role="img" aria-label="pass@k pass^k 与版本采用四层验证">
+  <defs><marker id="e8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">三种统计口径回答三个问题，不能互相代称</text>
+  <rect class="dg-node" x="35" y="55" width="210" height="100" rx="7"/>
+  <text class="dg-label" x="140" y="83" text-anchor="middle">观测通过比例</text>
+  <text class="dg-soft" x="140" y="112" text-anchor="middle">通过次数 / 实际 Trial 数</text>
+  <text class="dg-faint" x="140" y="137" text-anchor="middle">另列失败 / 未知 / 执行错误</text>
+  <rect class="dg-node-accent" x="275" y="55" width="210" height="100" rx="7"/>
+  <text class="dg-label" x="380" y="83" text-anchor="middle">pass@k</text>
+  <text class="dg-soft" x="380" y="112" text-anchor="middle">k 次至少一次成功</text>
+  <text class="dg-faint" x="380" y="137" text-anchor="middle">独立同 p：1-(1-p)^k</text>
+  <rect class="dg-node-ok" x="515" y="55" width="210" height="100" rx="7"/>
+  <text class="dg-label" x="620" y="83" text-anchor="middle">pass^k</text>
+  <text class="dg-soft" x="620" y="112" text-anchor="middle">k 次全部成功</text>
+  <text class="dg-faint" x="620" y="137" text-anchor="middle">独立同 p：p^k</text>
+  <rect class="dg-zone" x="55" y="195" width="650" height="155" rx="8"/>
+  <text class="dg-label" x="380" y="223" text-anchor="middle">修复有效与版本采用：四层一起查</text>
+  <rect class="dg-node-warn" x="80" y="248" width="135" height="62" rx="6"/>
+  <text class="dg-soft" x="147" y="275" text-anchor="middle">① 原失败任务</text>
+  <text class="dg-faint" x="147" y="296" text-anchor="middle">从原缺陷重跑</text>
+  <rect class="dg-node" x="230" y="248" width="135" height="62" rx="6"/>
+  <text class="dg-soft" x="297" y="275" text-anchor="middle">② 同类变化</text>
+  <text class="dg-faint" x="297" y="296" text-anchor="middle">保留未调参样本</text>
+  <rect class="dg-node" x="380" y="248" width="135" height="62" rx="6"/>
+  <text class="dg-soft" x="447" y="275" text-anchor="middle">③ 相关旧任务</text>
+  <text class="dg-faint" x="447" y="296" text-anchor="middle">功能 / 接口 / 边界</text>
+  <rect class="dg-node-accent" x="530" y="248" width="135" height="62" rx="6"/>
+  <text class="dg-soft" x="597" y="275" text-anchor="middle">④ 耗时与成本</text>
+  <text class="dg-faint" x="597" y="296" text-anchor="middle">Agent / Judge / 人工</text>
+  <path class="dg-arrow-accent" d="M380 350 L380 382" marker-end="url(#e8)"/>
+  <text class="dg-faint" x="380" y="407" text-anchor="middle">合计提升不能抵消核心旧能力退化；关键未知同样需要出口</text>
+</svg>
+<figcaption>图 8 · p=0.75、k=3 时，至少一次约 98.4%，三次全部约 42.2%。实际任务可能相关且难度不同，不能把总体平均 p 直接当系统可靠性。</figcaption>
+</figure>
+
+<p><code>2/3</code> 是观测通过比例，不是 <code>pass@3</code>；一组三次出现成功，也不能推断真实 <code>pass@3=100%</code>。允许生成多个候选再用独立测试选择时，pass@k 更有参考价值，但选择器本身也要验证。用户每次都要稳定完成时，更关注单次表现和连续稳定性，同时报告 k、每次预算和总消耗。</p>
+<p>教学例中合计由 13/15 到 14/15，但接口兼容由 3/3 降到 2/3。先查原始证据：确认新版退化就暂缓采用；确认评分器误判就修评分器，并同样重查相关新旧结果。<strong>总体提高不能抵消核心失败。</strong></p>
+<p>门禁要接实际 CI/CD 或采用动作。提交时跑快速检查与代表性任务；采用新模型、Prompt、Skill 时跑能力与回归集并重复 Trial；评分器变更额外验证正确、错误、边界样本；离线通过后再验证真实使用条件。只有报告、没有阻断或复核出口，不叫门禁。</p>
+
+<h3 id="sec8">8. 日常研发：五步测试与双闭环</h3>
+<h4>8.1 人先定范围与风险，AI 再辅助展开</h4>
+<p>专家先圈定预占入口、幂等、事务与数据访问，AI 搜索调用链、状态转换、循环查询、提交位置和异常分支，产出带位置、触发条件、证据、影响与待验证点的候选清单；人再按业务影响和成本排优先级。Rule 保存工程普遍要求，Skill 保存特定场景方法，执行策略继续强制权限与预算。</p>
+<p>五步测试设计是：<strong>建立范围 → 风险分级 → 设计分组 → 生成可执行步骤 → 验证覆盖</strong>（笔记行 1584–1637）。</p>
+<ol>
+  <li><strong>范围</strong>：从 Diff、调用链与实际使用确定纳入和排除理由；共用事务变化也可能影响确认与释放。</li>
+  <li><strong>风险</strong>：按业务影响而非修改行数确定深度；一行提交位置变化可能高于大量重命名。</li>
+  <li><strong>分组</strong>：用判定表区分新编号、同编号同参数、同编号不同参数、库存不足；并发与异常另列。</li>
+  <li><strong>步骤</strong>: 明确初始库存、固定编号、两次提交、异常注入位置，以及响应/库存/有效记录断言。</li>
+  <li><strong>覆盖</strong>：风险→用例→证据矩阵运行后再关联代码指纹和真实结果。</li>
+</ol>
+<p><strong>已设计、已执行、已通过是三个状态。</strong>测试矩阵生成完毕只能写已设计；计划运行的测试不能写成已通过。</p>
+
+<figure class="diagram" id="fig9">
+<svg viewBox="0 0 760 450" role="img" aria-label="真实 Case 驱动 Agent 与评测双闭环">
+  <defs><marker id="e9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>
+  <text class="dg-title" x="20" y="24">同一 Case 可能既要改 Agent，也要改评测</text>
+  <rect class="dg-node-accent" x="270" y="48" width="220" height="62" rx="7"/>
+  <text class="dg-label" x="380" y="76" text-anchor="middle">真实 Case 与执行证据</text>
+  <text class="dg-soft" x="380" y="99" text-anchor="middle">采集 / 清洗 / 评测 / 质检</text>
+  <path class="dg-arrow-accent" d="M380 110 L380 145" marker-end="url(#e9)"/>
+  <rect class="dg-node" x="285" y="145" width="190" height="55" rx="7"/>
+  <text class="dg-label" x="380" y="178" text-anchor="middle">核验并归因</text>
+  <path class="dg-arrow" d="M285 172 L195 172 L195 220" marker-end="url(#e9)"/>
+  <path class="dg-arrow" d="M475 172 L565 172 L565 220" marker-end="url(#e9)"/>
+  <rect class="dg-node-warn" x="60" y="220" width="270" height="82" rx="7"/>
+  <text class="dg-label" x="195" y="250" text-anchor="middle">闭环 A：改 Agent</text>
+  <text class="dg-soft" x="195" y="277" text-anchor="middle">信息 / 工具 / 方法 / 实现行为</text>
+  <rect class="dg-node-warn" x="430" y="220" width="270" height="82" rx="7"/>
+  <text class="dg-label" x="565" y="250" text-anchor="middle">闭环 B：改评测</text>
+  <text class="dg-soft" x="565" y="277" text-anchor="middle">Task / Rubric / Grader / 环境</text>
+  <path class="dg-arrow-accent" d="M195 302 L195 335 L380 335" marker-end="url(#e9)"/>
+  <path class="dg-arrow-accent" d="M565 302 L565 335 L380 335" marker-end="url(#e9)"/>
+  <rect class="dg-node-ok" x="235" y="335" width="290" height="60" rx="7"/>
+  <text class="dg-label" x="380" y="370" text-anchor="middle">固定条件复测 + 旧能力回归</text>
+  <path class="dg-arrow" d="M525 365 L720 365 L720 80 L490 80" marker-end="url(#e9)"/>
+  <text class="dg-faint" x="380" y="428" text-anchor="middle">版本决定与真实使用观察再产生新 Case；修复后才转活动回归</text>
+</svg>
+<figcaption>图 9 · 并发重复预占说明实现或 Agent 方法有问题；旧测试没触发关键竞争条件，又说明验收有缺口。两边分别修、分别验证。</figcaption>
+</figure>
+
+<p>离线评测回答固定条件下新旧版本怎样；影子模式用真实输入对应快照在独立环境观察候选，不直接合并或发布；A/B 比较实际使用中的验收、返工、总时间与成本；巡检检查代表性能力；监控提供可用性、错误、耗时、用量与分布信号。<strong>影子重放不是线上 A/B，监控正常也不证明任务正确。</strong></p>
+<p>Case 流程要有负责人和后续动作：采集→清洗→评测→质检→归因→修改→复测→回归。历史失败先进入候选池，真实修复验证与项目确认后才进入活动回归。长期红色结果需要治理状态，避免团队习惯忽略失败。</p>
+<div class="why-box"><strong>为什么不一开始建设完整评测平台？</strong>冷启动最需要的是核心种子、明确规则、规定起点、基础评分和可归因记录；平台看板再多，Case 无人处理仍没有闭环。先跑通一个核心场景能暴露真实证据缺口，再按「发现不了什么、解释不了什么、哪些修改无法验证」扩量。代价是早期人工较多，但避免为尚未确认的需求建设复杂组件。</div>
+
+<h3 id="sec9">9. 代码解剖：本课实际证明什么</h3>
+<h4>9.1 数据契约落在文件，不是五个抽象基类</h4>
+<p><code>eval_lab</code> 是库存专用教学 Harness，不是通用强类型评测框架。Task 是 JSON 字典，要求 <code>id/name/kind/prompt/checks/references/forbidden_paths/version</code>；Trial 以运行目录和 <code>manifest.json</code> 为锚；Trace 是 <code>trace.jsonl</code> 与 <code>provider_trace.jsonl</code>；程序与语义结果分别写入 <code>program_grades.json</code> 和 <code>judge_grades.json</code>。</p>
+<pre>Task JSON + 独立 fixture
+  → runs/&lt;run_id&gt;/manifest.json       # 配置、版本、起止指纹、run_status
+  → trace.jsonl + provider_trace.jsonl # RPC 与消毒后的 provider 证据
+  → initial/ + workspace/ + patch.diff # 起点与最终产物
+  → development_tests.json + metrics.json
+  → program_grades.json + judge_grades.json
+  → gate.json                          # accept / reject / pending</pre>
+<p><code>run_status=completed</code> 要求收到 <code>agent_settled</code> 且没有记录的模型错误；prompt 接受或进程退出本身不够。程序检查用新子进程和新临时 SQLite 数据库加载候选实现，不读 Agent 自述来代替行为。Judge 校验检查项集合、理由、状态和真实证据键；非法 JSON、虚构引用、不完整 SSE 都进入错误而不是通过。</p>
+
+<h4>9.2 门禁矩阵与比较口径不是同一个字段</h4>
+<table>
+  <tr><th>本机合成输入</th><th><code>release_gate</code></th><th>原因</th></tr>
+  <tr><td>live 声明 + completed + 所有检查通过</td><td>accept</td><td>仅说明门禁分支接受这些输入</td></tr>
+  <tr><td>程序业务检查 fail</td><td>reject</td><td>明确失败</td></tr>
+  <tr><td>run_status=timeout</td><td>reject</td><td>执行未正常完成</td></tr>
+  <tr><td>source=protocol_test</td><td>reject</td><td>协议测试不能冒充真实 Agent 成功</td></tr>
+  <tr><td>必需语义检查 unknown</td><td>pending</td><td>证据不足，待补或复核</td></tr>
+  <tr><td>评分后源码再变化</td><td>pending</td><td>代码与取证/Judge 版本不一致</td></tr>
+</table>
+<p>版本比较又把 accept/reject 映射为 <code>outcome=true/false</code>，把 pending 或未完成执行映射为 <code>null</code>。因此同一个非 completed Trial 在单次门禁中是 reject，在统计 outcome 中可为 unknown；字段服务不同问题，不能只看一个词。</p>
+<p><code>statistics.summarize</code> 支持从 n 次已知结果估计 k 次至少一次/全部成功；但 CLI <code>compare</code> 固定 <code>k=min(3,trials)</code> 且 <code>n=trials</code>，所以实际 CLI 主要是该组 any/all 观察，并未利用一般 <code>n&gt;k</code> 估计，也没有置信区间或显著性检验。</p>
+
+<h4>9.3 已核实的实现边界</h4>
+<ul>
+  <li><strong>字段没有自动成为规则</strong>：Task 必须声明 <code>forbidden_paths</code>，但当前 <code>boundary_check</code> 没有读取它，而是硬编码允许修改 <code>inventory.py</code> 和新增 <code>tests/test_*.py</code>。本机把该字段改为禁止 <code>inventory.py</code> 后，修改仍被判 pass。应把任务规则接回检查器，并用反例验证。</li>
+  <li><strong>不是 OS Sandbox</strong>：文件/工具边界是教学治理，独立程序评分会执行候选 Python；不能把它当恶意代码隔离。运行包 JSON 与 <code>source=pi_live</code> 也是可编辑声明，哈希帮助核对内容，但不构成签名或防篡改证明。</li>
+  <li><strong>Judge 有截断与职责边界</strong>：单字段超过 24,000 编码字符会截断；缺失证据不应变通过。普通 release gate 没有强制人工批准，人工主要出现在标准校准、争议和回归准入。</li>
+  <li><strong>诊断默认是确定规则</strong>：<code>step_08</code> 提取非通过检查、选定事件和过期测试指纹，验证计划是固定模板；<code>--llm</code> 才新增引用证据的假设，仍要求人工复核。它不会自动找出所有根因。</li>
+  <li><strong>测试设计只生成计划</strong>：<code>step_11</code> 是 live 只读生成，输出 <code>designed_not_executed</code>；它既不实现也不执行测试。影子重放只标 <code>isolated_replay_not_online_ab</code>。</li>
+</ul>
+
+<h4>9.4 本机基线与历史材料必须分开</h4>
+<p>本机用 Python 3.12.14 运行 <code>validate_local.py</code>：23 项中 1 失败、2 跳过。失败是影子重放测试把 <code>/var/...</code> 与实现规范化后的 <code>/private/var/...</code> 直接比较；最小探针证实两者 resolve 相等、samefile 为真、原始运行包未变。<strong>这是 macOS 路径表示导致的现有测试问题，不是本课修复后的结果</strong>；2 项跳过是因为解压副本未安装本地 pi npm 依赖。</p>
+<p>包内 README 声明制作环境没有真实供应商端到端验证，但后续归档又含 <code>pi_live</code>、校准和比较材料。它们只能作为<strong>未由本课独立复现的历史记录</strong>。两份历史比较里，同一 v2 在一次为 2/3 + 1 未知并 hold，另一次为 3/3 并 accept，恰好说明小样本波动；不能改写成「v2 永远更好」。本机只离线审阅这些记录，没有发起真实模型请求。</p>
+<div class="why-box"><strong>为什么把课程代码本身的缺陷也纳入教学？</strong>评测基础设施同样需要评测。一个未接线的 forbidden_paths 字段、一处路径表示误比较、一个过小的样本都可能制造错误结论。保留这些反例能训练双闭环：不只问 Agent 哪错了，也问 Task、Grader、证据采集和统计解释哪错了。</div>
+
+<h3 id="sec10">10. 面试视角：两分钟主链</h3>
+<blockquote>我会先明确评测对象是指定模型、Harness、上下文、工具和环境的完整系统，结果看最终产物与业务行为，过程看必要动作，效率看包含人工返工的总成本，风险看越权尝试与真实影响。标准先由业务、研发、测试背靠背对齐，再下钻成带证据的 Rubric；程序、Judge、人工分别处理确定事实、语义质量和争议，校准分别看误放行、误拒绝与未知。Task 定义一道工作，Trial 是从固定起点的一次完整尝试，多个 Grader 共享这次 Trace 与 Outcome。每次 Trial 重置或记录源码、数据、会话、记忆、缓存和配置，保存实际模型请求与最终代码指纹。失败沿 Trace 区分事实、假设和验证计划。版本比较固定题目、环境、配置和统计规则，多次 Trial 后检查原问题、同类变化、旧能力和成本；总分提升不能抵消核心退化。最后让真实 Case 同时驱动 Agent 改进与评测资产改进，验证有效后进入持续回归。</blockquote>
+
+<h4>常见追问链</h4>
+<ol>
+  <li><strong>「测试都通过了，为什么还不能验收？」</strong>——要确认测试是否实际执行、是否触发目标业务条件、是否覆盖最终代码；还要检查接口、边界、并发与真实状态。</li>
+  <li><strong>「Judge 与人工 90% 一致，为何仍不可信？」</strong>——样本分布可能让始终通过也得高分；要看高风险误放行、误拒绝和未知处理，并跑保留样本。</li>
+  <li><strong>「一次 Trial 多跑十条测试，能否当十次 Trial？」</strong>——不能，它们共享一次 Agent 尝试；新 Trial 要恢复规定起点和新会话。</li>
+  <li><strong>「失败为什么不直接改模型？」</strong>——结果还受规则装配、工具参数、权限、环境、Loop、题目和评分器影响；先沿原始证据找第一个断点。</li>
+  <li><strong>「pass@3 接近 100%，能否说明稳定？」</strong>——它表示至少一次成功；若每次都要可靠，需看单次分布和 pass^3，并注意独立同概率假设。</li>
+  <li><strong>「总分提高为何仍拒绝新版？」</strong>——核心接口或边界可能是硬门槛；关键旧能力退化或关键未知未解决时，平均提升不能换放行。</li>
+  <li><strong>「人工修好失败产物，是否验证 Skill 有效？」</strong>——没有。要让使用新 Skill 的 Agent 从原缺陷工程与干净会话重新执行，再比较同类、回归与成本。</li>
+</ol>
+
+<hr>
+
+<h2 id="part2">第二部分：检索式测验（10 题）</h2>
+<p>先独立作答再对答案。Q1–Q2 是 0025 间隔重测；简述题按得分点严格自评，漏掉关键边界就算「部分对」。</p>
+<section class="quiz-section"><div id="quiz"></div></section>
+
+<hr>
+
+<h2 id="part3">第三部分：第二层实验——先写预期，再跑代码</h2>
+<p>以下①–⑤只使用 Python 标准库与本地合成/归档材料，写入仅在 <code>/tmp</code>。本机使用 Python 3.12.14 实测；系统 Python 3.9 不满足实验包的 3.10+ 要求。⑥需要安装本地 pi 依赖、真实模型凭据并产生费用，本机未执行。不要把课件结果复制成你的运行事实。</p>
+
+<h3>公共准备：解压到新的独立目录</h3>
+<pre>export COURSE="/Users/chyu-wissfi/Projects/ai-agent-fullstack-training"
+export PY="${PY:-/Users/chyu-wissfi/miniconda3/envs/agentloop/bin/python}"
+export WORK="$(mktemp -d /tmp/agent-eval-0026.XXXXXX)"
+unzip -q "$COURSE/course_code/week05/5-4/eval_lab.zip" \
+  -d "$WORK" -x '__MACOSX/*' '*/.DS_Store'
+export LAB="$WORK/eval_lab"
+"$PY" --version</pre>
+<p>没有上述解释器时，把 <code>PY</code> 设为你自己的 Python 3.10+。必做实验不需要 <code>pip install</code>，也不需要 API key；不要覆盖原 zip 或仓库目录。</p>
+
+<ol>
+<li><strong>实验①：先验证考卷和判卷器，再谈 Agent 分数</strong><br>
+<strong>先写预期</strong>：缺陷工程的既有 smoke 会不会通过？参考实现八项是否全过？已知缺陷的 duplicate/conflict/rollback 是否会被拒绝？本地完整基线是否全绿？<br>
+<pre>"$PY" "$LAB/validate_local.py"
+printf 'local_validation_exit=%s\n' "$?"
+"$PY" -I - "$LAB/fixtures/project" &lt;&lt;'PY'
+import sys, unittest
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+suite = unittest.defaultTestLoader.discover(str(root / "tests"))
+r = unittest.TextTestRunner(verbosity=2).run(suite)
+print("smoke_run=", r.testsRun, "failures=", len(r.failures), "errors=", len(r.errors))
+PY
+"$PY" "$LAB/step_02_validate_tasks.py" &gt; "$WORK/task-validation.out"
+printf 'task_validation_exit=%s\n' "$?"
+"$PY" -I - "$LAB/reports/task_validation.json" &lt;&lt;'PY'
+import json, sys
+r = json.load(open(sys.argv[1], encoding="utf-8"))
+print("valid=", r["valid"], "source=", r["source"])
+print("reference=", [(x["id"], x["status"]) for x in r["reference"]])
+for x in r["known_defects"]:
+    state = x.get("observations", {}).get("state", {})
+    print(x["id"], x["status"], "available=", state.get("available"), "count=", state.get("count"))
+PY</pre>
+<strong>本机结果</strong>：smoke 1/1 OK；Task 校验 valid=true，参考实现 concurrent/concurrent_duplicate/conflict/contract/duplicate/invalid/normal/rollback 八项 pass；已知缺陷三项 fail，duplicate 后库存 6、记录 2，rollback 后库存 8、记录 0。完整本地基线 23 项中 1 fail、2 skipped：macOS 影子路径比较问题见实验⑤，两项 pi 集成因未 npm ci 跳过。<strong>参考/缺陷校验证明评分器基本有效，不代表真实 Agent 已通过。</strong></li>
+
+<li><strong>实验②：离线审计 Judge 校准，再复算 pass@k/pass^k</strong><br>
+<strong>先写预期</strong>：归档 vague Rubric 在 missing_evidence 上会把 unknown 判成 pass、fail 还是其他？四次两过、k=2 的组合估计分别是多少？加入一个未知后还能否给出估计？<br>
+<pre>"$PY" -I - \
+  "$LAB/reports/calibration_2026-10-28T093711.296594+0000/report.json" "$LAB" &lt;&lt;'PY'
+import json, sys
+from fractions import Fraction
+r = json.load(open(sys.argv[1], encoding="utf-8"))
+sys.path.insert(0, sys.argv[2])
+from lab.statistics import summarize
+print("source=", r["source"], "samples=", r["samples"])
+for name, rubric in r["rubrics"].items():
+    print(name, {k:rubric[k] for k in
+        ["items", "agreement", "false_accept", "false_reject", "unknown", "execution_errors"]})
+    for row in rubric["rows"]:
+        actual = {c["id"]:c["status"] for c in row["judge"].get("checks", [])}
+        if actual != row["human"]:
+            print("disagreement=", name, row["sample"], "human=", row["human"], "judge=", actual)
+for outcomes, k in [([True, False, True, False], 2),
+                    ([True, None, True, False], 2),
+                    ([True, False, True], 3)]:
+    s = summarize(outcomes, k)
+    print("summary=", s)
+    if s["pass_at_k_estimate"] is not None:
+        print("fractions=", Fraction(s["pass_at_k_estimate"]).limit_denominator(),
+              Fraction(s["pass_all_k_estimate"]).limit_denominator())
+PY</pre>
+<strong>本机结果</strong>：这只是对归档人工教学材料的离线审阅，不是新模型调用。vague 10/12，一致率约 83.3%，把 missing_evidence 两项人工 unknown 都判成 fail；clear 12/12，保留两个正确 unknown。四次两过、k=2 时 pass@2=5/6、pass^2=1/6；加入未知后两项估计为 null；三次两过且 n=k=3 时 any=1、all=0。<strong>未知不是失败，也不能为让指标好看而删除。</strong>CLI 比较目前 n=k；本探针的 n=4、k=2 是直接调用统计函数得到。</li>
+
+<li><strong>实验③：同一运行，执行/验收/门禁分别怎样落状态</strong><br>
+<strong>先写预期</strong>：程序 fail、timeout、protocol_test、Judge unknown、评分后改代码分别走 reject 还是 pending？合成 manifest 被 accept 能否证明真实 live？<br>
+<pre>"$PY" -I - "$LAB" &lt;&lt;'PY'
+import json, sys, tempfile
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from lab.grading import release_gate
+from lab.io import read_json, tree_hash, write_json
+
+def make(root, name, source="pi_live", status="completed", check="pass"):
+    d = root/name
+    w = d/"workspace"
+    w.mkdir(parents=True)
+    (w/"inventory.py").write_text("# synthetic gate fixture\n")
+    h = tree_hash(w)
+    write_json(d/"manifest.json", {"run_id":name, "source":source,
+        "run_status":status, "final_tree_sha256":h,
+        "task":{"checks":[], "required_semantic_checks":["claim_grounded"]}})
+    write_json(d/"program_grades.json", {"tree_sha256":h, "checks":[
+        {"id":"boundary", "status":check},
+        {"id":"permission_attempts", "status":"pass"},
+        {"id":"grading_no_source_mutation", "status":"pass"}]})
+    write_json(d/"judge_grades.json", {"status":"ok", "tree_sha256":h,
+        "checks":[{"id":"claim_grounded", "status":"pass", "evidence":["report"]}]})
+    return d
+
+def show(d):
+    r = release_gate(d)
+    print(d.name, json.dumps({"decision":r["decision"],
+        "failures":r["failures"], "pending":r["pending"]}, ensure_ascii=False))
+
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    cases = [make(root,"accept"), make(root,"business_fail",check="fail"),
+             make(root,"execution_timeout",status="timeout"),
+             make(root,"not_live",source="protocol_test")]
+    unknown = make(root,"judge_unknown")
+    p = unknown/"judge_grades.json"
+    j = read_json(p)
+    j["checks"][0].update(status="unknown", evidence=[])
+    write_json(p,j)
+    cases.append(unknown)
+    stale = make(root,"stale")
+    with (stale/"workspace/inventory.py").open("a") as f:
+        f.write("# changed after grading\n")
+    cases.append(stale)
+    for case in cases:
+        show(case)
+PY</pre>
+<strong>本机结果</strong>：合成全绿为 accept；业务 fail、timeout、protocol_test 都 reject；Judge unknown 为 pending；stale 同时报告代码状态不一致与 Judge 证据版本不匹配，为 pending。这里的 accept 只验证门禁逻辑，<strong>source=pi_live 是我们写入的合成声明，不是 live 证明</strong>。真实证据包需要可信产生链，不能靠手改 JSON。</li>
+
+<li><strong>实验④：字段是否接线，诊断是否把事实和假设分开</strong><br>
+<strong>先写预期</strong>：把 Task 的 forbidden_paths 改为禁止 inventory.py 后，修改它会失败吗？合成一个程序失败与一次工具拦截，diagnose 会自动给根因吗？<br>
+<pre>"$PY" -I - "$LAB" &lt;&lt;'PY'
+import json, sys, tempfile
+from pathlib import Path
+import shutil
+sys.path.insert(0, sys.argv[1])
+from lab.analysis import diagnose
+from lab.grading import boundary_check
+from lab.io import snapshot_tree, tree_hash, write_json
+from lab.tasks import load_task
+
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    task = load_task("inventory-refactor")
+    changed = dict(task)
+    changed["forbidden_paths"] = ["inventory.py"]
+    p = root/"forbidden-task.json"
+    write_json(p, changed)
+    print("declared_forbidden=", load_task(file=p)["forbidden_paths"])
+    w = root/"boundary-workspace"
+    shutil.copytree(Path(sys.argv[1])/"fixtures/project", w)
+    initial = snapshot_tree(w)
+    with (w/"inventory.py").open("a") as f:
+        f.write("\n# change\n")
+    print("boundary=", json.dumps(boundary_check(w, initial), ensure_ascii=False))
+
+    d = root/"diagnosis"
+    w = d/"workspace"
+    w.mkdir(parents=True)
+    (w/"inventory.py").write_text("# synthetic diagnosis\n")
+    h = tree_hash(w)
+    write_json(d/"manifest.json", {"run_id":"diagnosis", "source":"pi_live",
+        "run_status":"completed", "final_tree_sha256":h,
+        "task":{"checks":[], "required_semantic_checks":[]}})
+    write_json(d/"program_grades.json", {"tree_sha256":h, "checks":[
+        {"id":"boundary", "status":"fail", "reason":"synthetic boundary failure"},
+        {"id":"permission_attempts", "status":"pass", "reason":"none"},
+        {"id":"grading_no_source_mutation", "status":"pass", "reason":"stable"}]})
+    (d/"trace.jsonl").write_text("")
+    (d/"provider_trace.jsonl").write_text(json.dumps(
+        {"type":"tool_blocked", "reason":"synthetic unauthorized read"})+"\n")
+    write_json(d/"development_tests.json", [])
+    r = diagnose(d, use_llm=False)
+    print("diagnosis=", json.dumps({"facts":r["facts"], "hypotheses":r["hypotheses"],
+        "human_review_required":r["human_review_required"]}, ensure_ascii=False))
+PY</pre>
+<strong>本机结果</strong>：声明已经禁止 inventory.py，但 boundary 仍 pass、forbidden_changes=[]；说明字段没有接入当前硬编码边界。诊断留下两个带证据引用的 facts，hypotheses=[]、human_review_required=true；它不会把观察自动包装成根因。修复边界时应让检查器消费任务规则，并同时验证禁止项会失败、合法新增测试仍通过。</li>
+
+<li><strong>实验⑤：Case 回归准入与影子重放的证明边界</strong><br>
+<strong>先写预期</strong>：未修复候选会不会自动注册？修复 run 门禁 pending 或初始哈希不同能否激活回归？影子重放会修改原 run 吗？本机路径失败是否等于业务重放失败？<br>
+<pre>export PYTHONPATH="$LAB"
+"$PY" -m unittest -v \
+  tests.test_workflows.WorkflowTests.test_candidate_uses_original_input_and_only_validated_approval_registers \
+  tests.test_workflows.WorkflowTests.test_non_live_success_and_stale_evidence_do_not_create_regressions
+printf 'workflow_admission_exit=%s\n' "$?"
+"$PY" -m unittest -v \
+  tests.test_workflows.WorkflowTests.test_shadow_replays_initial_input_and_preserves_original
+printf 'shadow_test_exit=%s\n' "$?"
+unset PYTHONPATH
+"$PY" -I - "$LAB" &lt;&lt;'PY'
+import os, sys, tempfile
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1])
+from lab.io import tree_hash, write_json
+from lab.workflows import shadow_replay
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    original = root/"original"
+    (original/"initial").mkdir(parents=True)
+    (original/"workspace").mkdir()
+    (original/"initial/inventory.py").write_text("# original input\n")
+    write_json(original/"manifest.json", {"run_id":"original", "source":"pi_live",
+        "task":{"id":"fixture", "name":"fixture", "kind":"coding", "checks":["duplicate"]}})
+    before = tree_hash(original)
+    with patch("lab.workflows.run_agent", return_value=root/"candidate") as launch, \
+         patch("lab.workflows.assess", return_value={"decision":"pending"}):
+        _, result = shadow_replay(original, "v2")
+    actual = launch.call_args.kwargs["workspace_source"]
+    expected = original/"initial"
+    print("resolved_equal=", actual.resolve() == expected.resolve())
+    print("same_file=", os.path.samefile(actual, expected))
+    print("original_unchanged=", tree_hash(original) == before)
+    print("mode=", result["mode"])
+PY</pre>
+<strong>本机结果</strong>：前两项 workflow 测试通过，证明候选不自动注册、非 live 与过期证据不能进入回归，批准还要求 accept、相同任务/初始哈希和 reviewer；shadow 原测试在 macOS 因 /var 与 /private/var 表示不同而失败。最小探针显示 resolved_equal=true、same_file=true、original_unchanged=true、mode=isolated_replay_not_online_ab。该探针使用 mock，只证明路径与原包保护，<strong>没有执行真实重放，更不是 A/B</strong>。</li>
+
+<li><strong>实验⑥（可选加餐，本机未验证）：真实 pi + Judge + 版本比较</strong><br>
+需要 Node 22+、网络、模型凭据和费用预算。所有安装仍落在新的 <code>$LAB</code>，不要修改仓库：
+<pre>npm --prefix "$LAB" ci
+cp -n "$LAB/.env.example" "$LAB/.env"
+# 自行编辑 .env，勿把密钥贴入对话或日志
+"$PY" "$LAB/step_00_check_environment.py"       # 不调用模型
+"$PY" "$LAB/step_00_check_environment.py" --api-check  # 一次真实模型请求
+"$PY" "$LAB/run_lab.py" --task duplicate-repair --variant v2 --stream --program-only
+"$PY" "$LAB/run_lab.py" --task duplicate-repair --variant v2 --stream
+"$PY" "$LAB/step_09_compare_versions.py" \
+  --tasks duplicate-repair rule-retrieval --trials 3</pre>
+<strong>先写预期再跑</strong>：逐次 run 是否从独立初始工程与 no-session 开始？实际请求是否含对应 Skill？程序行为、Judge、门禁是否分别完成？最后一条默认 2 题 × 3 Trial × 2 版本，即 12 次 Agent 运行，通常另有 12 次 Judge 调用。检查报告中的未知、接口/边界退化和总成本；只有总分增加不算通过。测试设计 <code>step_11</code> 也是 live 生成，得到 designed_not_executed 后仍需人工确认、实现并另行执行。</li>
+</ol>
+
+<h2>回读与验证指引</h2>
+<ul>
+  <li><strong>本课原题回读</strong>：<a href="../course_code/week05/第五章 学习笔记.md">第五章笔记</a> 5.4 一至十（行 855–1738）。本章复习 Q28–Q44 已全部换形式纳入：Q28/Q29→本课 Q5，Q30/Q31/Q32→Q6，Q33/Q35/Q36/Q37→Q7，Q38/Q39→Q8，Q40/Q41→Q4/Q9，Q42/Q43/Q44→Q10；题集交叉用途在 Q7 加练。参考答案在笔记行 2593–2673。</li>
+  <li><strong>代码回读顺序</strong>：先读实验包 README 与任务 JSON，明确 Task 起点和验收；再看行为检查、证据收集、Judge、release gate 与 Trace diagnosis；最后读版本统计、测试设计、Case 回流和影子重放。每个脚本名称只说明教学意图，实际字段与证明范围以源码和本机回执为准。</li>
+  <li><strong>跨课连线</strong>：0025（目录/加载/执行分层，Skill 版本对照需多次 Trial）；0024（completed/exited 与业务验收分开，模型自述不是可信事实）；0023（权限尝试与真实影响、局部与全局成本）；0020（检索命中不等于装配和使用，固定题集与 Trace 归因）；0017（实际请求才是本轮输入，旧证据绑定版本）；0014/0016（独立完成验收，状态与结论分开）。下一课 0027 将把这些对象接入可操作的 Eval Web 平台。</li>
+  <li><strong>口径提醒</strong>：① 笔记与 PPT 的教学数字不是本机 Agent 成绩；② 程序 fixture 验证不等于真实 pi 完成任务；③ 历史运行包不是本机 live 结果；④ 设计/执行/通过分开；⑤ 执行、验收与门禁状态分开；⑥ 未知不填通过或零；⑦ pass@k、pass^k 与观测比例不混写；⑧ SQLite 与受控 mock 只证明对应范围。</li>
+</ul>
+
+<h2>本课原始材料（primary source）</h2>
+<ul>
+  <li><a href="../course_code/week05/第五章 学习笔记.md"><code>course_code/week05/第五章 学习笔记.md</code></a> 5.4（行 855–1738）+ 章复习 Q28–Q44 与答案（学生版学习笔记，术语与验收第一材料）</li>
+  <li><a href="../course_code/week05/5-ppt/5.4 PPT/5.4 PPT.md"><code>5-ppt/5.4 PPT/5.4 PPT.md</code></a> + <a href="../course_materials/week05/5-4.pdf"><code>course_materials/week05/5-4.pdf</code></a>（教师材料，补充库存案例、评分校准、Trace 排查与研发流程）</li>
+  <li><a href="../course_code/week05/5-4/eval_lab.zip"><code>course_code/week05/5-4/eval_lab.zip</code></a>（本节配套实现；运行结论以解压副本的实际源码与本机回执为准）</li>
+</ul>
+
+<p>速查卡：<a href="../reference/agent-evaluation-regression.html"><strong>Agent 评测、归因与回归清单</strong></a>——复习时按四层验收、标准校准、Task/Trial/Grader、运行包、三类评分、Trace 归因、版本比较与双闭环逐项自问。</p>
+
+<div class="ask-reminder">
+  <strong>卡住了就问你的 agent。</strong>为什么 Trace 和 Outcome 不能互相替代、为什么高分 Judge 会误放行、为什么完整聊天历史不等于实际请求、为什么十次测试不是十次 Trial、为什么人工修好产物不证明 Agent 改进、为什么 pass@k 不能代表连续稳定、为什么总分提高仍要拒绝——任何一处不清楚，都直接回来问。也可以贴出你的一条真实 benchmark 结果，我们按「固定条件、证据包、逐题状态、失败归因、旧能力与成本」逐项审查。
+</div>
+
+<div class="lesson-footer">
+  Week05 主题课序列：<a href="./0023-multi-agent-subagent.html">1/5 Multi-Agent 与 Subagent（0023）</a> · <a href="./0024-subagent-task-contract.html">2/5 Subagent 任务委托（0024）</a> · <a href="./0025-skill-reusable-capability.html">3/5 Skill（0025）</a> · <strong>4/5 Agent 评测（本课，5-4）</strong> · 5/5 项目五（待生成）<br>
+  前课回顾：<a href="./0025-skill-reusable-capability.html">0025 Skill</a> 把稳定方法留下；本课用独立验收、多次 Trial 与回归比较判断这些方法是否真的值得采用。<br>
+  <strong>本课通过条件</strong>：① Q1–Q2 重测全对，Q3–Q10 至少答对 7/8；② 完成必做实验①–⑤，实验②–⑤先写预期再运行；③ 不看稿 2 分钟讲清「完整系统与四层 → 人工/Rubric/Judge → Task/Trial/Grader → 隔离运行包 → 三类评分与门禁 → Trace 归因 → 多次 Trial/四层修复验证 → 双闭环」；④ 对照本章复习 Q28–Q44 脱稿自测。真实 pi/live 实验为可选加餐，不把未运行结果写成已验证。
+</div>
+
+</main>
+
+<script>
+QuizApp.mount(document.getElementById('quiz'), {
+  questions: [
+    {
+      type: 'choice',
+      concept: '【重测·0025】发现加载不等于执行',
+      section: '0025 间隔重测',
+      notesRef: '0025 精讲第 3/4 节 + 第五章复习 Q22',
+      question: '启动日志显示 Skill 目录发现成功，但实际模型请求没有目标正文。哪项判断正确？',
+      options: [
+        '目录出现便证明正文已执行',
+        '目录发现不等于正文已执行',
+        '正文进入就证明动作全正确',
+        '没有读取就证明正文未加载'
+      ],
+      answer: 1,
+      explanation: '磁盘发现、程序对象、本轮模型输入与后续执行是不同事实。要核对实际请求中的正文，再验证必要动作；显式展开还可能没有 read 工具事件。'
+    },
+    {
+      type: 'choice',
+      concept: '【重测·0025】结束不等于业务通过',
+      section: '0025 间隔重测',
+      notesRef: '0025 精讲第 6/8 节 + 第五章笔记行 1183–1190',
+      question: '一次运行 status=completed，最终报告结构合法，但独立库存断言失败。怎样记录？',
+      options: [
+        '正常结束即可判定业务通过',
+        '输出完整即可判定业务通过',
+        '执行结束应与业务验收分开',
+        '进程退出即可省略结果验收'
+      ],
+      answer: 2,
+      explanation: 'completed 只说明执行怎样结束；业务检查失败必须保留。结构、进程状态和业务 Outcome 是不同维度。'
+    },
+    {
+      type: 'choice',
+      concept: 'Judge 校准的高风险误判',
+      section: '5-4 二',
+      notesRef: '第五章笔记行 1000–1020 + 复习 Q32',
+      question: 'Judge 与人工总体一致率 90%，唯一分歧是把超卖实现误放行为通过。下一步怎样做？',
+      options: [
+        '总体一致即可忽略高危误判',
+        '重点检查误放误拒与未知项',
+        '合格样本越多越证明可靠性',
+        '分歧样本只需平均双方得分'
+      ],
+      answer: 1,
+      explanation: '总体一致率会受样本分布影响，高风险误放行不能被平均掉。先复核规则与证据，再调评分器，并重跑原分歧与保留样本。'
+    },
+    {
+      type: 'choice',
+      concept: 'pass@k 与连续稳定性',
+      section: '5-4 七',
+      notesRef: '第五章笔记行 1464–1484 + 复习 Q40',
+      question: '产品要求同一任务连续三次都成功，不能用多个候选挑一个。最相关的是哪种口径？',
+      options: [
+        '只关注三次中至少一次成功',
+        '更关注三次能否全部都成功',
+        '用总体均值代替单任务概率',
+        '把两次观测当成真实概率值'
+      ],
+      answer: 1,
+      explanation: '连续三次都成功对应 pass^3；至少一次成功是 pass@3。还要展示逐次观测、失败相关性和总成本，不能只套总体平均概率。'
+    },
+    {
+      type: 'short',
+      concept: '完整系统、四层与 Trace/Outcome',
+      section: '5-4 一',
+      notesRef: '第五章笔记行 879–925 + 复习 Q28–Q29（答案行 2595–2601）',
+      question: '为什么 Agent 评测对象是指定配置下的完整系统？Trace 与 Outcome 各证明什么，结果、过程、效率、风险四层分别怎样验收库存重构？',
+      hint: '先列影响结果的组件，再分执行记录与最终结果，最后给四层各一个库存例子。',
+      modelAnswer: '<strong>得分点：</strong>① 模型、Agent Harness、上下文、工具与环境共同决定结果；漏并发验证可能来自模型、输入、权限或数据库，不能只换模型猜根因；② Trace 保存实际请求、响应、工具参数、返回和错误，帮助解释过程；Outcome 是最终代码、库存、预占记录和接口行为，负责结果验收；③ 结果检查重复预占、并发、回滚、接口和最终产物；过程检查当前规则是否进入输入、必要读取与最终版本验证，不强制唯一搜索路线；④ 效率记录 Agent、独立验收、Judge、人工返工的时间和资源；⑤ 风险分别记录越权尝试与真实影响、受保护验收材料和资源边界；⑥ 中间一次测试通过不能验收后来改坏的最终文件，局部验证也不能扩大为生产保证。'
+    },
+    {
+      type: 'short',
+      concept: '人工对齐、Rubric 三态与 Judge 校准',
+      section: '5-4 二',
+      notesRef: '第五章笔记行 927–1022 + 复习 Q30–Q32（答案行 2603–2613）',
+      question: '背靠背标注发现分歧后为什么不能取平均？怎样下钻 Rubric、区分业务未知与材料缺失，并用误放行、误拒绝和未知校准 Judge？',
+      hint: '用「库存只扣一次但重复请求返回错误」和「缺并发记录」两个例子回答。',
+      modelAnswer: '<strong>得分点：</strong>① 分歧可能来自标准含糊、检查对象不同或证据不足，平均不解决原因；库存效果与重复响应契约可拆成两项，标准负责人确认后写回 Rubric；② Rubric 明确对象、输入动作、证据、通过/失败/未知和合成规则，同时检查异常事与正常服务，允许合理实现差异；③ 缺并发记录时业务行为是未知，若记录为必要交付，材料齐全性可失败；关键未知不能放行或静默删除；④ Judge 用人工确认的正常、失败、边界和未知样本校准，除一致率外分别统计误放行、误拒绝、未知与执行错误，高风险误放行优先；⑤ 分歧先查规则和证据再调 Judge，修后跑原分歧和未调参保留样本；规则、样本与评分器留版本，一致也不排除共同遗漏。'
+    },
+    {
+      type: 'short',
+      concept: 'Task/Trial/Grader、题集与证据有效性',
+      section: '5-4 三/四',
+      notesRef: '第五章笔记行 1045–1234 + 复习 Q33–Q37（答案行 2615–2633）',
+      question: '一道 Task 用十个测试为何仍是一道 Task？Trial 与 Grader 怎样划分？每次 Trial 要重置或记录哪些状态，为什么实际请求与代码指纹比聊天历史和初始提交号更关键？',
+      hint: '按「工作单位→尝试单位→评分单位→状态与证据」回答，再补题集标签如何交叉。',
+      modelAnswer: '<strong>得分点：</strong>① Task 是交给 Agent 的一项工作，十个测试只是不同 Grader/检查，不是十道任务；一次从规定起点完整执行是一个 Trial，内部重试和反复测试不增加 Trial；② Grader 按行为、接口、边界或说明评分，一次 Trial 可多个 Grader；③ 重置或记录源码、生成物、数据库、依赖、索引、会话、工作/长期记忆、任务缓存，以及模型、Prompt/Skill、工具、权限、预算和冷热条件；④ 实际模型请求才知道裁剪装配后规则是否进入输入，完整历史只说明保存过什么；⑤ 测试需命令、退出码、断言、配置、数据与实际工作区指纹，通过后再改受影响代码则证据过期；⑥ 参考方案应通过、已知缺陷应失败；黄金/错题/挑战/能力/回归/必过是可交叉用途，未修复失败先候选、修复验证后才转活动回归。'
+    },
+    {
+      type: 'short',
+      concept: '三类评分、硬门禁与 Agent 改进证明',
+      section: '5-4 五/六',
+      notesRef: '第五章笔记行 1236–1426 + 复习 Q38–Q39（答案行 2635–2641）',
+      question: '程序、模型 Judge 与人工怎样分工并防改验收条件？执行错误、业务失败、关键未知怎样处理？人工修好一份产物为什么仍不证明 Agent 能力改善？',
+      hint: '先分事实/语义/标准，再讲独立验收与状态出口，最后给 Agent 重跑起点。',
+      modelAnswer: '<strong>得分点：</strong>① 程序直接检查库存、记录、接口、退出码和文件边界；Judge 按 Rubric 核对报告语义、证据支持与未知披露；人工确定业务规则、校准和处理争议；② 验收脚本、参考答案、门槛及其依赖由评测方控制，Agent 自述和材料里的「请给通过」不能改变规则，也避免固定函数名等过严检查；③ 核心硬门槛失败不能被质量高分抵消；执行错误修环境/执行链并保留原 Trial，业务失败查实现与行为，关键未知补证据或人工复核，三者不互相改写；④ 人工修好只证明该产物可修；验证 Agent 或 Skill 改进需从原缺陷工程、干净会话和固定配置重新执行，检查实际 Outcome、原失败、同类变化、旧能力与成本，不能只看新增测试或流畅报告。'
+    },
+    {
+      type: 'short',
+      concept: '多次 Trial、版本比较与采用决定',
+      section: '5-4 七',
+      notesRef: '第五章笔记行 1428–1522 + 复习 Q40–Q41（答案行 2643–2649）',
+      question: '单次通过比例、pass@k 与 pass^k 有何不同？新旧 Skill 比较前要固定什么？为什么总分 13/15→14/15 仍可能暂缓采用？',
+      hint: '写出两种公式及假设，再列四组固定条件和四层修复验证。',
+      modelAnswer: '<strong>得分点：</strong>① 2/3 是观测通过比例；pass@k 关注至少一次成功，pass^k 关注 k 次全成功；只有独立且每次同 p 时才用 1-(1-p)^k 与 p^k，实际相关失败和任务难度不能忽略；② 允许多候选+独立选择时 pass@k 更有用，稳定交付更看单次和 pass^k，同时报告 k、每次预算与总消耗；③ 固定 Task/Rubric/Grader、缺陷源码/数据/依赖/缓存/记忆、模型/工具/权限/预算、Trial 数/异常统计/采用标准，必要时交错运行；④ 修复验证查原失败、同类保留样本、相关旧能力和总成本；⑤ 接口兼容若由 3/3 降为 2/3，确认是新版退化就暂缓，确认评分器误判则修评分器并重查新旧，总体提升不能抵消核心失败或关键未知。'
+    },
+    {
+      type: 'short',
+      concept: '五步测试、线上信号与双闭环',
+      section: '5-4 八/九',
+      notesRef: '第五章笔记行 1524–1728 + 复习 Q42–Q44（答案行 2651–2673）',
+      question: '请用两分钟串起日常研发与反馈闭环：五步测试设计怎样走到真实结果？离线、影子、A/B、巡检、监控各回答什么？同一 Case 为什么可能既要改 Agent 又要改评分器？',
+      hint: '按范围到覆盖、五种证据边界、Case 两条修改路径组织；结尾给采用或暂缓所需材料。',
+      modelAnswer: '<strong>得分点主链：</strong>① 专家圈范围与高风险入口，AI 扫调用链和候选问题，人定优先级；五步为建立范围→风险分级→判定表分组→含初始状态/动作/断言/异常位置的可执行步骤→覆盖矩阵；② 已设计、已执行、已通过分开，执行后关联代码指纹、退出码、真实状态与证据；③ 离线比较固定条件版本，影子在独立环境重放真实输入快照，A/B 看真实使用的验收/返工/时间/成本，巡检看守代表性能力，监控看可用性/错误/耗时/用量/分布；影子不是 A/B，监控正常不证明任务正确；④ Case 经采集、清洗、评测、质检、归因并有负责人；实现确实错且旧验收漏掉竞争条件时，一边改 Agent/实现，一边补 Task/Rubric/Grader/环境；⑤ 两边分别做固定条件复测和旧能力回归，真实修复确认后从候选转活动回归；最终版本建议列比较配置、逐题 Trial、改善/退化/未知、成本与采用或暂缓理由，而不是只报总分。'
+    }
+  ]
+});
+</script>
+</body>
+</html>
